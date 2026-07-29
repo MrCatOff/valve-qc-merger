@@ -98,11 +98,16 @@ class _FingerBone:
     parent: int
     source_joint: int
     bind_local: Transform
-    # The weapon child joint whose direction this bone aims at, and this bone's
-    # own direction to its child in local space. ``None`` for the finger tip
-    # (a leaf), which simply keeps its bind orientation.
-    source_child: int | None
+    # This bone's own direction to its child in local space; ``None`` for the
+    # finger tip (a leaf), which keeps its bind orientation.
     child_dir: Vector3 | None
+    # When the weapon finger has a matching segment, ``source_child`` names it
+    # and this bone aims along the weapon segment. When the weapon finger is
+    # shorter (my finger has extra joints), ``fingertip`` names the weapon
+    # finger tip and this bone instead aims at it -- so the extra length curls
+    # toward the grip rather than extending straight through the weapon.
+    source_child: int | None
+    fingertip: int | None
 
 
 @dataclass
@@ -264,13 +269,16 @@ class HandGraft:
             target_joints = target_chain.joints
             for depth, target_joint in enumerate(target_joints):
                 source_child: int | None = None
+                fingertip: int | None = None
                 child_dir: Vector3 | None = None
                 source_joint = source_joints[min(depth, len(source_joints) - 1)]
-                has_child = depth + 1 < len(target_joints)
-                if has_child and depth + 1 < len(source_joints):
-                    source_joint = source_joints[depth]
-                    source_child = source_joints[depth + 1]
+                if depth + 1 < len(target_joints):  # my joint has a child (not the tip)
                     child_dir = hand_local[target_joints[depth + 1]].position
+                    if depth + 1 < len(source_joints):
+                        source_joint = source_joints[depth]
+                        source_child = source_joints[depth + 1]
+                    else:
+                        fingertip = source_joints[-1]  # extra joint: curl to the grip
                 self._mesh_remap[target_joint] = cursor
                 self._mesh_transform[target_joint] = mesh_transform
                 self._plan.fingers.append(
@@ -280,8 +288,9 @@ class HandGraft:
                         parent_new,
                         source_joint,
                         _pose_transform(hand_local[target_joint]),
-                        source_child,
                         child_dir,
+                        source_child,
+                        fingertip,
                     )
                 )
                 parent_new = cursor
@@ -407,17 +416,27 @@ class HandGraft:
         weapon_world: dict[int, Transform],
         aim: bool,
     ) -> Transform:
-        if not aim or finger.source_child is None or finger.child_dir is None:
+        if not aim or finger.child_dir is None:
             return finger.bind_local
-        child = weapon_world.get(finger.source_child)
-        joint = weapon_world.get(finger.source_joint)
-        if child is None or joint is None:
+        if finger.source_child is not None:
+            # Matched segment: aim my bone along the weapon finger segment.
+            child = weapon_world.get(finger.source_child)
+            joint = weapon_world.get(finger.source_joint)
+            if child is None or joint is None:
+                return finger.bind_local
+            direction_world = _subtract(child.translation, joint.translation)
+        elif finger.fingertip is not None:
+            # Extra joint: aim my bone at the weapon finger tip so the surplus
+            # length curls toward the grip instead of extending straight.
+            tip = weapon_world.get(finger.fingertip)
+            if tip is None:
+                return finger.bind_local
+            head = parent_world.transform_point(finger.bind_local.translation)
+            direction_world = _subtract(tip.translation, head)
+        else:
             return finger.bind_local
-        direction_world = Vector3(
-            child.translation.x - joint.translation.x,
-            child.translation.y - joint.translation.y,
-            child.translation.z - joint.translation.z,
-        )
+        if direction_world.length() < 1e-6:
+            return finger.bind_local
         # Express the target direction in the parent's local frame, then rotate
         # this bone's own child-direction onto it (minimal rotation).
         direction_local = Transform(mat3_transpose(parent_world.rotation), _ZERO).rotate_vector(
@@ -441,6 +460,10 @@ class HandGraft:
             normal=transform.rotate_vector(vertex.normal),
             uv=vertex.uv,
         )
+
+
+def _subtract(a: Vector3, b: Vector3) -> Vector3:
+    return Vector3(a.x - b.x, a.y - b.y, a.z - b.z)
 
 
 def _pose_transform(pose: BonePose) -> Transform:
