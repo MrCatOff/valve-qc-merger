@@ -51,6 +51,53 @@ def _apply3(m: Matrix3, v: Vector3) -> Vector3:
     )
 
 
+def _normalize(v: Vector3) -> Vector3:
+    length = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+    if length == 0.0:
+        return v
+    return Vector3(v.x / length, v.y / length, v.z / length)
+
+
+def rotation_between(a: Vector3, b: Vector3) -> Matrix3:
+    """Minimal rotation matrix taking direction ``a`` onto direction ``b``."""
+    u = _normalize(a)
+    w = _normalize(b)
+    cross = Vector3(
+        u.y * w.z - u.z * w.y,
+        u.z * w.x - u.x * w.z,
+        u.x * w.y - u.y * w.x,
+    )
+    dot = u.x * w.x + u.y * w.y + u.z * w.z
+    if dot > 0.9999999:
+        return _IDENTITY3
+    if dot < -0.9999999:
+        # Opposed: rotate 180 degrees about any axis perpendicular to u.
+        axis = Vector3(1.0, 0.0, 0.0)
+        if abs(u.x) > 0.9:
+            axis = Vector3(0.0, 1.0, 0.0)
+        perp = _normalize(
+            Vector3(
+                u.y * axis.z - u.z * axis.y,
+                u.z * axis.x - u.x * axis.z,
+                u.x * axis.y - u.y * axis.x,
+            )
+        )
+        x, y, z = perp.x, perp.y, perp.z
+        return (
+            (2 * x * x - 1, 2 * x * y, 2 * x * z),
+            (2 * x * y, 2 * y * y - 1, 2 * y * z),
+            (2 * x * z, 2 * y * z, 2 * z * z - 1),
+        )
+    vx, vy, vz = cross.x, cross.y, cross.z
+    k = 1.0 / (1.0 + dot)
+    # R = I + [v]_x + [v]_x^2 * k  (Rodrigues for the minimal arc).
+    return (
+        (1 - (vy * vy + vz * vz) * k, -vz + vx * vy * k, vy + vx * vz * k),
+        (vz + vx * vy * k, 1 - (vx * vx + vz * vz) * k, -vx + vy * vz * k),
+        (-vy + vx * vz * k, vx + vy * vz * k, 1 - (vx * vx + vy * vy) * k),
+    )
+
+
 def euler_to_matrix(euler: Vector3) -> Matrix3:
     """Build a rotation matrix from GoldSource Euler angles (radians).
 
@@ -140,4 +187,5 @@ __all__ = [
     "mat3_multiply",
     "mat3_transpose",
     "matrix_to_euler",
+    "rotation_between",
 ]

@@ -75,6 +75,46 @@ def test_graft_replaces_hand_bones_without_doubling() -> None:
 
 
 @requires_samples
+def test_fingers_track_the_weapon_directions() -> None:
+    from valve_qc_merger.kinematics import world_transforms
+    from valve_qc_merger.models.geometry import Vector3
+    from valve_qc_merger.transform import Transform
+
+    weapon = parse_smd_file(_anaconda() / "ref_Anaconda.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    links = build_hand_correspondences(weapon, hand)
+    graft = HandGraft(weapon, hand, links)
+    animation = parse_smd_file(_anaconda() / "v_anaconda_anims" / "draw.smd")
+    out = graft.retarget_animation(animation)
+
+    wi = {n.name: n.index for n in weapon.nodes}
+    mi = {n.name: n.index for n in out.nodes}
+    wname = {n.index: n.name for n in weapon.nodes}
+    tname = {n.index: n.name for n in hand.nodes}
+
+    def direction(world: dict[int, Transform], a: int, b: int) -> Vector3:
+        pa = world[a].translation
+        pb = world[b].translation
+        d = Vector3(pb.x - pa.x, pb.y - pa.y, pb.z - pa.z)
+        length = d.length()
+        return Vector3(d.x / length, d.y / length, d.z / length)
+
+    for frame in (animation.frames[3], animation.frames[15]):
+        out_frame = out.frames[animation.frames.index(frame)]
+        weapon_world = world_transforms(weapon.nodes, frame)
+        out_world = world_transforms(out.nodes, out_frame)
+        for link in links:
+            for source, target in link.finger_pairs:
+                for k in range(2):  # root->mid and mid->tip segments
+                    ws, wt = source.joints[k], source.joints[k + 1]
+                    ts, tt = target.joints[k], target.joints[k + 1]
+                    wd = direction(weapon_world, wi[wname[ws]], wi[wname[wt]])
+                    md = direction(out_world, mi[tname[ts]], mi[tname[tt]])
+                    cos = wd.x * md.x + wd.y * md.y + wd.z * md.z
+                    assert cos > 1.0 - 1e-6  # my finger bone points where the weapon's does
+
+
+@requires_samples
 def test_gun_bones_world_motion_is_preserved() -> None:
     from valve_qc_merger.kinematics import world_transforms
 

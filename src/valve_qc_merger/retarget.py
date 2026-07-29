@@ -23,8 +23,12 @@ bone re-parented under the hand is compensated by ``offset⁻¹``, so its world
 motion is identical regardless of the offset. With the default (identity) offset
 the gun animates exactly as authored and the hand rides the wrist precisely.
 
-Fingers bend by transferring each weapon finger joint's local rotation delta
-onto the reference finger's bind pose (Stage-1 FK retargeting; no IK solver).
+Finger retargeting works in *world space*: each reference finger joint reproduces
+the weapon joint's world orientation (via a constant bind-time alignment),
+keeping the reference finger's own bone lengths. Because the reference hand
+coincides with the weapon wrist, this reproduces the grip pose regardless of the
+two rigs' differing bone-local axes -- a plain local-rotation copy would bend the
+fingers around the wrong axes.
 """
 
 from __future__ import annotations
@@ -36,11 +40,9 @@ from valve_qc_merger.kinematics import world_transforms
 from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.models.smd import BonePose, Frame, Node, Smd, Triangle, Vertex
 from valve_qc_merger.transform import (
-    Matrix3,
     Transform,
-    euler_to_matrix,
-    mat3_multiply,
     mat3_transpose,
+    rotation_between,
 )
 
 _ZERO = Vector3(0.0, 0.0, 0.0)
@@ -51,6 +53,7 @@ class _KeptBone:
     """A weapon bone carried into the output (optionally re-parented)."""
 
     new_index: int
+    old_index: int
     name: str
     parent: int
     # When re-parented under a reference hand, the compensating offset inverse
@@ -81,14 +84,25 @@ class _ConstantBone:
 
 @dataclass(frozen=True, slots=True)
 class _FingerBone:
-    """A reference finger joint driven by a weapon joint's rotation delta."""
+    """A reference finger joint.
+
+    During animation the joint is *aimed*: its own bone (the direction toward
+    its child) is rotated to point along the weapon finger bone's world
+    direction, using the reference finger's own length (``bind_local``'s
+    translation). In the reference/bind pose the joint keeps its authored
+    orientation (``bind_local``) so the mesh stays consistently skinned.
+    """
 
     new_index: int
     name: str
     parent: int
-    bind_local: Transform
     source_joint: int
-    source_bind_rot_inv: Matrix3
+    bind_local: Transform
+    # The weapon child joint whose direction this bone aims at, and this bone's
+    # own direction to its child in local space. ``None`` for the finger tip
+    # (a leaf), which simply keeps its bind orientation.
+    source_child: int | None
+    child_dir: Vector3 | None
 
 
 @dataclass
@@ -164,7 +178,7 @@ class HandGraft:
             else:
                 parent_new = old_to_new.get(parent, -1)
             self._plan.kept.append(
-                _KeptBone(old_to_new[node.index], node.name, parent_new, compensation)
+                _KeptBone(old_to_new[node.index], node.index, node.name, parent_new, compensation)
             )
 
         # Reference hand bones per side.
@@ -240,36 +254,37 @@ class HandGraft:
             _ConstantBone(forearm_new, hand_name[forearm_index], hand_new, forearm_local)
         )
 
-        # Fingers.
+        # Fingers: each joint aims its bone along the weapon finger's direction.
         cursor = base_index + 2
         for source_chain, target_chain in link.finger_pairs:
             parent_new = hand_new
-            for source_joint, target_joint in zip(
-                source_chain.joints, target_chain.joints, strict=True
-            ):
-                bind_local = _pose_transform(hand_local[target_joint])
-                source_bind = _pose_transform(
-                    {p.bone: p for p in self._weapon.frames[0].poses}[source_joint]
-                )
+            joints = list(zip(source_chain.joints, target_chain.joints, strict=True))
+            for depth, (source_joint, target_joint) in enumerate(joints):
+                is_tip = depth == len(joints) - 1
+                if is_tip:
+                    source_child: int | None = None
+                    child_dir: Vector3 | None = None
+                else:
+                    source_child = source_chain.joints[depth + 1]
+                    child_target = target_chain.joints[depth + 1]
+                    child_dir = hand_local[child_target].position
                 self._mesh_remap[target_joint] = cursor
+                self._mesh_transform[target_joint] = mesh_transform
                 self._plan.fingers.append(
                     _FingerBone(
                         cursor,
                         hand_name[target_joint],
                         parent_new,
-                        bind_local,
                         source_joint,
-                        mat3_transpose(source_bind.rotation),
+                        _pose_transform(hand_local[target_joint]),
+                        source_child,
+                        child_dir,
                     )
                 )
                 parent_new = cursor
                 cursor += 1
 
-        # Every reference-hand vertex on this side is relocated by mesh_transform.
         self._mesh_transform[link.target_wrist] = mesh_transform
-        for _, target_chain in link.finger_pairs:
-            for joint in target_chain.joints:
-                self._mesh_transform[joint] = mesh_transform
 
     # -- outputs ---------------------------------------------------------
 
@@ -292,8 +307,7 @@ class HandGraft:
 
     def reference_smd(self) -> Smd:
         """The hand reference SMD: output skeleton, bind pose and relocated mesh."""
-        weapon_bind = {pose.bone: pose for pose in self._weapon.frames[0].poses}
-        poses = self._frame_poses(weapon_bind)
+        poses = self._frame_poses(self._weapon.frames[0], aim=False)
         return Smd(
             version=self._hand.version,
             nodes=self.merged_nodes(),
@@ -303,43 +317,76 @@ class HandGraft:
 
     def retarget_animation(self, animation: Smd) -> Smd:
         """Return ``animation`` with the weapon hands replaced by the reference hands."""
-        frames: list[Frame] = []
-        for frame in animation.frames:
-            source = {pose.bone: pose for pose in frame.poses}
-            frames.append(Frame(frame.time, tuple(self._frame_poses(source))))
+        frames = [
+            Frame(frame.time, tuple(self._frame_poses(frame, aim=True)))
+            for frame in animation.frames
+        ]
         return Smd(version=animation.version, nodes=self.merged_nodes(), frames=frames)
 
-    def _frame_poses(self, source: dict[int, BonePose]) -> list[BonePose]:
-        """Build every output bone's pose for one frame of weapon-bone data."""
+    def _frame_poses(self, frame: Frame, aim: bool) -> list[BonePose]:
+        """Build every output bone's pose for one frame of weapon-bone data.
+
+        With ``aim`` false the fingers keep their bind orientation (used for the
+        reference/bind pose so the mesh stays consistently skinned); with ``aim``
+        true they point along the weapon finger bones (used for animation).
+        """
+        source = {pose.bone: pose for pose in frame.poses}
+        weapon_world = world_transforms(self._weapon.nodes, frame)
+        world_cache: dict[int, Transform] = {}
         poses: list[BonePose] = []
-        source_by_new = {new: source.get(old) for old, new in self._weapon_kept_pose.items()}
+
         # Kept weapon bones (compensated where re-parented).
         for bone in self._plan.kept:
-            original = source_by_new.get(bone.new_index)
+            original = source.get(bone.old_index)
             local = _pose_transform(original) if original is not None else Transform.identity()
             poses.append(_transform_pose(bone.new_index, bone.compensation.compose(local)))
+
         # Reference hand bones: reproduce the weapon wrist local, times the offset.
         for hand in self._plan.hands:
             wrist = source.get(hand.source_wrist)
             wrist_local = _pose_transform(wrist) if wrist is not None else Transform.identity()
             poses.append(_transform_pose(hand.new_index, wrist_local.compose(hand.offset)))
+            wrist_world = weapon_world.get(hand.source_wrist, Transform.identity())
+            world_cache[hand.new_index] = wrist_world.compose(hand.offset)
+
         for constant in self._plan.constants:
             poses.append(_transform_pose(constant.new_index, constant.local))
+
+        # Fingers, root->tip (parents precede children in the plan order).
         for finger in self._plan.fingers:
-            poses.append(self._finger_pose(finger, source))
+            parent_world = world_cache[finger.parent]
+            local = self._finger_local(finger, parent_world, weapon_world, aim)
+            world_cache[finger.new_index] = parent_world.compose(local)
+            poses.append(_transform_pose(finger.new_index, local))
+
         poses.sort(key=lambda pose: pose.bone)
         return poses
 
     @staticmethod
-    def _finger_pose(finger: _FingerBone, source: dict[int, BonePose]) -> BonePose:
-        source_pose = source.get(finger.source_joint)
-        if source_pose is None:
-            return _transform_pose(finger.new_index, finger.bind_local)
-        delta = mat3_multiply(finger.source_bind_rot_inv, euler_to_matrix(source_pose.rotation))
-        rotation = mat3_multiply(finger.bind_local.rotation, delta)
-        return _transform_pose(
-            finger.new_index, Transform(rotation, finger.bind_local.translation)
+    def _finger_local(
+        finger: _FingerBone,
+        parent_world: Transform,
+        weapon_world: dict[int, Transform],
+        aim: bool,
+    ) -> Transform:
+        if not aim or finger.source_child is None or finger.child_dir is None:
+            return finger.bind_local
+        child = weapon_world.get(finger.source_child)
+        joint = weapon_world.get(finger.source_joint)
+        if child is None or joint is None:
+            return finger.bind_local
+        direction_world = Vector3(
+            child.translation.x - joint.translation.x,
+            child.translation.y - joint.translation.y,
+            child.translation.z - joint.translation.z,
         )
+        # Express the target direction in the parent's local frame, then rotate
+        # this bone's own child-direction onto it (minimal rotation).
+        direction_local = Transform(mat3_transpose(parent_world.rotation), _ZERO).rotate_vector(
+            direction_world
+        )
+        rotation = rotation_between(finger.child_dir, direction_local)
+        return Transform(rotation, finger.bind_local.translation)
 
     def _remap_mesh(self) -> list[Triangle]:
         triangles: list[Triangle] = []

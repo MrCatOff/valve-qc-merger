@@ -9,6 +9,7 @@ from valve_qc_merger.transform import (
     Transform,
     euler_to_matrix,
     matrix_to_euler,
+    rotation_between,
 )
 
 
@@ -47,3 +48,19 @@ def test_rotation_places_point_as_expected() -> None:
     # 90 degrees about Z maps +X to +Y.
     t = Transform.from_pos_euler(Vector3(0.0, 0.0, 0.0), Vector3(0.0, 0.0, math.pi / 2))
     assert _close(t.transform_point(Vector3(1.0, 0.0, 0.0)), Vector3(0.0, 1.0, 0.0), 1e-9)
+
+
+def test_rotation_between_maps_direction() -> None:
+    cases = [
+        (Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0)),
+        (Vector3(1.0, 2.0, 3.0), Vector3(-2.0, 0.5, 1.0)),
+        (Vector3(1.0, 0.0, 0.0), Vector3(-1.0, 0.0, 0.0)),  # opposed
+        (Vector3(0.0, 0.0, 1.0), Vector3(0.0, 0.0, 1.0)),  # identical
+    ]
+    for a, b in cases:
+        rotated = Transform(rotation_between(a, b)).rotate_vector(a)
+        # Same direction (compare unit vectors).
+        ra = rotated.length()
+        rb = b.length()
+        cos = (rotated.x * b.x + rotated.y * b.y + rotated.z * b.z) / (ra * rb)
+        assert cos > 1.0 - 1e-9
