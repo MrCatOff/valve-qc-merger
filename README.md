@@ -31,6 +31,25 @@ valve-qc-merger --help
 python -m valve_qc_merger --help
 ```
 
+### replace-hands
+
+Swap a weapon view-model's hands for your own reference hands, reproducing the
+weapon's animation behaviour. The weapon geometry, its bones and every
+animation are preserved exactly; your reference hands are grafted onto the
+weapon's wrist bones and their fingers are retargeted to follow the original
+grip (Stage 1 uses forward-kinematics retargeting).
+
+```bash
+valve-qc-merger replace-hands path/to/v_anaconda \
+    --hands path/to/reference_hands \
+    --output path/to/v_anaconda_rehanded
+```
+
+The reference hands folder must contain `male.smd` and/or `female.smd` (with
+their textures). The output folder is a ready-to-compile copy of the weapon
+with a grafted reference SMD per hand variant, retargeted animations and an
+updated QC.
+
 ## Project layout
 
 ```

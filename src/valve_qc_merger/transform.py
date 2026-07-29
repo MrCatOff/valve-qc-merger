@@ -27,13 +27,15 @@ Matrix3 = tuple[
 _IDENTITY3: Matrix3 = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 
 
-def _matmul3(a: Matrix3, b: Matrix3) -> Matrix3:
+def mat3_multiply(a: Matrix3, b: Matrix3) -> Matrix3:
+    """Multiply two 3x3 matrices (``a . b``)."""
     return tuple(  # type: ignore[return-value]
         tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)) for i in range(3)
     )
 
 
-def _transpose3(m: Matrix3) -> Matrix3:
+def mat3_transpose(m: Matrix3) -> Matrix3:
+    """Transpose a 3x3 matrix (the inverse of a rotation matrix)."""
     return (
         (m[0][0], m[1][0], m[2][0]),
         (m[0][1], m[1][1], m[2][1]),
@@ -116,13 +118,13 @@ class Transform:
 
     def compose(self, other: Transform) -> Transform:
         """Return ``self . other`` (apply ``other`` first, then ``self``)."""
-        rotation = _matmul3(self.rotation, other.rotation)
+        rotation = mat3_multiply(self.rotation, other.rotation)
         translation = self.transform_point(other.translation)
         return Transform(rotation, translation)
 
     def inverse(self) -> Transform:
         """Return the inverse transform."""
-        inv_rot = _transpose3(self.rotation)
+        inv_rot = mat3_transpose(self.rotation)
         inv_trans = _apply3(inv_rot, self.translation)
         return Transform(inv_rot, Vector3(-inv_trans.x, -inv_trans.y, -inv_trans.z))
 
@@ -131,5 +133,7 @@ __all__ = [
     "Matrix3",
     "Transform",
     "euler_to_matrix",
+    "mat3_multiply",
+    "mat3_transpose",
     "matrix_to_euler",
 ]
