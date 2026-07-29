@@ -151,6 +151,35 @@ def test_weapon_clearance_targets_the_original_overlap() -> None:
 
 
 @requires_elite
+def test_finger_ik_lands_tips_on_the_weapon_fingertips() -> None:
+    from valve_qc_merger.kinematics import world_transforms
+
+    weapon = parse_smd_file(_elite() / "v_elite-PV.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    links = build_hand_correspondences(weapon, hand)
+    animation = parse_smd_file(_elite() / "v_elite_anims" / "idle.smd")
+    weapon_world = world_transforms(weapon.nodes, animation.frames[0])
+    tname = {n.index: n.name for n in hand.nodes}
+
+    def worst_tip_gap(finger_ik: bool) -> float:
+        graft = HandGraft(weapon, hand, links, finger_ik=finger_ik)
+        out = graft.retarget_animation(animation)
+        mi = {n.name: n.index for n in out.nodes}
+        out_world = world_transforms(out.nodes, out.frames[0])
+        worst = 0.0
+        for link in links:
+            for source, target in link.finger_pairs:
+                my = out_world[mi[tname[target.joints[-1]]]].translation
+                wp = weapon_world[source.joints[-1]].translation
+                gap = ((my.x - wp.x) ** 2 + (my.y - wp.y) ** 2 + (my.z - wp.z) ** 2) ** 0.5
+                worst = max(worst, gap)
+        return worst
+
+    assert worst_tip_gap(finger_ik=False) > 1.5  # aim alone overshoots (thumb)
+    assert worst_tip_gap(finger_ik=True) < 0.3  # IK curls each tip onto the grip
+
+
+@requires_elite
 def test_palm_seat_offset_matches_the_original_grip() -> None:
     from valve_qc_merger.clearance import palm_seat_offset
 

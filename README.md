@@ -83,6 +83,16 @@ valve-qc-merger replace-hands path/to/v_elite --hands path/to/reference_hands \
     --seat-grip
 ```
 
+By default each finger points parallel to the weapon's, so a finger that is
+longer than the weapon's overshoots the grip. `--finger-ik` instead curls each
+finger (CCD) so its tip lands on the weapon fingertip -- the grip contact point
+-- wrapping the grip like the original hands regardless of finger length:
+
+```bash
+valve-qc-merger replace-hands path/to/v_elite --hands path/to/reference_hands \
+    --seat-grip --finger-ik
+```
+
 To instead work out a clearance move (for a gun poking *through* a surface), use
 `--weapon-clearance`. A hand gripping a weapon always overlaps it a little, so
 the goal is not zero overlap but the *original* hands' overlap: the tool

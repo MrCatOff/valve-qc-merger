@@ -156,6 +156,7 @@ def replace_hands(
     clearance: bool = False,
     clearance_direction: Vector3 | None = None,
     seat_grip: bool = False,
+    finger_ik: bool = False,
 ) -> ReplaceHandsResult:
     """Run the hand replacement and return a summary.
 
@@ -193,7 +194,7 @@ def replace_hands(
         links = build_hand_correspondences(weapon_ref, canonical)
     except CorrespondenceError as exc:
         raise ReplaceHandsError(f"could not match hands to weapon rig: {exc}") from exc
-    canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset)
+    canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset, finger_ik)
 
     weapon_slide: Vector3 | None = None
     intrusion_before = intrusion_after = 0
@@ -216,7 +217,7 @@ def replace_hands(
         weapon_offset = Vector3(
             weapon_offset.x + seat.x, weapon_offset.y + seat.y, weapon_offset.z + seat.z
         )
-        canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset)
+        canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset, finger_ik)
     if clearance or clearance_direction is not None:
         our_hand = canonical_graft.reference_smd()
         gun_ref = canonical_graft.weapon_reference_smd()
@@ -235,7 +236,7 @@ def replace_hands(
         weapon_offset = Vector3(
             weapon_offset.x + slide.x, weapon_offset.y + slide.y, weapon_offset.z + slide.z
         )
-        canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset)
+        canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset, finger_ik)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(weapon_dir, output_dir, dirs_exist_ok=True)
@@ -249,7 +250,7 @@ def replace_hands(
     new_studios: list[str] = []
     for name, smd_path in available:
         hand_smd = parse_smd_file(smd_path)
-        graft = HandGraft(weapon_ref, hand_smd, links, offsets)
+        graft = HandGraft(weapon_ref, hand_smd, links, offsets, finger_ik=finger_ik)
         studio = f"grafted_{name}"
         write_smd_file(graft.reference_smd(), output_dir / f"{studio}.smd")
         _copy_textures(hand_smd, hands_dir, output_dir)
@@ -335,6 +336,12 @@ class ReplaceHandsCommand(Command):
             help="position the gun so the reference palm holds the grip where the "
             "original hands' palm did (automatic, per weapon)",
         )
+        parser.add_argument(
+            "--finger-ik",
+            action="store_true",
+            help="curl each finger so its tip reaches the weapon fingertip (the grip "
+            "contact point) instead of pointing straight and overshooting",
+        )
 
     def run(self, args: argparse.Namespace) -> int:
         weapon_dir: Path = args.weapon_dir
@@ -367,6 +374,7 @@ class ReplaceHandsCommand(Command):
                 clearance,
                 clearance_direction,
                 args.seat_grip,
+                args.finger_ik,
             )
         except (ReplaceHandsError, SmdParseError, ValueError) as exc:
             print(f"replace-hands: {exc}")

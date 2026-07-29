@@ -114,12 +114,22 @@ class _FingerBone:
     orient_align: Matrix3
 
 
+@dataclass(frozen=True, slots=True)
+class _FingerChain:
+    """A grafted finger as an ordered chain, with its weapon fingertip target."""
+
+    base: int  # output index of the chain's parent (the hand)
+    joints: tuple[int, ...]  # output indices, root..tip
+    weapon_tip: int  # weapon fingertip index the tip should reach
+
+
 @dataclass
 class _SidePlan:
     kept: list[_KeptBone] = field(default_factory=list)
     hands: list[_HandBone] = field(default_factory=list)
     constants: list[_ConstantBone] = field(default_factory=list)
     fingers: list[_FingerBone] = field(default_factory=list)
+    chains: list[_FingerChain] = field(default_factory=list)
 
 
 class HandGraft:
@@ -132,11 +142,13 @@ class HandGraft:
         links: list[HandLink],
         offsets: dict[str, Transform] | None = None,
         weapon_offset: Vector3 = _ZERO,
+        finger_ik: bool = False,
     ) -> None:
         self._weapon = weapon
         self._hand = hand
         self._offsets = offsets or {}
         self._weapon_offset = weapon_offset
+        self._finger_ik = finger_ik
         self._plan = _SidePlan()
         self._mesh_remap: dict[int, int] = {}
         self._mesh_transform: dict[int, Transform] = {}
@@ -277,6 +289,7 @@ class HandGraft:
             parent_new = hand_new
             source_joints = source_chain.joints
             target_joints = target_chain.joints
+            chain_start = cursor
             for depth, target_joint in enumerate(target_joints):
                 source_child: int | None = None
                 child_dir: Vector3 | None = None
@@ -311,6 +324,9 @@ class HandGraft:
                 )
                 parent_new = cursor
                 cursor += 1
+            self._plan.chains.append(
+                _FingerChain(hand_new, tuple(range(chain_start, cursor)), source_joints[-1])
+            )
 
         self._mesh_transform[link.target_wrist] = mesh_transform
 
@@ -423,11 +439,20 @@ class HandGraft:
             poses.append(_transform_pose(constant.new_index, constant.local))
 
         # Fingers, root->tip (parents precede children in the plan order).
+        finger_local: dict[int, Transform] = {}
         for finger in self._plan.fingers:
             parent_world = world_cache[finger.parent]
             local = self._finger_local(finger, parent_world, weapon_world, aim)
+            finger_local[finger.new_index] = local
             world_cache[finger.new_index] = parent_world.compose(local)
-            poses.append(_transform_pose(finger.new_index, local))
+
+        # Curl each finger so its tip reaches the weapon fingertip (grip contact).
+        if aim and self._finger_ik:
+            for chain in self._plan.chains:
+                self._solve_finger_ik(chain, finger_local, world_cache, weapon_world)
+
+        for finger in self._plan.fingers:
+            poses.append(_transform_pose(finger.new_index, finger_local[finger.new_index]))
 
         poses.sort(key=lambda pose: pose.bone)
         return poses
@@ -459,6 +484,57 @@ class HandGraft:
         world_rotation = mat3_multiply(swing, rolled)
         local_rotation = mat3_multiply(mat3_transpose(parent_world.rotation), world_rotation)
         return Transform(local_rotation, finger.bind_local.translation)
+
+    @staticmethod
+    def _solve_finger_ik(
+        chain: _FingerChain,
+        finger_local: dict[int, Transform],
+        world_cache: dict[int, Transform],
+        weapon_world: dict[int, Transform],
+        iterations: int = 12,
+        tolerance: float = 0.05,
+    ) -> None:
+        """CCD: curl the finger so its tip joint reaches the weapon fingertip.
+
+        Adjusts every joint but the last (which sets only the fingertip's own
+        orientation, not the tip position), seeded from the aim pose so the
+        finger keeps its direction and only bends enough to reach the grip.
+        """
+        target = weapon_world.get(chain.weapon_tip)
+        if target is None or len(chain.joints) < 2:
+            return
+        goal = target.translation
+        base = world_cache[chain.base]
+        locals_ = [finger_local[i] for i in chain.joints]
+
+        def forward() -> list[Transform]:
+            worlds = [base.compose(locals_[0])]
+            for k in range(1, len(locals_)):
+                worlds.append(worlds[k - 1].compose(locals_[k]))
+            return worlds
+
+        worlds = forward()
+        for _ in range(iterations):
+            tip = worlds[-1].translation
+            if _subtract(tip, goal).length() < tolerance:
+                break
+            for j in range(len(locals_) - 2, -1, -1):
+                joint = worlds[j]
+                to_tip = _subtract(tip, joint.translation)
+                to_goal = _subtract(goal, joint.translation)
+                if to_tip.length() < 1e-6 or to_goal.length() < 1e-6:
+                    continue
+                swing = rotation_between(to_tip, to_goal)
+                parent_rot = base.rotation if j == 0 else worlds[j - 1].rotation
+                new_world_rot = mat3_multiply(swing, joint.rotation)
+                local_rot = mat3_multiply(mat3_transpose(parent_rot), new_world_rot)
+                locals_[j] = Transform(local_rot, locals_[j].translation)
+                worlds = forward()
+                tip = worlds[-1].translation
+
+        for k, index in enumerate(chain.joints):
+            finger_local[index] = locals_[k]
+            world_cache[index] = worlds[k]
 
     def _remap_mesh(self) -> list[Triangle]:
         triangles: list[Triangle] = []
