@@ -155,8 +155,8 @@ def replace_hands(
     weapon_offset: Vector3 = _NO_WEAPON_OFFSET,
     clearance: bool = False,
     clearance_direction: Vector3 | None = None,
-    seat_grip: bool = False,
-    finger_ik: bool = False,
+    seat_grip: bool = True,
+    finger_ik: bool = True,
 ) -> ReplaceHandsResult:
     """Run the hand replacement and return a summary.
 
@@ -332,15 +332,19 @@ class ReplaceHandsCommand(Command):
         )
         parser.add_argument(
             "--seat-grip",
-            action="store_true",
+            action=argparse.BooleanOptionalAction,
+            default=True,
             help="position the gun so the reference palm holds the grip where the "
-            "original hands' palm did (automatic, per weapon)",
+            "original hands' palm did (automatic, per weapon; on by default, "
+            "disable with --no-seat-grip)",
         )
         parser.add_argument(
             "--finger-ik",
-            action="store_true",
+            action=argparse.BooleanOptionalAction,
+            default=True,
             help="curl each finger so its tip reaches the weapon fingertip (the grip "
-            "contact point) instead of pointing straight and overshooting",
+            "contact point) instead of pointing straight and overshooting (on by "
+            "default, disable with --no-finger-ik)",
         )
 
     def run(self, args: argparse.Namespace) -> int:
