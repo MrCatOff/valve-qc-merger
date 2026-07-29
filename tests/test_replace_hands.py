@@ -194,13 +194,26 @@ def test_replace_hands_writes_compilable_build(tmp_path: Path) -> None:
     qc_text = (out / "v_anaconda.qc").read_text(encoding="latin-1")
     assert "grafted_male" in qc_text and "grafted_female" in qc_text
 
-    # Reference and animations share one skeleton, by name, with valid structure.
+    # Every SMD in the build shares ONE identical skeleton (index, name, parent):
+    # the hand reference, the gun reference and every animation.
+    def skeleton(path: Path) -> tuple[tuple[int, str, int], ...]:
+        return tuple((n.index, n.name, n.parent) for n in parse_smd_file(path).nodes)
+
+    reference_skel = skeleton(out / "grafted_male.smd")
+    assert skeleton(out / "grafted_female.smd") == reference_skel
+    assert skeleton(out / "ref_Anaconda.smd") == reference_skel  # gun re-expressed
+    for animation in sorted((out / "v_anaconda_anims").glob("*.smd")):
+        assert skeleton(animation) == reference_skel
+
+    # No stale old-hand bones anywhere, and the old hand-mesh SMDs are removed.
+    names = {name for _, name, _ in reference_skel}
+    assert "Bone_Lefthand" not in names and "Bip01_L_Hand" in names
+    assert not (out / "Hand.smd").exists()
+
+    # Valid structure: parents resolve, geometry references existing bones.
     reference = parse_smd_file(out / "grafted_male.smd")
-    reference_names = {n.name for n in reference.nodes}
     indices = {n.index for n in reference.nodes}
     for node in reference.nodes:
         assert node.parent == -1 or node.parent in indices
     for triangle in reference.triangles:
         assert all(vertex.bone in indices for vertex in triangle.vertices)
-    for animation in sorted((out / "v_anaconda_anims").glob("*.smd")):
-        assert {n.name for n in parse_smd_file(animation).nodes} == reference_names

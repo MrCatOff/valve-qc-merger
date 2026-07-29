@@ -315,6 +315,41 @@ class HandGraft:
             triangles=self._remap_mesh(),
         )
 
+    def weapon_reference_smd(self, source: Smd | None = None) -> Smd:
+        """A weapon (gun) reference re-expressed on the merged skeleton.
+
+        Every SMD in the model must share one skeleton. A weapon reference is
+        otherwise left with its original hand bones, which would conflict with
+        the grafted hand bones when the model is assembled. Here the gun geometry
+        (from ``source``, defaulting to the skeleton-source reference) is remapped
+        to the kept bones' new indices on the merged skeleton.
+        """
+        weapon = source if source is not None else self._weapon
+        poses = self._frame_poses(self._weapon.frames[0], aim=False)
+        triangles: list[Triangle] = []
+        for triangle in weapon.triangles:
+            remapped = tuple(self._remap_weapon_vertex(vertex) for vertex in triangle.vertices)
+            triangles.append(Triangle(triangle.material, remapped))  # type: ignore[arg-type]
+        return Smd(
+            version=weapon.version,
+            nodes=self.merged_nodes(),
+            frames=[Frame(0, tuple(poses))],
+            triangles=triangles,
+        )
+
+    def _remap_weapon_vertex(self, vertex: Vertex) -> Vertex:
+        new_bone = self._weapon_kept_pose.get(vertex.bone)
+        if new_bone is None:
+            raise ValueError(
+                f"weapon geometry is skinned to removed hand bone index {vertex.bone}"
+            )
+        return Vertex(
+            bone=new_bone,
+            position=vertex.position,
+            normal=vertex.normal,
+            uv=vertex.uv,
+        )
+
     def retarget_animation(self, animation: Smd) -> Smd:
         """Return ``animation`` with the weapon hands replaced by the reference hands."""
         frames = [

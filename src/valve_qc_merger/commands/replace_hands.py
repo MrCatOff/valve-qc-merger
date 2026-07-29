@@ -89,12 +89,17 @@ def _resolve_studio(weapon_dir: Path, studio: str) -> Path:
     raise ReplaceHandsError(f"studio SMD not found for {studio!r} in {weapon_dir}")
 
 
-def _weapon_reference(weapon_dir: Path, qc_text: str) -> Smd:
+def _weapon_studio_paths(weapon_dir: Path, qc_text: str) -> list[Path]:
+    """Resolve the SMD files of every non-hands (weapon) bodygroup studio."""
+    paths: list[Path] = []
     for block in find_bodygroups(qc_text):
-        if block.name.lower() == "hands" or not block.studios:
+        if block.name.lower() == "hands":
             continue
-        return parse_smd_file(_resolve_studio(weapon_dir, block.studios[0]))
-    raise ReplaceHandsError("QC has no non-hands bodygroup to source the weapon skeleton")
+        for studio in block.studios:
+            paths.append(_resolve_studio(weapon_dir, studio))
+    if not paths:
+        raise ReplaceHandsError("QC has no non-hands bodygroup to source the weapon skeleton")
+    return paths
 
 
 def _copy_textures(hand_smd: Smd, source_dir: Path, output_dir: Path) -> None:
@@ -151,7 +156,8 @@ def replace_hands(
     if not available:
         raise ReplaceHandsError(f"no reference hand SMDs {variants} found in {hands_dir}")
 
-    weapon_ref = _weapon_reference(weapon_dir, qc_text)
+    weapon_studios = _weapon_studio_paths(weapon_dir, qc_text)
+    weapon_ref = parse_smd_file(weapon_studios[0])
     canonical = parse_smd_file(available[0][1])
     try:
         links = build_hand_correspondences(weapon_ref, canonical)
@@ -162,6 +168,12 @@ def replace_hands(
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(weapon_dir, output_dir, dirs_exist_ok=True)
 
+    # Drop the weapon's original hand-mesh SMDs: they are no longer referenced
+    # and still carry the old hand bones, which would re-introduce the conflict.
+    for studio in hands_block.studios:
+        stale = output_dir / _resolve_studio(weapon_dir, studio).relative_to(weapon_dir)
+        stale.unlink(missing_ok=True)
+
     new_studios: list[str] = []
     for name, smd_path in available:
         hand_smd = parse_smd_file(smd_path)
@@ -170,6 +182,14 @@ def replace_hands(
         write_smd_file(graft.reference_smd(), output_dir / f"{studio}.smd")
         _copy_textures(hand_smd, hands_dir, output_dir)
         new_studios.append(studio)
+
+    # Re-express every weapon reference on the merged skeleton so all SMDs share
+    # one bone set (the untouched originals still declare the old hand bones,
+    # which would conflict with the grafted hand bones when the model is built).
+    for studio_path in weapon_studios:
+        source = weapon_ref if studio_path == weapon_studios[0] else parse_smd_file(studio_path)
+        remapped = canonical_graft.weapon_reference_smd(source)
+        write_smd_file(remapped, output_dir / studio_path.relative_to(weapon_dir))
 
     retargeted = _retarget_animations(canonical_graft, weapon_dir, output_dir)
 
