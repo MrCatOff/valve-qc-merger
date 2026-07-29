@@ -128,18 +128,26 @@ def test_clearance_no_penetration_returns_zero() -> None:
 
 
 @requires_elite
-def test_weapon_clearance_reduces_intrusion() -> None:
-    from valve_qc_merger.clearance import weapon_clearance_offset
+def test_weapon_clearance_targets_the_original_overlap() -> None:
+    from valve_qc_merger.clearance import gun_vertices_inside_hand, weapon_clearance_offset
 
     weapon = parse_smd_file(_elite() / "v_elite-PV.smd")
     hand = parse_smd_file(_hands() / "male.smd")
+    original = parse_smd_file(_elite() / "f_elite_Male_hand_Low.smd")
     graft = HandGraft(weapon, hand, build_hand_correspondences(weapon, hand))
+    gun = graft.weapon_reference_smd()
+
+    baseline = gun_vertices_inside_hand(original, gun)
+    ours = gun_vertices_inside_hand(graft.reference_smd(), gun)
+    assert 0 < baseline < ours  # a normal grip overlaps; ours overlaps more
+
     offset, before, after = weapon_clearance_offset(
-        graft.reference_smd(), graft.weapon_reference_smd(), Vector3(1.0, 0.0, 0.0)
+        graft.reference_smd(), gun, Vector3(0.0, -1.0, 0.0), target_inside=baseline
     )
-    assert before > 0
-    assert after < before  # sliding along +X clears most of the intrusion
-    assert offset.x > 0 and offset.y == 0 and offset.z == 0
+    assert before == ours
+    # Slid down to about the original hands' overlap -- not to zero.
+    assert after <= baseline + 3
+    assert offset.y < 0 and offset.x == 0 and offset.z == 0
 
 
 @requires_elite

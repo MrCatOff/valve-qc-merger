@@ -1,17 +1,20 @@
-"""Auto-compute how far to slide a weapon so it does not sit inside the hands.
+"""Auto-compute how far to slide a weapon so it fits the reference hands.
 
-When the reference hands grip a weapon, the gun mesh can end up slightly inside
-the hand mesh. The hands cannot be reshaped, so instead the weapon is slid along
-a grip-preserving direction (the user picks the direction they can see; this
-module computes the distance).
+The reference hands cannot be reshaped, so hand/weapon interpenetration is
+resolved by moving the *weapon*. Two facts make this well-posed:
 
-A gun vertex counts as *inside* the hand when it lies on the interior side of
-its nearest hand-surface vertex (``(gun - hand) . hand_normal < 0``). The slide
-distance is the smallest translation along the chosen direction that brings the
-count of inside vertices down to a small fraction of the original -- enough to
-clear the obvious intrusion while tolerating the slight texture overlap the user
-accepts. A uniform grid over the hand vertices keeps the nearest-vertex query
-fast.
+* The palm *cups* the grip, so a radial push makes the overlap worse. The
+  weapon must slide along a grip-preserving direction -- by default, away from
+  the hand along the barrel (from the hand centroid toward the gun body).
+* A hand gripping a weapon always overlaps it a little; that is a normal grip,
+  not a defect. The original weapon hands establish how much overlap is
+  acceptable. The reference hands, being a different shape, overlap more, so the
+  weapon is slid only until the reference overlap drops to the original hands'
+  level plus a small margin -- not to zero.
+
+A gun vertex counts as *inside* a hand when it lies on the interior side of its
+nearest hand-surface vertex (``(gun - hand) . hand_normal < 0``). A uniform grid
+over the hand vertices keeps the nearest-vertex query fast.
 """
 
 from __future__ import annotations
@@ -43,6 +46,27 @@ def _dedupe(points: Iterable[tuple[Vector3, Vector3]]) -> list[tuple[Vector3, Ve
     return out
 
 
+def _hand_vertices(hand: Smd) -> list[tuple[Vector3, Vector3]]:
+    return _dedupe((v.position, v.normal) for triangle in hand.triangles for v in triangle.vertices)
+
+
+def _gun_vertices(weapon: Smd) -> list[Vector3]:
+    return [p for p, _ in _dedupe(
+        (v.position, v.position) for triangle in weapon.triangles for v in triangle.vertices
+    )]
+
+
+def _centroid(points: Iterable[Vector3]) -> Vector3:
+    total = Vector3(0.0, 0.0, 0.0)
+    count = 0
+    for p in points:
+        total = Vector3(total.x + p.x, total.y + p.y, total.z + p.z)
+        count += 1
+    if count == 0:
+        return Vector3(0.0, 0.0, 0.0)
+    return Vector3(total.x / count, total.y / count, total.z / count)
+
+
 class _HandGrid:
     """Uniform spatial grid over hand vertices for nearest-vertex queries."""
 
@@ -66,7 +90,7 @@ class _HandGrid:
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for dz in (-1, 0, 1):
-                    for hp, hn in self._cells.get((cx + dx, cy + dy, cz + dz), ()):  # noqa: E501
+                    for hp, hn in self._cells.get((cx + dx, cy + dy, cz + dz), ()):
                         d2 = (p.x - hp.x) ** 2 + (p.y - hp.y) ** 2 + (p.z - hp.z) ** 2
                         if d2 < best_d2:
                             best_d2 = d2
@@ -87,44 +111,54 @@ def _inside_count(gun: list[Vector3], grid: _HandGrid, shift: Vector3) -> int:
     return count
 
 
+def gun_vertices_inside_hand(hand: Smd, weapon: Smd) -> int:
+    """Number of weapon vertices that sit inside the hand mesh (no shift)."""
+    grid = _HandGrid(_hand_vertices(hand))
+    return _inside_count(_gun_vertices(weapon), grid, Vector3(0.0, 0.0, 0.0))
+
+
+def away_direction(hand: Smd, weapon: Smd) -> Vector3:
+    """Default slide direction: from the hand centroid toward the gun body."""
+    hand_centroid = _centroid(p for p, _ in _hand_vertices(hand))
+    gun_centroid = _centroid(_gun_vertices(weapon))
+    delta = Vector3(
+        gun_centroid.x - hand_centroid.x,
+        gun_centroid.y - hand_centroid.y,
+        gun_centroid.z - hand_centroid.z,
+    )
+    return _normalize(delta)
+
+
 def weapon_clearance_offset(
     hand: Smd,
     weapon: Smd,
     direction: Vector3,
     *,
-    keep_fraction: float = 0.15,
-    margin: float = 0.15,
+    target_inside: int = 0,
+    margin_verts: int = 3,
+    margin_distance: float = 0.1,
     max_distance: float = 8.0,
 ) -> tuple[Vector3, int, int]:
     """Return ``(offset, inside_before, inside_after)`` for sliding the weapon.
 
-    ``offset`` slides ``weapon`` along ``direction`` far enough to reduce the
-    number of gun vertices inside ``hand`` to ``keep_fraction`` of the original
-    (plus ``margin``), capped at ``max_distance``.
+    Slides ``weapon`` along ``direction`` far enough to reduce the count of gun
+    vertices inside ``hand`` to ``target_inside + margin_verts`` (the original
+    hands' overlap plus a slight margin), capped at ``max_distance``.
     """
     unit = _normalize(direction)
-    hand_vertices = _dedupe(
-        (v.position, v.normal) for triangle in hand.triangles for v in triangle.vertices
-    )
-    gun_vertices = [
-        p for p, _ in _dedupe(
-            (v.position, v.position) for triangle in weapon.triangles for v in triangle.vertices
-        )
-    ]
-    grid = _HandGrid(hand_vertices)
+    grid = _HandGrid(_hand_vertices(hand))
+    gun = _gun_vertices(weapon)
 
-    baseline = _inside_count(gun_vertices, grid, Vector3(0.0, 0.0, 0.0))
-    if baseline == 0:
-        return Vector3(0.0, 0.0, 0.0), 0, 0
-    target = max(1, int(round(baseline * keep_fraction)))
+    baseline = _inside_count(gun, grid, Vector3(0.0, 0.0, 0.0))
+    target = target_inside + margin_verts
+    if baseline <= target:
+        return Vector3(0.0, 0.0, 0.0), baseline, baseline
 
     def at(distance: float) -> int:
-        return _inside_count(
-            gun_vertices, grid, Vector3(unit.x * distance, unit.y * distance, unit.z * distance)
-        )
+        shift = Vector3(unit.x * distance, unit.y * distance, unit.z * distance)
+        return _inside_count(gun, grid, shift)
 
     if at(max_distance) > target:
-        # Cannot reach the target along this direction; use the best we can.
         distance = max_distance
     else:
         low, high = 0.0, max_distance
@@ -135,9 +169,9 @@ def weapon_clearance_offset(
             else:
                 low = mid
         distance = high
-    distance += margin
+    distance += margin_distance
     offset = Vector3(unit.x * distance, unit.y * distance, unit.z * distance)
     return offset, baseline, at(distance)
 
 
-__all__ = ["weapon_clearance_offset"]
+__all__ = ["away_direction", "gun_vertices_inside_hand", "weapon_clearance_offset"]

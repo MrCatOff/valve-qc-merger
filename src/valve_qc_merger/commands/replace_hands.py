@@ -25,7 +25,11 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from valve_qc_merger.clearance import weapon_clearance_offset
+from valve_qc_merger.clearance import (
+    away_direction,
+    gun_vertices_inside_hand,
+    weapon_clearance_offset,
+)
 from valve_qc_merger.commands.base import Command
 from valve_qc_merger.correspondence import CorrespondenceError, build_hand_correspondences
 from valve_qc_merger.models.geometry import Vector3
@@ -148,6 +152,7 @@ def replace_hands(
     variants: tuple[str, ...] = _DEFAULT_VARIANTS,
     offsets: dict[str, Transform] | None = None,
     weapon_offset: Vector3 = _NO_WEAPON_OFFSET,
+    clearance: bool = False,
     clearance_direction: Vector3 | None = None,
 ) -> ReplaceHandsResult:
     """Run the hand replacement and return a summary.
@@ -156,8 +161,10 @@ def replace_hands(
     transform applied to that reference hand on the grip; the gun is compensated
     so it never moves. Omitted sides default to identity. ``weapon_offset``
     translates the gun geometry off the hands so they do not clip the grip.
-    ``clearance_direction`` (if given) slides the gun along that direction by an
-    automatically computed distance to clear the hand intrusion.
+
+    When ``clearance`` is set, the gun is slid until the reference hands overlap
+    it no more than the *original* weapon hands did (plus a small margin), along
+    ``clearance_direction`` if given, otherwise automatically away from the hand.
     """
     weapon_dir = weapon_dir.resolve()
     hands_dir = hands_dir.resolve()
@@ -188,11 +195,19 @@ def replace_hands(
 
     weapon_slide: Vector3 | None = None
     intrusion_before = intrusion_after = 0
-    if clearance_direction is not None:
+    if clearance or clearance_direction is not None:
+        our_hand = canonical_graft.reference_smd()
+        gun_ref = canonical_graft.weapon_reference_smd()
+        # The original weapon hands set the acceptable overlap level.
+        original_hand = parse_smd_file(_resolve_studio(weapon_dir, hands_block.studios[0]))
+        baseline = gun_vertices_inside_hand(original_hand, gun_ref)
+        direction = (
+            clearance_direction
+            if clearance_direction is not None
+            else away_direction(our_hand, gun_ref)
+        )
         slide, intrusion_before, intrusion_after = weapon_clearance_offset(
-            canonical_graft.reference_smd(),
-            canonical_graft.weapon_reference_smd(),
-            clearance_direction,
+            our_hand, gun_ref, direction, target_inside=baseline
         )
         weapon_slide = slide
         weapon_offset = Vector3(
@@ -287,10 +302,10 @@ class ReplaceHandsCommand(Command):
         )
         parser.add_argument(
             "--weapon-clearance",
-            metavar="X,Y,Z",
-            help="slide the gun along direction X,Y,Z by an automatically computed "
-            "distance to clear the hand intrusion (grip-preserving; you pick the "
-            "direction, the tool picks the distance)",
+            metavar="auto|X,Y,Z",
+            help="slide the gun until the reference hands overlap it no more than "
+            "the original hands did. Use 'auto' to also pick the slide direction "
+            "(away from the hand), or give a grip-preserving direction X,Y,Z",
         )
 
     def run(self, args: argparse.Namespace) -> int:
@@ -308,11 +323,21 @@ class ReplaceHandsCommand(Command):
                 if args.weapon_offset
                 else _NO_WEAPON_OFFSET
             )
-            clearance = (
-                parse_translation(args.weapon_clearance) if args.weapon_clearance else None
+            clearance = bool(args.weapon_clearance)
+            clearance_direction = (
+                None
+                if not args.weapon_clearance or args.weapon_clearance == "auto"
+                else parse_translation(args.weapon_clearance)
             )
             result = replace_hands(
-                weapon_dir, args.hands, output_dir, variants, offsets, weapon_offset, clearance
+                weapon_dir,
+                args.hands,
+                output_dir,
+                variants,
+                offsets,
+                weapon_offset,
+                clearance,
+                clearance_direction,
             )
         except (ReplaceHandsError, SmdParseError, ValueError) as exc:
             print(f"replace-hands: {exc}")
