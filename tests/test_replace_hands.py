@@ -10,8 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from valve_qc_merger.commands.replace_hands import parse_offset, replace_hands
+from valve_qc_merger.commands.replace_hands import (
+    parse_offset,
+    parse_translation,
+    replace_hands,
+)
 from valve_qc_merger.correspondence import build_hand_correspondences
+from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget import HandGraft
 
@@ -217,6 +222,35 @@ def test_parse_offset() -> None:
     assert moved.translation == (1.5, -2.0, 3.0)
     with pytest.raises(ValueError):
         parse_offset("1,2,3")
+
+
+def test_parse_translation() -> None:
+    assert parse_translation("1,-2,3.5") == Vector3(1.0, -2.0, 3.5)
+    with pytest.raises(ValueError):
+        parse_translation("1,2,3,4")
+
+
+@requires_samples
+def test_weapon_offset_shifts_gun_not_hands() -> None:
+    weapon = parse_smd_file(_anaconda() / "ref_Anaconda.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    links = build_hand_correspondences(weapon, hand)
+    plain = HandGraft(weapon, hand, links)
+    pushed = HandGraft(weapon, hand, links, None, Vector3(0.0, 0.0, 2.0))
+
+    # Gun geometry moves by the offset ...
+    for before, after in zip(
+        plain.weapon_reference_smd().triangles,
+        pushed.weapon_reference_smd().triangles,
+        strict=True,
+    ):
+        for v0, v1 in zip(before.vertices, after.vertices, strict=True):
+            assert abs((v1.position.z - v0.position.z) - 2.0) < 1e-9
+    # ... while the hand mesh is untouched.
+    for before, after in zip(
+        plain.reference_smd().triangles, pushed.reference_smd().triangles, strict=True
+    ):
+        assert before.vertices[0].position == after.vertices[0].position
 
 
 @requires_samples

@@ -63,6 +63,15 @@ valve-qc-merger replace-hands path/to/v_anaconda --hands path/to/reference_hands
     --right-offset "0,0,10,0,0,0"
 ```
 
+If the hands clip into the grip, push the gun geometry off them with
+`--weapon-offset "x,y,z"` (translation units, in model space). The gun keeps its
+animation; only its mesh shifts, so a small nudge opens a gap:
+
+```bash
+valve-qc-merger replace-hands path/to/v_anaconda --hands path/to/reference_hands \
+    --weapon-offset "0,0,0.5"
+```
+
 ## Project layout
 
 ```

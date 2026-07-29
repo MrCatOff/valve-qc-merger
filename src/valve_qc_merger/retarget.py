@@ -41,6 +41,7 @@ from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.models.smd import BonePose, Frame, Node, Smd, Triangle, Vertex
 from valve_qc_merger.transform import (
     Transform,
+    mat3_multiply,
     mat3_transpose,
     rotation_between,
 )
@@ -127,10 +128,12 @@ class HandGraft:
         hand: Smd,
         links: list[HandLink],
         offsets: dict[str, Transform] | None = None,
+        weapon_offset: Vector3 = _ZERO,
     ) -> None:
         self._weapon = weapon
         self._hand = hand
         self._offsets = offsets or {}
+        self._weapon_offset = weapon_offset
         self._plan = _SidePlan()
         self._mesh_remap: dict[int, int] = {}
         self._mesh_transform: dict[int, Transform] = {}
@@ -355,9 +358,16 @@ class HandGraft:
             raise ValueError(
                 f"weapon geometry is skinned to removed hand bone index {vertex.bone}"
             )
+        # Push the gun geometry off the hands (baked into the bind, so it follows
+        # the weapon bones through the animation).
+        position = Vector3(
+            vertex.position.x + self._weapon_offset.x,
+            vertex.position.y + self._weapon_offset.y,
+            vertex.position.z + self._weapon_offset.z,
+        )
         return Vertex(
             bone=new_bone,
-            position=vertex.position,
+            position=position,
             normal=vertex.normal,
             uv=vertex.uv,
         )
@@ -437,13 +447,17 @@ class HandGraft:
             return finger.bind_local
         if direction_world.length() < 1e-6:
             return finger.bind_local
-        # Express the target direction in the parent's local frame, then rotate
-        # this bone's own child-direction onto it (minimal rotation).
+        # Redirect the bone from its bind orientation (keeping the reference's
+        # natural roll) onto the aim direction, rather than building a fresh
+        # minimal rotation -- otherwise the roll is unconstrained and a thumb can
+        # end up twisted the wrong way.
         direction_local = Transform(mat3_transpose(parent_world.rotation), _ZERO).rotate_vector(
             direction_world
         )
-        rotation = rotation_between(finger.child_dir, direction_local)
-        return Transform(rotation, finger.bind_local.translation)
+        bind = finger.bind_local
+        bind_direction = Transform(bind.rotation, _ZERO).rotate_vector(finger.child_dir)
+        redirect = rotation_between(bind_direction, direction_local)
+        return Transform(mat3_multiply(redirect, bind.rotation), bind.translation)
 
     def _remap_mesh(self) -> list[Triangle]:
         triangles: list[Triangle] = []

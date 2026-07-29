@@ -36,6 +36,7 @@ from valve_qc_merger.transform import Transform
 from valve_qc_merger.writers.smd import write_smd_file
 
 _DEFAULT_VARIANTS = ("male", "female")
+_NO_WEAPON_OFFSET = Vector3(0.0, 0.0, 0.0)
 
 
 def parse_offset(spec: str) -> Transform:
@@ -50,6 +51,17 @@ def parse_offset(spec: str) -> Transform:
     euler = Vector3(*(math.radians(v) for v in values[:3]))
     translation = Vector3(*values[3:])
     return Transform.from_pos_euler(translation, euler)
+
+
+def parse_translation(spec: str) -> Vector3:
+    """Parse ``x,y,z`` translation units."""
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    if len(parts) != 3:
+        raise ValueError(f"offset must be 3 comma-separated numbers, got {spec!r}")
+    try:
+        return Vector3(*(float(part) for part in parts))
+    except ValueError as exc:
+        raise ValueError(f"offset values must be numbers: {spec!r}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,12 +143,14 @@ def replace_hands(
     output_dir: Path,
     variants: tuple[str, ...] = _DEFAULT_VARIANTS,
     offsets: dict[str, Transform] | None = None,
+    weapon_offset: Vector3 = _NO_WEAPON_OFFSET,
 ) -> ReplaceHandsResult:
     """Run the hand replacement and return a summary.
 
     ``offsets`` maps a hand side (``"L"``/``"R"``) to a constant alignment
     transform applied to that reference hand on the grip; the gun is compensated
-    so it never moves. Omitted sides default to identity.
+    so it never moves. Omitted sides default to identity. ``weapon_offset``
+    translates the gun geometry off the hands so they do not clip the grip.
     """
     weapon_dir = weapon_dir.resolve()
     hands_dir = hands_dir.resolve()
@@ -163,7 +177,7 @@ def replace_hands(
         links = build_hand_correspondences(weapon_ref, canonical)
     except CorrespondenceError as exc:
         raise ReplaceHandsError(f"could not match hands to weapon rig: {exc}") from exc
-    canonical_graft = HandGraft(weapon_ref, canonical, links, offsets)
+    canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(weapon_dir, output_dir, dirs_exist_ok=True)
@@ -241,6 +255,12 @@ class ReplaceHandsCommand(Command):
         )
         parser.add_argument("--left-offset", metavar="SPEC", help=offset_help % "left")
         parser.add_argument("--right-offset", metavar="SPEC", help=offset_help % "right")
+        parser.add_argument(
+            "--weapon-offset",
+            metavar="X,Y,Z",
+            help="translate the gun geometry by X,Y,Z units so the hands do not "
+            "clip the grip",
+        )
 
     def run(self, args: argparse.Namespace) -> int:
         weapon_dir: Path = args.weapon_dir
@@ -252,7 +272,14 @@ class ReplaceHandsCommand(Command):
                 offsets["L"] = parse_offset(args.left_offset)
             if args.right_offset:
                 offsets["R"] = parse_offset(args.right_offset)
-            result = replace_hands(weapon_dir, args.hands, output_dir, variants, offsets)
+            weapon_offset = (
+                parse_translation(args.weapon_offset)
+                if args.weapon_offset
+                else _NO_WEAPON_OFFSET
+            )
+            result = replace_hands(
+                weapon_dir, args.hands, output_dir, variants, offsets, weapon_offset
+            )
         except (ReplaceHandsError, SmdParseError, ValueError) as exc:
             print(f"replace-hands: {exc}")
             return 1
