@@ -72,12 +72,23 @@ valve-qc-merger replace-hands path/to/v_anaconda --hands path/to/reference_hands
     --weapon-offset "0,0,0.5"
 ```
 
-To have the tool work out the move for you, use `--weapon-clearance`. A hand
-gripping a weapon always overlaps it a little, so the goal is not zero overlap
-but the *original* hands' overlap: the tool measures how much the weapon's own
-hands sat inside it, then slides the gun until the reference hands overlap it no
-more than that (plus a small margin). Weapons whose original hands did not clip
-get no move at all.
+Often the grip does not sit in the centre of the palm because the reference hand
+and the weapon's own hand attach at slightly different bones. `--seat-grip`
+fixes this automatically: it finds where the *original* palm touched the gun and
+moves the gun so the reference palm holds the grip in the same place. Weapons
+that already grip well are left untouched.
+
+```bash
+valve-qc-merger replace-hands path/to/v_elite --hands path/to/reference_hands \
+    --seat-grip
+```
+
+To instead work out a clearance move (for a gun poking *through* a surface), use
+`--weapon-clearance`. A hand gripping a weapon always overlaps it a little, so
+the goal is not zero overlap but the *original* hands' overlap: the tool
+measures how much the weapon's own hands sat inside it, then slides the gun until
+the reference hands overlap it no more than that (plus a small margin). Weapons
+whose original hands did not clip get no move at all.
 
 `auto` also picks the slide direction (away from the hand); otherwise give the
 grip-preserving direction the gun can slide (the barrel/forward axis, in model

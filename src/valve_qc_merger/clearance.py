@@ -129,6 +129,53 @@ def away_direction(hand: Smd, weapon: Smd) -> Vector3:
     return _normalize(delta)
 
 
+def _contact_centroid(
+    smd: Smd, keep: object, grid: _HandGrid, radius: float
+) -> Vector3 | None:
+    near: list[Vector3] = []
+    for triangle in smd.triangles:
+        for v in triangle.vertices:
+            if not keep(v.bone):  # type: ignore[operator]
+                continue
+            nearest = grid.nearest(v.position)
+            if nearest is None:
+                continue
+            hp, _ = nearest
+            if (v.position.x - hp.x) ** 2 + (v.position.y - hp.y) ** 2 + (
+                v.position.z - hp.z
+            ) ** 2 < radius * radius:
+                near.append(v.position)
+    return _centroid(near) if near else None
+
+
+def palm_seat_offset(
+    our_hand: Smd,
+    original_hand: Smd,
+    weapon: Smd,
+    our_palm_bones: set[str],
+    original_finger_bones: set[int],
+    *,
+    contact_radius: float = 1.5,
+) -> Vector3:
+    """Offset that seats the grip in the palm like the original hands did.
+
+    A weapon rig's own hands grip it correctly. The part of the *original* palm
+    that touches the gun marks where the grip belongs; the part of *our* palm
+    that touches the gun marks where it currently sits. Their difference is the
+    translation that moves the gun so our palm holds the grip where the original
+    palm did. Returns zero when neither palm makes contact (nothing to seat).
+    """
+    grid = _HandGrid([(p, p) for p in _gun_vertices(weapon)])
+    our_indices = {node.index for node in our_hand.nodes if node.name in our_palm_bones}
+    ours = _contact_centroid(our_hand, lambda b: b in our_indices, grid, contact_radius)
+    original = _contact_centroid(
+        original_hand, lambda b: b not in original_finger_bones, grid, contact_radius
+    )
+    if ours is None or original is None:
+        return Vector3(0.0, 0.0, 0.0)
+    return Vector3(ours.x - original.x, ours.y - original.y, ours.z - original.z)
+
+
 def weapon_clearance_offset(
     hand: Smd,
     weapon: Smd,
@@ -174,4 +221,9 @@ def weapon_clearance_offset(
     return offset, baseline, at(distance)
 
 
-__all__ = ["away_direction", "gun_vertices_inside_hand", "weapon_clearance_offset"]
+__all__ = [
+    "away_direction",
+    "gun_vertices_inside_hand",
+    "palm_seat_offset",
+    "weapon_clearance_offset",
+]

@@ -28,6 +28,7 @@ from pathlib import Path
 from valve_qc_merger.clearance import (
     away_direction,
     gun_vertices_inside_hand,
+    palm_seat_offset,
     weapon_clearance_offset,
 )
 from valve_qc_merger.commands.base import Command
@@ -154,6 +155,7 @@ def replace_hands(
     weapon_offset: Vector3 = _NO_WEAPON_OFFSET,
     clearance: bool = False,
     clearance_direction: Vector3 | None = None,
+    seat_grip: bool = False,
 ) -> ReplaceHandsResult:
     """Run the hand replacement and return a summary.
 
@@ -195,6 +197,26 @@ def replace_hands(
 
     weapon_slide: Vector3 | None = None
     intrusion_before = intrusion_after = 0
+    if seat_grip:
+        original_hand = parse_smd_file(_resolve_studio(weapon_dir, hands_block.studios[0]))
+        finger_bones = {
+            joint
+            for link in links
+            for source, _ in link.finger_pairs
+            for joint in source.joints
+        }
+        seat = palm_seat_offset(
+            canonical_graft.reference_smd(),
+            original_hand,
+            canonical_graft.weapon_reference_smd(),
+            {"Bip01_R_Hand", "Bip01_L_Hand"},
+            finger_bones,
+        )
+        weapon_slide = seat
+        weapon_offset = Vector3(
+            weapon_offset.x + seat.x, weapon_offset.y + seat.y, weapon_offset.z + seat.z
+        )
+        canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset)
     if clearance or clearance_direction is not None:
         our_hand = canonical_graft.reference_smd()
         gun_ref = canonical_graft.weapon_reference_smd()
@@ -307,6 +329,12 @@ class ReplaceHandsCommand(Command):
             "the original hands did. Use 'auto' to also pick the slide direction "
             "(away from the hand), or give a grip-preserving direction X,Y,Z",
         )
+        parser.add_argument(
+            "--seat-grip",
+            action="store_true",
+            help="position the gun so the reference palm holds the grip where the "
+            "original hands' palm did (automatic, per weapon)",
+        )
 
     def run(self, args: argparse.Namespace) -> int:
         weapon_dir: Path = args.weapon_dir
@@ -338,6 +366,7 @@ class ReplaceHandsCommand(Command):
                 weapon_offset,
                 clearance,
                 clearance_direction,
+                args.seat_grip,
             )
         except (ReplaceHandsError, SmdParseError, ValueError) as exc:
             print(f"replace-hands: {exc}")
@@ -353,10 +382,12 @@ class ReplaceHandsCommand(Command):
         print(f"  animations retargeted: {result.animations_retargeted}")
         if result.weapon_slide is not None:
             s = result.weapon_slide
-            print(
-                f"  weapon slid:           ({s.x:.2f}, {s.y:.2f}, {s.z:.2f}) "
+            detail = (
                 f"[hand intrusion {result.intrusion_before} -> {result.intrusion_after} verts]"
+                if result.intrusion_before
+                else "[grip seated in palm]"
             )
+            print(f"  weapon moved:          ({s.x:.2f}, {s.y:.2f}, {s.z:.2f}) {detail}")
         return 0
 
 

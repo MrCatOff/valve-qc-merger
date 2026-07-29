@@ -151,6 +151,30 @@ def test_weapon_clearance_targets_the_original_overlap() -> None:
 
 
 @requires_elite
+def test_palm_seat_offset_matches_the_original_grip() -> None:
+    from valve_qc_merger.clearance import palm_seat_offset
+
+    weapon = parse_smd_file(_elite() / "v_elite-PV.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    original = parse_smd_file(_elite() / "f_elite_Male_hand_Low.smd")
+    links = build_hand_correspondences(weapon, hand)
+    graft = HandGraft(weapon, hand, links)
+    finger_bones = {
+        joint for link in links for source, _ in link.finger_pairs for joint in source.joints
+    }
+    offset = palm_seat_offset(
+        graft.reference_smd(),
+        original,
+        graft.weapon_reference_smd(),
+        {"Bip01_R_Hand", "Bip01_L_Hand"},
+        finger_bones,
+    )
+    # Elite's grip sits ~half a unit forward of the palm; seating pulls it back.
+    assert 0.2 < offset.y < 0.9
+    assert abs(offset.x) < 0.5
+
+
+@requires_elite
 def test_replace_hands_on_elite_is_consistent(tmp_path: Path) -> None:
     result = replace_hands(_elite(), _hands(), tmp_path / "out")
     out = result.output_dir
