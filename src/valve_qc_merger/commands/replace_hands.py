@@ -25,6 +25,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from valve_qc_merger.clearance import weapon_clearance_offset
 from valve_qc_merger.commands.base import Command
 from valve_qc_merger.correspondence import CorrespondenceError, build_hand_correspondences
 from valve_qc_merger.models.geometry import Vector3
@@ -75,6 +76,9 @@ class ReplaceHandsResult:
     output_bones: int
     removed_bones: int
     added_bones: int
+    weapon_slide: Vector3 | None = None
+    intrusion_before: int = 0
+    intrusion_after: int = 0
 
 
 class ReplaceHandsError(RuntimeError):
@@ -144,6 +148,7 @@ def replace_hands(
     variants: tuple[str, ...] = _DEFAULT_VARIANTS,
     offsets: dict[str, Transform] | None = None,
     weapon_offset: Vector3 = _NO_WEAPON_OFFSET,
+    clearance_direction: Vector3 | None = None,
 ) -> ReplaceHandsResult:
     """Run the hand replacement and return a summary.
 
@@ -151,6 +156,8 @@ def replace_hands(
     transform applied to that reference hand on the grip; the gun is compensated
     so it never moves. Omitted sides default to identity. ``weapon_offset``
     translates the gun geometry off the hands so they do not clip the grip.
+    ``clearance_direction`` (if given) slides the gun along that direction by an
+    automatically computed distance to clear the hand intrusion.
     """
     weapon_dir = weapon_dir.resolve()
     hands_dir = hands_dir.resolve()
@@ -178,6 +185,20 @@ def replace_hands(
     except CorrespondenceError as exc:
         raise ReplaceHandsError(f"could not match hands to weapon rig: {exc}") from exc
     canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset)
+
+    weapon_slide: Vector3 | None = None
+    intrusion_before = intrusion_after = 0
+    if clearance_direction is not None:
+        slide, intrusion_before, intrusion_after = weapon_clearance_offset(
+            canonical_graft.reference_smd(),
+            canonical_graft.weapon_reference_smd(),
+            clearance_direction,
+        )
+        weapon_slide = slide
+        weapon_offset = Vector3(
+            weapon_offset.x + slide.x, weapon_offset.y + slide.y, weapon_offset.z + slide.z
+        )
+        canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(weapon_dir, output_dir, dirs_exist_ok=True)
@@ -220,6 +241,9 @@ def replace_hands(
         output_bones=output_bones,
         removed_bones=canonical_graft.removed_count(),
         added_bones=canonical_graft.added_count(),
+        weapon_slide=weapon_slide,
+        intrusion_before=intrusion_before,
+        intrusion_after=intrusion_after,
     )
 
 
@@ -261,6 +285,13 @@ class ReplaceHandsCommand(Command):
             help="translate the gun geometry by X,Y,Z units so the hands do not "
             "clip the grip",
         )
+        parser.add_argument(
+            "--weapon-clearance",
+            metavar="X,Y,Z",
+            help="slide the gun along direction X,Y,Z by an automatically computed "
+            "distance to clear the hand intrusion (grip-preserving; you pick the "
+            "direction, the tool picks the distance)",
+        )
 
     def run(self, args: argparse.Namespace) -> int:
         weapon_dir: Path = args.weapon_dir
@@ -277,8 +308,11 @@ class ReplaceHandsCommand(Command):
                 if args.weapon_offset
                 else _NO_WEAPON_OFFSET
             )
+            clearance = (
+                parse_translation(args.weapon_clearance) if args.weapon_clearance else None
+            )
             result = replace_hands(
-                weapon_dir, args.hands, output_dir, variants, offsets, weapon_offset
+                weapon_dir, args.hands, output_dir, variants, offsets, weapon_offset, clearance
             )
         except (ReplaceHandsError, SmdParseError, ValueError) as exc:
             print(f"replace-hands: {exc}")
@@ -292,6 +326,12 @@ class ReplaceHandsCommand(Command):
             f"added {result.added_bones} reference bones)"
         )
         print(f"  animations retargeted: {result.animations_retargeted}")
+        if result.weapon_slide is not None:
+            s = result.weapon_slide
+            print(
+                f"  weapon slid:           ({s.x:.2f}, {s.y:.2f}, {s.z:.2f}) "
+                f"[hand intrusion {result.intrusion_before} -> {result.intrusion_after} verts]"
+            )
         return 0
 
 

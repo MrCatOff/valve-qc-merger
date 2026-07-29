@@ -105,6 +105,43 @@ def test_short_thumb_continues_along_the_weapon() -> None:
             assert cos > 1.0 - 1e-6
 
 
+def test_clearance_no_penetration_returns_zero() -> None:
+    # A gun mesh well away from the hand needs no slide.
+    from valve_qc_merger.clearance import weapon_clearance_offset
+    from valve_qc_merger.models.geometry import Vector2
+    from valve_qc_merger.models.smd import Smd, Triangle, Vertex
+
+    def tri(x: float) -> Triangle:
+        uv = Vector2(0.0, 0.0)
+        v = [
+            Vertex(0, Vector3(x, 0, 0), Vector3(0, 0, 1), uv),
+            Vertex(0, Vector3(x + 1, 0, 0), Vector3(0, 0, 1), uv),
+            Vertex(0, Vector3(x, 1, 0), Vector3(0, 0, 1), uv),
+        ]
+        return Triangle("m", (v[0], v[1], v[2]))
+
+    hand = Smd(triangles=[tri(0.0)])
+    gun = Smd(triangles=[tri(100.0)])  # far away
+    offset, before, after = weapon_clearance_offset(hand, gun, Vector3(1, 0, 0))
+    assert before == 0 and after == 0
+    assert offset == Vector3(0.0, 0.0, 0.0)
+
+
+@requires_elite
+def test_weapon_clearance_reduces_intrusion() -> None:
+    from valve_qc_merger.clearance import weapon_clearance_offset
+
+    weapon = parse_smd_file(_elite() / "v_elite-PV.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    graft = HandGraft(weapon, hand, build_hand_correspondences(weapon, hand))
+    offset, before, after = weapon_clearance_offset(
+        graft.reference_smd(), graft.weapon_reference_smd(), Vector3(1.0, 0.0, 0.0)
+    )
+    assert before > 0
+    assert after < before  # sliding along +X clears most of the intrusion
+    assert offset.x > 0 and offset.y == 0 and offset.z == 0
+
+
 @requires_elite
 def test_replace_hands_on_elite_is_consistent(tmp_path: Path) -> None:
     result = replace_hands(_elite(), _hands(), tmp_path / "out")

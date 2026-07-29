@@ -72,6 +72,18 @@ valve-qc-merger replace-hands path/to/v_anaconda --hands path/to/reference_hands
     --weapon-offset "0,0,0.5"
 ```
 
+To have the tool work out *how far* to move the gun, use `--weapon-clearance
+"x,y,z"`: you give the grip-preserving direction the gun can slide (the axis
+along which the fist doesn't lose its grip, in model space), and the tool
+computes the smallest distance along it that clears the gun out of the hand
+mesh. A radial push into a cupped grip only makes the overlap worse, so the
+direction must be one the gun can slide along:
+
+```bash
+valve-qc-merger replace-hands path/to/v_elite --hands path/to/reference_hands \
+    --weapon-clearance "1,0,0"
+```
+
 ## Project layout
 
 ```
