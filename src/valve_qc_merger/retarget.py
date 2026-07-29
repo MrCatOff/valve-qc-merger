@@ -42,6 +42,7 @@ from valve_qc_merger.models.smd import BonePose, Frame, Node, Smd, Triangle, Ver
 from valve_qc_merger.transform import (
     Matrix3,
     Transform,
+    clamp_rotation,
     mat3_multiply,
     mat3_transpose,
     rotation_between,
@@ -491,14 +492,17 @@ class HandGraft:
         finger_local: dict[int, Transform],
         world_cache: dict[int, Transform],
         weapon_world: dict[int, Transform],
-        iterations: int = 12,
+        iterations: int = 16,
         tolerance: float = 0.05,
+        max_curl: float = 1.2,
     ) -> None:
         """CCD: curl the finger so its tip joint reaches the weapon fingertip.
 
         Adjusts every joint but the last (which sets only the fingertip's own
         orientation, not the tip position), seeded from the aim pose so the
-        finger keeps its direction and only bends enough to reach the grip.
+        finger keeps its direction and only bends enough to reach the grip. Each
+        joint's bend away from the aim is capped at ``max_curl`` radians so a
+        finger longer than the weapon's does not fold back on itself.
         """
         target = weapon_world.get(chain.weapon_tip)
         if target is None or len(chain.joints) < 2:
@@ -506,6 +510,7 @@ class HandGraft:
         goal = target.translation
         base = world_cache[chain.base]
         locals_ = [finger_local[i] for i in chain.joints]
+        aim_rotation = [local.rotation for local in locals_]
 
         def forward() -> list[Transform]:
             worlds = [base.compose(locals_[0])]
@@ -528,7 +533,11 @@ class HandGraft:
                 parent_rot = base.rotation if j == 0 else worlds[j - 1].rotation
                 new_world_rot = mat3_multiply(swing, joint.rotation)
                 local_rot = mat3_multiply(mat3_transpose(parent_rot), new_world_rot)
-                locals_[j] = Transform(local_rot, locals_[j].translation)
+                # Keep the bend natural: cap how far this joint turns from the aim.
+                curl = clamp_rotation(
+                    mat3_multiply(mat3_transpose(aim_rotation[j]), local_rot), max_curl
+                )
+                locals_[j] = Transform(mat3_multiply(aim_rotation[j], curl), locals_[j].translation)
                 worlds = forward()
                 tip = worlds[-1].translation
 

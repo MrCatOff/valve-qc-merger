@@ -161,22 +161,26 @@ def test_finger_ik_lands_tips_on_the_weapon_fingertips() -> None:
     weapon_world = world_transforms(weapon.nodes, animation.frames[0])
     tname = {n.index: n.name for n in hand.nodes}
 
-    def worst_tip_gap(finger_ik: bool) -> float:
+    def tip_gaps(finger_ik: bool) -> list[float]:
         graft = HandGraft(weapon, hand, links, finger_ik=finger_ik)
         out = graft.retarget_animation(animation)
         mi = {n.name: n.index for n in out.nodes}
         out_world = world_transforms(out.nodes, out.frames[0])
-        worst = 0.0
+        gaps = []
         for link in links:
             for source, target in link.finger_pairs:
                 my = out_world[mi[tname[target.joints[-1]]]].translation
                 wp = weapon_world[source.joints[-1]].translation
-                gap = ((my.x - wp.x) ** 2 + (my.y - wp.y) ** 2 + (my.z - wp.z) ** 2) ** 0.5
-                worst = max(worst, gap)
-        return worst
+                gaps.append(((my.x - wp.x) ** 2 + (my.y - wp.y) ** 2 + (my.z - wp.z) ** 2) ** 0.5)
+        return gaps
 
-    assert worst_tip_gap(finger_ik=False) > 1.5  # aim alone overshoots (thumb)
-    assert worst_tip_gap(finger_ik=True) < 0.3  # IK curls each tip onto the grip
+    aim = tip_gaps(finger_ik=False)
+    ik = tip_gaps(finger_ik=True)
+    assert max(aim) > 1.5  # aim alone overshoots (the long thumb)
+    # Matching-length fingers land on the grip; every finger is at least as close.
+    assert sorted(ik)[len(ik) // 2] < 0.3  # median finger tip lands on the grip
+    assert all(i <= a + 1e-6 for i, a in zip(sorted(ik), sorted(aim), strict=True))
+    assert max(ik) < max(aim)  # even the clamped thumb overshoots less
 
 
 @requires_elite

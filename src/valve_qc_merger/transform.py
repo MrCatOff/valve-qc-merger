@@ -58,6 +58,29 @@ def _normalize(v: Vector3) -> Vector3:
     return Vector3(v.x / length, v.y / length, v.z / length)
 
 
+def rotation_angle(m: Matrix3) -> float:
+    """The rotation angle (radians) of a rotation matrix."""
+    trace = m[0][0] + m[1][1] + m[2][2]
+    return math.acos(max(-1.0, min(1.0, (trace - 1.0) / 2.0)))
+
+
+def clamp_rotation(m: Matrix3, max_angle: float) -> Matrix3:
+    """Scale a rotation down so its angle does not exceed ``max_angle`` radians."""
+    angle = rotation_angle(m)
+    if angle <= max_angle or angle < 1e-6:
+        return m
+    axis = _normalize(Vector3(m[2][1] - m[1][2], m[0][2] - m[2][0], m[1][0] - m[0][1]))
+    s = math.sin(max_angle)
+    c = math.cos(max_angle)
+    x, y, z = axis.x, axis.y, axis.z
+    t = 1.0 - c
+    return (
+        (t * x * x + c, t * x * y - s * z, t * x * z + s * y),
+        (t * x * y + s * z, t * y * y + c, t * y * z - s * x),
+        (t * x * z - s * y, t * y * z + s * x, t * z * z + c),
+    )
+
+
 def rotation_between(a: Vector3, b: Vector3) -> Matrix3:
     """Minimal rotation matrix taking direction ``a`` onto direction ``b``."""
     u = _normalize(a)
@@ -183,9 +206,11 @@ class Transform:
 __all__ = [
     "Matrix3",
     "Transform",
+    "clamp_rotation",
     "euler_to_matrix",
     "mat3_multiply",
     "mat3_transpose",
     "matrix_to_euler",
+    "rotation_angle",
     "rotation_between",
 ]
