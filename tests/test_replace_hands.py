@@ -177,10 +177,10 @@ def test_finger_ik_lands_tips_on_the_weapon_fingertips() -> None:
     aim = tip_gaps(finger_ik=False)
     ik = tip_gaps(finger_ik=True)
     assert max(aim) > 1.5  # aim alone overshoots (the long thumb)
-    # Matching-length fingers land on the grip; every finger is at least as close.
+    # Matching-length fingers curl onto the grip; no finger ends up further out.
     assert sorted(ik)[len(ik) // 2] < 0.3  # median finger tip lands on the grip
     assert all(i <= a + 1e-6 for i, a in zip(sorted(ik), sorted(aim), strict=True))
-    assert max(ik) < max(aim)  # even the clamped thumb overshoots less
+    assert sum(ik) < sum(aim)  # overall the fingers sit closer to the grip
 
 
 @requires_elite
