@@ -63,38 +63,46 @@ def test_structural_wrist_detection_and_short_thumb() -> None:
 
 
 @requires_elite
-def test_short_thumb_curls_to_the_grip() -> None:
+def test_short_thumb_continues_along_the_weapon() -> None:
     # v_elite has a two-bone thumb; my three-bone thumb has a surplus joint.
-    # It must curl its tip onto the weapon thumb tip, not extend straight through.
+    # Every one of my thumb segments must point along the weapon thumb direction
+    # (continue straight), not fold back toward the tip or extend elsewhere.
     from valve_qc_merger.kinematics import world_transforms
+    from valve_qc_merger.transform import Transform
 
     weapon = parse_smd_file(_elite() / "v_elite-PV.smd")
     hand = parse_smd_file(_hands() / "male.smd")
     links = build_hand_correspondences(weapon, hand)
     short = [
-        (link, source, target)
+        (source, target)
         for link in links
         for source, target in link.finger_pairs
         if len(source.joints) == 2
     ]
     assert short, "expected a two-bone thumb in the elite rig"
-    _, source, target = short[0]
+    source, target = short[0]
 
     graft = HandGraft(weapon, hand, links)
     animation = parse_smd_file(_elite() / "v_elite_anims" / "draw.smd")
     out = graft.retarget_animation(animation)
-    weapon_tip = {n.name: n.index for n in weapon.nodes}
-    out_tip = {n.name: n.index for n in out.nodes}
-    weapon_names = {n.index: n.name for n in weapon.nodes}
-    hand_names = {n.index: n.name for n in hand.nodes}
+    wi = {n.name: n.index for n in weapon.nodes}
+    mi = {n.name: n.index for n in out.nodes}
+    wn = {n.index: n.name for n in weapon.nodes}
+    tn = {n.index: n.name for n in hand.nodes}
+
+    def unit(world: dict[int, Transform], a: int, b: int) -> Vector3:
+        d = Vector3(*(world[b].translation[k] - world[a].translation[k] for k in range(3)))
+        length = d.length()
+        return Vector3(d.x / length, d.y / length, d.z / length)
 
     for original, retargeted in zip(animation.frames, out.frames, strict=True):
-        weapon_world = world_transforms(weapon.nodes, original)
-        out_world = world_transforms(out.nodes, retargeted)
-        my_tip = out_world[out_tip[hand_names[target.tip]]].translation
-        grip = weapon_world[weapon_tip[weapon_names[source.tip]]].translation
-        distance = ((my_tip.x - grip.x) ** 2 + (my_tip.y - grip.y) ** 2 + (my_tip.z - grip.z) ** 2)
-        assert distance < 4.0  # within 2 units of the grip point
+        ww = world_transforms(weapon.nodes, original)
+        mw = world_transforms(out.nodes, retargeted)
+        weapon_dir = unit(ww, wi[wn[source.joints[0]]], wi[wn[source.joints[1]]])
+        for k in range(len(target.joints) - 1):  # every one of my thumb segments
+            my_dir = unit(mw, mi[tn[target.joints[k]]], mi[tn[target.joints[k + 1]]])
+            cos = weapon_dir.x * my_dir.x + weapon_dir.y * my_dir.y + weapon_dir.z * my_dir.z
+            assert cos > 1.0 - 1e-6
 
 
 @requires_elite

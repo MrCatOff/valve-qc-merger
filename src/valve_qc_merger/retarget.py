@@ -103,13 +103,11 @@ class _FingerBone:
     # This bone's own direction to its child in local space; ``None`` for the
     # finger tip (a leaf), which keeps its bind orientation.
     child_dir: Vector3 | None
-    # When the weapon finger has a matching segment, ``source_child`` names it
-    # and this bone aims along the weapon segment. When the weapon finger is
-    # shorter (my finger has extra joints), ``fingertip`` names the weapon
-    # finger tip and this bone instead aims at it -- so the extra length curls
-    # toward the grip rather than extending straight through the weapon.
+    # The weapon segment (``source_joint`` -> ``source_child``) this bone aims
+    # along. For joints past a shorter weapon finger's end, this is the weapon
+    # finger's *last* segment, so the surplus length continues along the weapon
+    # finger direction instead of folding back toward the tip.
     source_child: int | None
-    fingertip: int | None
     # Maps the weapon bone's world orientation onto this bone's output-bind
     # orientation, so the finger's roll (twist about its axis) is taken from the
     # weapon -- which gripped correctly -- while its direction comes from the aim.
@@ -281,7 +279,6 @@ class HandGraft:
             target_joints = target_chain.joints
             for depth, target_joint in enumerate(target_joints):
                 source_child: int | None = None
-                fingertip: int | None = None
                 child_dir: Vector3 | None = None
                 source_joint = source_joints[min(depth, len(source_joints) - 1)]
                 if depth + 1 < len(target_joints):  # my joint has a child (not the tip)
@@ -290,7 +287,10 @@ class HandGraft:
                         source_joint = source_joints[depth]
                         source_child = source_joints[depth + 1]
                     else:
-                        fingertip = source_joints[-1]  # extra joint: curl to the grip
+                        # Surplus joint: continue along the weapon finger's last
+                        # segment rather than folding back toward its tip.
+                        source_joint = source_joints[-2]
+                        source_child = source_joints[-1]
                 output_bind_rot = mat3_multiply(transform_rot, hand_bind[target_joint].rotation)
                 orient_align = mat3_multiply(
                     mat3_transpose(weapon_bind[source_joint].rotation), output_bind_rot
@@ -306,7 +306,6 @@ class HandGraft:
                         _pose_transform(hand_local[target_joint]),
                         child_dir,
                         source_child,
-                        fingertip,
                         orient_align,
                     )
                 )
@@ -440,27 +439,14 @@ class HandGraft:
         weapon_world: dict[int, Transform],
         aim: bool,
     ) -> Transform:
-        if not aim or finger.child_dir is None:
+        if not aim or finger.child_dir is None or finger.source_child is None:
             return finger.bind_local
         orient = weapon_world.get(finger.source_joint)
-        if orient is None:
+        child = weapon_world.get(finger.source_child)
+        if orient is None or child is None:
             return finger.bind_local
-        if finger.source_child is not None:
-            # Matched segment: aim my bone along the weapon finger segment.
-            child = weapon_world.get(finger.source_child)
-            if child is None:
-                return finger.bind_local
-            direction_world = _subtract(child.translation, orient.translation)
-        elif finger.fingertip is not None:
-            # Extra joint: aim my bone at the weapon finger tip so the surplus
-            # length curls toward the grip instead of extending straight.
-            tip = weapon_world.get(finger.fingertip)
-            if tip is None:
-                return finger.bind_local
-            head = parent_world.transform_point(finger.bind_local.translation)
-            direction_world = _subtract(tip.translation, head)
-        else:
-            return finger.bind_local
+        # Aim my bone along the weapon finger segment.
+        direction_world = _subtract(child.translation, orient.translation)
         if direction_world.length() < 1e-6:
             return finger.bind_local
         # Take the finger's roll from the weapon bone's world orientation (it
