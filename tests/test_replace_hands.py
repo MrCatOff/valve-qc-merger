@@ -28,10 +28,49 @@ def _hands() -> Path:
     return _repo_root() / "tmp" / "hands"
 
 
+def _elite() -> Path:
+    return _repo_root() / "tmp" / "pistols" / "view" / "v_elite"
+
+
 requires_samples = pytest.mark.skipif(
     not (_anaconda().exists() and _hands().exists()),
     reason="sample assets under tmp/ are not available",
 )
+
+requires_elite = pytest.mark.skipif(
+    not (_elite().exists() and _hands().exists()),
+    reason="v_elite sample not available",
+)
+
+
+@requires_elite
+def test_structural_wrist_detection_and_short_thumb() -> None:
+    # v_elite names no Bone_Lefthand/Bone_Righthand (wrists are found structurally),
+    # its fingers hang off a palm, and one thumb is only two bones.
+    weapon = parse_smd_file(_elite() / "v_elite-PV.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    links = build_hand_correspondences(weapon, hand)
+    assert {link.side for link in links} == {"L", "R"}
+    lengths = {len(source.joints) for link in links for source, _ in link.finger_pairs}
+    assert 2 in lengths and 3 in lengths  # short thumb + normal fingers
+    for link in links:
+        assert len(link.finger_pairs) == 5
+
+
+@requires_elite
+def test_replace_hands_on_elite_is_consistent(tmp_path: Path) -> None:
+    result = replace_hands(_elite(), _hands(), tmp_path / "out")
+    out = result.output_dir
+
+    def skeleton(path: Path) -> tuple[tuple[int, str, int], ...]:
+        return tuple((n.index, n.name, n.parent) for n in parse_smd_file(path).nodes)
+
+    reference = skeleton(out / "grafted_male.smd")
+    assert skeleton(out / "v_elite-PV.smd") == reference
+    for animation in sorted((out / "v_elite_anims").glob("*.smd")):
+        assert skeleton(animation) == reference
+    names = {name for _, name, _ in reference}
+    assert "Bip01_L_Hand" in names and "Bip01_R_Hand" in names
 
 
 @requires_samples

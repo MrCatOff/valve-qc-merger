@@ -254,20 +254,23 @@ class HandGraft:
             _ConstantBone(forearm_new, hand_name[forearm_index], hand_new, forearm_local)
         )
 
-        # Fingers: each joint aims its bone along the weapon finger's direction.
+        # Fingers: each of my joints aims its bone along the matching weapon
+        # finger segment. The weapon finger may have fewer bones than mine (a
+        # short thumb); joints past the weapon finger's end keep their bind pose.
         cursor = base_index + 2
         for source_chain, target_chain in link.finger_pairs:
             parent_new = hand_new
-            joints = list(zip(source_chain.joints, target_chain.joints, strict=True))
-            for depth, (source_joint, target_joint) in enumerate(joints):
-                is_tip = depth == len(joints) - 1
-                if is_tip:
-                    source_child: int | None = None
-                    child_dir: Vector3 | None = None
-                else:
-                    source_child = source_chain.joints[depth + 1]
-                    child_target = target_chain.joints[depth + 1]
-                    child_dir = hand_local[child_target].position
+            source_joints = source_chain.joints
+            target_joints = target_chain.joints
+            for depth, target_joint in enumerate(target_joints):
+                source_child: int | None = None
+                child_dir: Vector3 | None = None
+                source_joint = source_joints[min(depth, len(source_joints) - 1)]
+                has_child = depth + 1 < len(target_joints)
+                if has_child and depth + 1 < len(source_joints):
+                    source_joint = source_joints[depth]
+                    source_child = source_joints[depth + 1]
+                    child_dir = hand_local[target_joints[depth + 1]].position
                 self._mesh_remap[target_joint] = cursor
                 self._mesh_transform[target_joint] = mesh_transform
                 self._plan.fingers.append(

@@ -2,20 +2,23 @@
 
 The reference hands (``male.smd``/``female.smd``) always use the same Biped
 naming (``Bip01_{L,R}_Hand``, ``Bip01_{L,R}_Finger0..4``). Each weapon's hand
-rig is a differently-sized Biped export that keeps two reliable signals:
+rig is a differently-sized Biped export where every finger is a clean three-bone
+chain hanging off a wrist bone.
 
-* the wrist bones are named ``Bone_Lefthand`` / ``Bone_Righthand``;
-* every finger is a clean three-bone chain hanging off the wrist.
+Wrists are resolved two ways: by name (``Bone_Lefthand`` / ``Bone_Righthand``)
+when the rig uses that convention, otherwise structurally -- a wrist is a bone
+that parents five finger chains. Left/right is then assigned by name when known,
+or by picking the handedness whose finger fan best matches the reference (a left
+hand matches a left hand better than a right one because of the thumb).
 
-This module pairs the wrists by name, discovers the weapon's finger chains
-structurally, and assigns each to a reference finger (thumb..pinky) by bind-pose
-geometry -- comparing finger-root directions in the wrist's local frame.
+Each weapon finger is matched to a reference finger (thumb..pinky) by bind-pose
+geometry, comparing finger-root directions in the wrist's local frame.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import permutations
+from itertools import combinations, permutations
 
 from valve_qc_merger.kinematics import world_transforms
 from valve_qc_merger.models.geometry import Vector3
@@ -26,14 +29,19 @@ from valve_qc_merger.transform import Transform
 _TARGET_WRIST = {"L": "Bip01_L_Hand", "R": "Bip01_R_Hand"}
 _TARGET_WRIST_SOURCE = {"L": "Bone_Lefthand", "R": "Bone_Righthand"}
 FINGER_COUNT = 5
-FINGER_JOINTS = 3
+MIN_FINGER_JOINTS = 2
+MAX_FINGER_JOINTS = 4
 
 
 @dataclass(frozen=True, slots=True)
 class FingerChain:
-    """A three-bone finger chain: root, middle and tip bone indices."""
+    """A finger as an ordered chain of bone indices (root..tip).
 
-    joints: tuple[int, int, int]
+    Usually three bones, but some rigs use two (e.g. a short thumb), so the
+    length is not fixed.
+    """
+
+    joints: tuple[int, ...]
 
     @property
     def root(self) -> int:
@@ -41,7 +49,7 @@ class FingerChain:
 
     @property
     def tip(self) -> int:
-        return self.joints[2]
+        return self.joints[-1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,36 +81,32 @@ def _index_by_name(nodes: list[Node], name: str) -> int | None:
     return None
 
 
-def _descendants(root: int, children: dict[int, list[int]]) -> list[int]:
-    result: list[int] = []
-    stack = list(children.get(root, []))
-    while stack:
-        current = stack.pop()
-        result.append(current)
-        stack.extend(children.get(current, []))
-    return result
+def _finger_chain_from(root: int, children: dict[int, list[int]]) -> FingerChain | None:
+    """Follow a linear chain from ``root`` to a leaf; return it if finger-shaped.
+
+    A finger is a straight run of bones (each with a single child) ending in a
+    leaf, of a plausible length. This rejects the palm, weapon mechanism and
+    other branching or single-bone helpers.
+    """
+    joints = [root]
+    current = root
+    while len(children.get(current, [])) == 1:
+        current = children[current][0]
+        joints.append(current)
+    if children.get(current):
+        return None  # ended on a branch, not a leaf
+    if not MIN_FINGER_JOINTS <= len(joints) <= MAX_FINGER_JOINTS:
+        return None
+    return FingerChain(tuple(joints))
 
 
 def _find_finger_chains(wrist: int, children: dict[int, list[int]]) -> list[FingerChain]:
-    """Find clean three-bone chains (root->mid->tip leaf) under ``wrist``.
-
-    A chain qualifies when the tip is a leaf and both the tip's parent and the
-    root have exactly one child -- which selects fingers while rejecting the
-    palm, weapon mechanism and other branching bones.
-    """
+    """Finger chains hanging directly off ``wrist`` (root..tip, each a leaf run)."""
     chains: list[FingerChain] = []
-    for candidate in _descendants(wrist, children):
-        kids = children.get(candidate, [])
-        if len(kids) != 1:
-            continue
-        mid = kids[0]
-        mid_kids = children.get(mid, [])
-        if len(mid_kids) != 1:
-            continue
-        tip = mid_kids[0]
-        if children.get(tip):
-            continue  # tip must be a leaf
-        chains.append(FingerChain((candidate, mid, tip)))
+    for child in children.get(wrist, []):
+        chain = _finger_chain_from(child, children)
+        if chain is not None:
+            chains.append(chain)
     return chains
 
 
@@ -138,11 +142,15 @@ def _root_directions(
 
 def _best_assignment(
     source_dirs: list[Vector3], target_dirs: list[Vector3]
-) -> tuple[int, ...]:
-    """Return the permutation ``p`` mapping target i -> source p[i] minimising angle."""
-    best_perm: tuple[int, ...] = tuple(range(len(source_dirs)))
+) -> tuple[tuple[int, ...], float]:
+    """Return the permutation ``p`` (target i -> source p[i]) and its cost.
+
+    Cost is the summed angular mismatch of the paired finger-root directions;
+    lower means a better fit.
+    """
+    best_perm: tuple[int, ...] = tuple(range(len(target_dirs)))
     best_cost = float("inf")
-    for perm in permutations(range(len(source_dirs))):
+    for perm in permutations(range(len(source_dirs)), len(target_dirs)):
         cost = 0.0
         for target_index, source_index in enumerate(perm):
             a = target_dirs[target_index]
@@ -152,36 +160,126 @@ def _best_assignment(
         if cost < best_cost:
             best_cost = cost
             best_perm = perm
-    return best_perm
+    return best_perm, best_cost
 
 
-def _build_side(source: Smd, target: Smd, side: str) -> HandLink:
-    source_children = _children_map(source.nodes)
-    source_wrist = _index_by_name(source.nodes, _TARGET_WRIST_SOURCE[side])
-    target_wrist = _index_by_name(target.nodes, _TARGET_WRIST[side])
-    if source_wrist is None:
-        raise CorrespondenceError(f"weapon rig has no {_TARGET_WRIST_SOURCE[side]!r} bone")
-    if target_wrist is None:
-        raise CorrespondenceError(f"reference rig has no {_TARGET_WRIST[side]!r} bone")
+def _match_finger_pairs(
+    source_chains: list[FingerChain],
+    source_dirs: list[Vector3],
+    target_chains: list[FingerChain],
+    target_dirs: list[Vector3],
+) -> tuple[tuple[tuple[FingerChain, FingerChain], ...], float]:
+    """Pick the ``FINGER_COUNT`` source chains best matching the reference fingers.
 
-    source_chains = _find_finger_chains(source_wrist, source_children)
-    if len(source_chains) != FINGER_COUNT:
+    Weapon rigs can expose more than five leaf chains (a two-bone bullet helper
+    looks finger-shaped); choosing the geometrically best five rejects those.
+    """
+    best_pairs: tuple[tuple[FingerChain, FingerChain], ...] = ()
+    best_cost = float("inf")
+    for subset in combinations(range(len(source_chains)), FINGER_COUNT):
+        subset_dirs = [source_dirs[i] for i in subset]
+        perm, cost = _best_assignment(subset_dirs, target_dirs)
+        if cost < best_cost:
+            best_cost = cost
+            best_pairs = tuple(
+                (source_chains[subset[perm[t]]], target_chains[t])
+                for t in range(FINGER_COUNT)
+            )
+    return best_pairs, best_cost
+
+
+def _is_hand_bone(bone: int, children: dict[int, list[int]]) -> bool:
+    return len(_find_finger_chains(bone, children)) >= FINGER_COUNT
+
+
+def _wrist_candidates(nodes: list[Node]) -> list[int]:
+    """Bones that directly parent at least ``FINGER_COUNT`` finger chains."""
+    children = _children_map(nodes)
+    return [node.index for node in nodes if _is_hand_bone(node.index, children)]
+
+
+def _resolve_hand_bone(hint: int, children: dict[int, list[int]]) -> int:
+    """From a wrist ``hint``, find the (self or descendant) bone that parents the
+    fingers. Some rigs name the wrist but hang the fingers off a palm below it."""
+    queue = [hint]
+    seen: set[int] = set()
+    while queue:
+        bone = queue.pop(0)
+        if bone in seen:
+            continue
+        seen.add(bone)
+        if _is_hand_bone(bone, children):
+            return bone
+        queue.extend(children.get(bone, []))
+    return hint
+
+
+def _resolve_finger_pairs(
+    source: Smd, target: Smd, side: str, source_wrist: int
+) -> tuple[tuple[tuple[FingerChain, FingerChain], ...], float]:
+    """Match the weapon's fingers under ``source_wrist`` to the reference fingers."""
+    source_chains = _find_finger_chains(source_wrist, _children_map(source.nodes))
+    if len(source_chains) < FINGER_COUNT:
         raise CorrespondenceError(
-            f"expected {FINGER_COUNT} finger chains under {_TARGET_WRIST_SOURCE[side]!r}, "
+            f"expected at least {FINGER_COUNT} finger chains under the {side} wrist, "
             f"found {len(source_chains)}"
         )
+    target_wrist = _index_by_name(target.nodes, _TARGET_WRIST[side])
+    if target_wrist is None:
+        raise CorrespondenceError(f"reference rig has no {_TARGET_WRIST[side]!r} bone")
     target_chains = _target_finger_chains(target.nodes, side)
 
     source_world = world_transforms(source.nodes, source.frames[0])
     target_world = world_transforms(target.nodes, target.frames[0])
     source_dirs = _root_directions(source_chains, source_wrist, source_world)
     target_dirs = _root_directions(target_chains, target_wrist, target_world)
+    return _match_finger_pairs(source_chains, source_dirs, target_chains, target_dirs)
 
-    perm = _best_assignment(source_dirs, target_dirs)
-    finger_pairs = tuple(
-        (source_chains[perm[target_index]], target_chains[target_index])
-        for target_index in range(FINGER_COUNT)
-    )
+
+def _side_cost(source: Smd, target: Smd, side: str, source_wrist: int) -> float:
+    """Finger-fan match cost for assigning ``source_wrist`` to ``side``."""
+    try:
+        return _resolve_finger_pairs(source, target, side, source_wrist)[1]
+    except CorrespondenceError:
+        return float("inf")
+
+
+def _resolve_source_wrists(source: Smd, target: Smd) -> dict[str, int]:
+    """Return the source wrist bone index for each side ("L"/"R")."""
+    children = _children_map(source.nodes)
+    named = {
+        side: _index_by_name(source.nodes, name)
+        for side, name in _TARGET_WRIST_SOURCE.items()
+    }
+    if all(index is not None for index in named.values()):
+        return {
+            side: _resolve_hand_bone(index, children)
+            for side, index in named.items()
+            if index is not None
+        }
+
+    candidates = _wrist_candidates(source.nodes)
+    if len(candidates) != 2:
+        raise CorrespondenceError(
+            f"could not identify two wrist bones structurally (found {len(candidates)}); "
+            "the rig neither uses Bone_Lefthand/Bone_Righthand nor exposes two "
+            "five-finger hands"
+        )
+    first, second = candidates
+    straight = {"L": first, "R": second}
+    swapped = {"L": second, "R": first}
+
+    def total(assignment: dict[str, int]) -> float:
+        return sum(_side_cost(source, target, side, wrist) for side, wrist in assignment.items())
+
+    return straight if total(straight) <= total(swapped) else swapped
+
+
+def _build_side(source: Smd, target: Smd, side: str, source_wrist: int) -> HandLink:
+    target_wrist = _index_by_name(target.nodes, _TARGET_WRIST[side])
+    if target_wrist is None:
+        raise CorrespondenceError(f"reference rig has no {_TARGET_WRIST[side]!r} bone")
+    finger_pairs, _ = _resolve_finger_pairs(source, target, side, source_wrist)
     return HandLink(side, source_wrist, target_wrist, finger_pairs)
 
 
@@ -194,7 +292,8 @@ def build_hand_correspondences(source: Smd, target: Smd) -> list[HandLink]:
     """
     if not source.frames or not target.frames:
         raise CorrespondenceError("both rigs need a bind-pose skeleton frame")
-    return [_build_side(source, target, side) for side in ("L", "R")]
+    wrists = _resolve_source_wrists(source, target)
+    return [_build_side(source, target, side, wrists[side]) for side in ("L", "R")]
 
 
 __all__ = [
