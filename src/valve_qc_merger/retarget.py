@@ -40,6 +40,7 @@ from valve_qc_merger.kinematics import world_transforms
 from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.models.smd import BonePose, Frame, Node, Smd, Triangle, Vertex
 from valve_qc_merger.transform import (
+    Matrix3,
     Transform,
     mat3_multiply,
     mat3_transpose,
@@ -109,6 +110,10 @@ class _FingerBone:
     # toward the grip rather than extending straight through the weapon.
     source_child: int | None
     fingertip: int | None
+    # Maps the weapon bone's world orientation onto this bone's output-bind
+    # orientation, so the finger's roll (twist about its axis) is taken from the
+    # weapon -- which gripped correctly -- while its direction comes from the aim.
+    orient_align: Matrix3
 
 
 @dataclass
@@ -265,6 +270,10 @@ class HandGraft:
         # Fingers: each of my joints aims its bone along the matching weapon
         # finger segment. The weapon finger may have fewer bones than mine (a
         # short thumb); joints past the weapon finger's end keep their bind pose.
+        # Roll is taken from the weapon bone via ``orient_align``.
+        transform_rot = mat3_multiply(
+            target_frame.rotation, mat3_transpose(hand_bind[link.target_wrist].rotation)
+        )
         cursor = base_index + 2
         for source_chain, target_chain in link.finger_pairs:
             parent_new = hand_new
@@ -282,6 +291,10 @@ class HandGraft:
                         source_child = source_joints[depth + 1]
                     else:
                         fingertip = source_joints[-1]  # extra joint: curl to the grip
+                output_bind_rot = mat3_multiply(transform_rot, hand_bind[target_joint].rotation)
+                orient_align = mat3_multiply(
+                    mat3_transpose(weapon_bind[source_joint].rotation), output_bind_rot
+                )
                 self._mesh_remap[target_joint] = cursor
                 self._mesh_transform[target_joint] = mesh_transform
                 self._plan.fingers.append(
@@ -294,6 +307,7 @@ class HandGraft:
                         child_dir,
                         source_child,
                         fingertip,
+                        orient_align,
                     )
                 )
                 parent_new = cursor
@@ -428,13 +442,15 @@ class HandGraft:
     ) -> Transform:
         if not aim or finger.child_dir is None:
             return finger.bind_local
+        orient = weapon_world.get(finger.source_joint)
+        if orient is None:
+            return finger.bind_local
         if finger.source_child is not None:
             # Matched segment: aim my bone along the weapon finger segment.
             child = weapon_world.get(finger.source_child)
-            joint = weapon_world.get(finger.source_joint)
-            if child is None or joint is None:
+            if child is None:
                 return finger.bind_local
-            direction_world = _subtract(child.translation, joint.translation)
+            direction_world = _subtract(child.translation, orient.translation)
         elif finger.fingertip is not None:
             # Extra joint: aim my bone at the weapon finger tip so the surplus
             # length curls toward the grip instead of extending straight.
@@ -447,17 +463,16 @@ class HandGraft:
             return finger.bind_local
         if direction_world.length() < 1e-6:
             return finger.bind_local
-        # Redirect the bone from its bind orientation (keeping the reference's
-        # natural roll) onto the aim direction, rather than building a fresh
-        # minimal rotation -- otherwise the roll is unconstrained and a thumb can
-        # end up twisted the wrong way.
-        direction_local = Transform(mat3_transpose(parent_world.rotation), _ZERO).rotate_vector(
-            direction_world
-        )
-        bind = finger.bind_local
-        bind_direction = Transform(bind.rotation, _ZERO).rotate_vector(finger.child_dir)
-        redirect = rotation_between(bind_direction, direction_local)
-        return Transform(mat3_multiply(redirect, bind.rotation), bind.translation)
+        # Take the finger's roll from the weapon bone's world orientation (it
+        # gripped correctly), then swing that orientation minimally so the bone
+        # points along the aim direction. This fixes the direction without
+        # leaving the twist unconstrained (which flipped thumbs the wrong way).
+        rolled = mat3_multiply(orient.rotation, finger.orient_align)
+        rolled_forward = Transform(rolled, _ZERO).rotate_vector(finger.child_dir)
+        swing = rotation_between(rolled_forward, direction_world)
+        world_rotation = mat3_multiply(swing, rolled)
+        local_rotation = mat3_multiply(mat3_transpose(parent_world.rotation), world_rotation)
+        return Transform(local_rotation, finger.bind_local.translation)
 
     def _remap_mesh(self) -> list[Triangle]:
         triangles: list[Triangle] = []
@@ -478,6 +493,11 @@ class HandGraft:
 
 def _subtract(a: Vector3, b: Vector3) -> Vector3:
     return Vector3(a.x - b.x, a.y - b.y, a.z - b.z)
+
+
+def _normalize(v: Vector3) -> Vector3:
+    length = v.length()
+    return v if length == 0 else Vector3(v.x / length, v.y / length, v.z / length)
 
 
 def _pose_transform(pose: BonePose) -> Transform:
