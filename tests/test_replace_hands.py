@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from valve_qc_merger.commands.replace_hands import replace_hands
+from valve_qc_merger.commands.replace_hands import parse_offset, replace_hands
 from valve_qc_merger.correspondence import build_hand_correspondences
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget import HandGraft
@@ -51,16 +51,21 @@ def test_correspondence_matches_all_fingers() -> None:
 
 
 @requires_samples
-def test_graft_preserves_weapon_and_adds_hand_bones() -> None:
+def test_graft_replaces_hand_bones_without_doubling() -> None:
     weapon = parse_smd_file(_anaconda() / "ref_Anaconda.smd")
     hand = parse_smd_file(_hands() / "male.smd")
     graft = HandGraft(weapon, hand, build_hand_correspondences(weapon, hand))
 
     merged = graft.merged_nodes()
-    weapon_names = {n.name for n in weapon.nodes}
     merged_names = {n.name for n in merged}
-    assert weapon_names <= merged_names  # weapon skeleton untouched
-    assert len(merged) == len(weapon.nodes) + 34  # 17 kept bones per hand
+    # The weapon's wrist and finger bones are gone, not kept alongside mine.
+    assert "Bone_Lefthand" not in merged_names
+    assert not any(name.startswith("Bone05") for name in merged_names)
+    assert graft.removed_count() == 32  # 2 wrists + 30 finger bones
+    assert graft.added_count() == 34
+    assert len(merged) == 53  # 51 - 32 + 34, no doubling
+    # Gun/structural bones survive.
+    assert "Bone03" in merged_names and "Bone_Rullet" in merged_names
 
     animation = parse_smd_file(_anaconda() / "v_anaconda_anims" / "draw.smd")
     out = graft.retarget_animation(animation)
@@ -70,10 +75,74 @@ def test_graft_preserves_weapon_and_adds_hand_bones() -> None:
 
 
 @requires_samples
+def test_gun_bones_world_motion_is_preserved() -> None:
+    from valve_qc_merger.kinematics import world_transforms
+
+    weapon = parse_smd_file(_anaconda() / "ref_Anaconda.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    graft = HandGraft(weapon, hand, build_hand_correspondences(weapon, hand))
+    animation = parse_smd_file(_anaconda() / "v_anaconda_anims" / "shoot1.smd")
+    out = graft.retarget_animation(animation)
+
+    old_index = {n.name: n.index for n in weapon.nodes}
+    new_index = {n.name: n.index for n in out.nodes}
+    shared = {n.name for n in weapon.nodes} & {n.name for n in out.nodes}
+    for original, retargeted in zip(animation.frames, out.frames, strict=True):
+        before = world_transforms(weapon.nodes, original)
+        after = world_transforms(out.nodes, retargeted)
+        for name in shared:
+            a = before[old_index[name]].translation
+            b = after[new_index[name]].translation
+            assert (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2 < 1e-12
+
+
+def test_parse_offset() -> None:
+    identity = parse_offset("0,0,0,0,0,0")
+    assert identity.translation == (0.0, 0.0, 0.0)
+    moved = parse_offset("0,0,0,1.5,-2,3")
+    assert moved.translation == (1.5, -2.0, 3.0)
+    with pytest.raises(ValueError):
+        parse_offset("1,2,3")
+
+
+@requires_samples
+def test_offset_moves_hands_but_not_the_gun() -> None:
+    from valve_qc_merger.kinematics import world_transforms
+
+    weapon = parse_smd_file(_anaconda() / "ref_Anaconda.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    links = build_hand_correspondences(weapon, hand)
+    offset = {"L": parse_offset("0,0,0,5,0,0"), "R": parse_offset("0,0,0,5,0,0")}
+    graft = HandGraft(weapon, hand, links, offset)
+    animation = parse_smd_file(_anaconda() / "v_anaconda_anims" / "draw.smd")
+    out = graft.retarget_animation(animation)
+
+    new_index = {n.name: n.index for n in out.nodes}
+    old_index = {n.name: n.index for n in weapon.nodes}
+    shared = {n.name for n in weapon.nodes} & {n.name for n in out.nodes}
+    before = world_transforms(weapon.nodes, animation.frames[0])
+    after = world_transforms(out.nodes, out.frames[0])
+    # Gun/structural bones are unaffected by the offset ...
+    for name in shared:
+        a = before[old_index[name]].translation
+        b = after[new_index[name]].translation
+        assert (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2 < 1e-12
+    # ... but the reference hand actually moved.
+    hand_pos = after[new_index["Bip01_L_Hand"]].translation
+    no_offset = HandGraft(weapon, hand, links).retarget_animation(animation)
+    base_index = {n.name: n.index for n in no_offset.nodes}
+    hand_pos_no_offset = world_transforms(no_offset.nodes, no_offset.frames[0])[
+        base_index["Bip01_L_Hand"]
+    ].translation
+    assert hand_pos != hand_pos_no_offset
+
+
+@requires_samples
 def test_replace_hands_writes_compilable_build(tmp_path: Path) -> None:
     result = replace_hands(_anaconda(), _hands(), tmp_path / "out")
     assert result.variants == ("male", "female")
-    assert result.grafted_bones == 34
+    assert result.output_bones == 53
+    assert result.removed_bones == 32
     assert result.animations_retargeted == 6
 
     out = result.output_dir

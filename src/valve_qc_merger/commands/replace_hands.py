@@ -20,19 +20,36 @@ the gun keeps behaving as authored while the reference hands ride along.
 from __future__ import annotations
 
 import argparse
+import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
 from valve_qc_merger.correspondence import CorrespondenceError, build_hand_correspondences
+from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.models.smd import Smd
 from valve_qc_merger.parsers.smd import SmdParseError, parse_smd_file
 from valve_qc_merger.qc_document import find_bodygroups, replace_bodygroup_studios
 from valve_qc_merger.retarget import HandGraft
+from valve_qc_merger.transform import Transform
 from valve_qc_merger.writers.smd import write_smd_file
 
 _DEFAULT_VARIANTS = ("male", "female")
+
+
+def parse_offset(spec: str) -> Transform:
+    """Parse ``rx,ry,rz,tx,ty,tz`` (rotation degrees, translation units)."""
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    if len(parts) != 6:
+        raise ValueError(f"offset must be 6 comma-separated numbers, got {spec!r}")
+    try:
+        values = [float(part) for part in parts]
+    except ValueError as exc:
+        raise ValueError(f"offset values must be numbers: {spec!r}") from exc
+    euler = Vector3(*(math.radians(v) for v in values[:3]))
+    translation = Vector3(*values[3:])
+    return Transform.from_pos_euler(translation, euler)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +59,10 @@ class ReplaceHandsResult:
     output_dir: Path
     variants: tuple[str, ...]
     animations_retargeted: int
-    grafted_bones: int
+    weapon_bones: int
+    output_bones: int
+    removed_bones: int
+    added_bones: int
 
 
 class ReplaceHandsError(RuntimeError):
@@ -105,8 +125,14 @@ def replace_hands(
     hands_dir: Path,
     output_dir: Path,
     variants: tuple[str, ...] = _DEFAULT_VARIANTS,
+    offsets: dict[str, Transform] | None = None,
 ) -> ReplaceHandsResult:
-    """Run the hand replacement and return a summary."""
+    """Run the hand replacement and return a summary.
+
+    ``offsets`` maps a hand side (``"L"``/``"R"``) to a constant alignment
+    transform applied to that reference hand on the grip; the gun is compensated
+    so it never moves. Omitted sides default to identity.
+    """
     weapon_dir = weapon_dir.resolve()
     hands_dir = hands_dir.resolve()
     output_dir = output_dir.resolve()
@@ -131,7 +157,7 @@ def replace_hands(
         links = build_hand_correspondences(weapon_ref, canonical)
     except CorrespondenceError as exc:
         raise ReplaceHandsError(f"could not match hands to weapon rig: {exc}") from exc
-    canonical_graft = HandGraft(weapon_ref, canonical, links)
+    canonical_graft = HandGraft(weapon_ref, canonical, links, offsets)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(weapon_dir, output_dir, dirs_exist_ok=True)
@@ -139,7 +165,7 @@ def replace_hands(
     new_studios: list[str] = []
     for name, smd_path in available:
         hand_smd = parse_smd_file(smd_path)
-        graft = HandGraft(weapon_ref, hand_smd, links)
+        graft = HandGraft(weapon_ref, hand_smd, links, offsets)
         studio = f"grafted_{name}"
         write_smd_file(graft.reference_smd(), output_dir / f"{studio}.smd")
         _copy_textures(hand_smd, hands_dir, output_dir)
@@ -150,11 +176,16 @@ def replace_hands(
     updated_qc = replace_bodygroup_studios(qc_text, hands_block, new_studios)
     (output_dir / qc_path.name).write_text(updated_qc, encoding="latin-1")
 
+    output_bones = len(canonical_graft.merged_nodes())
+    weapon_bones = len(weapon_ref.nodes)
     return ReplaceHandsResult(
         output_dir=output_dir,
         variants=tuple(name for name, _ in available),
         animations_retargeted=retargeted,
-        grafted_bones=len(canonical_graft.merged_nodes()) - len(weapon_ref.nodes),
+        weapon_bones=weapon_bones,
+        output_bones=output_bones,
+        removed_bones=canonical_graft.removed_count(),
+        added_bones=canonical_graft.added_count(),
     )
 
 
@@ -184,20 +215,35 @@ class ReplaceHandsCommand(Command):
             default=",".join(_DEFAULT_VARIANTS),
             help="comma-separated reference hand names to graft (default: male,female)",
         )
+        offset_help = (
+            "alignment offset as 'rx,ry,rz,tx,ty,tz' (rotation degrees, translation "
+            "units) applied to the %s hand on the grip; the gun stays put"
+        )
+        parser.add_argument("--left-offset", metavar="SPEC", help=offset_help % "left")
+        parser.add_argument("--right-offset", metavar="SPEC", help=offset_help % "right")
 
     def run(self, args: argparse.Namespace) -> int:
         weapon_dir: Path = args.weapon_dir
         output_dir: Path = args.output or weapon_dir.with_name(f"{weapon_dir.name}_rehanded")
         variants = tuple(v.strip() for v in args.variants.split(",") if v.strip())
         try:
-            result = replace_hands(weapon_dir, args.hands, output_dir, variants)
-        except (ReplaceHandsError, SmdParseError) as exc:
+            offsets: dict[str, Transform] = {}
+            if args.left_offset:
+                offsets["L"] = parse_offset(args.left_offset)
+            if args.right_offset:
+                offsets["R"] = parse_offset(args.right_offset)
+            result = replace_hands(weapon_dir, args.hands, output_dir, variants, offsets)
+        except (ReplaceHandsError, SmdParseError, ValueError) as exc:
             print(f"replace-hands: {exc}")
             return 1
 
         print(f"Wrote rehanded weapon to {result.output_dir}")
         print(f"  variants grafted:      {', '.join(result.variants)}")
-        print(f"  hand bones added:      {result.grafted_bones}")
+        print(
+            f"  bones: {result.weapon_bones} -> {result.output_bones} "
+            f"(removed {result.removed_bones} weapon hand bones, "
+            f"added {result.added_bones} reference bones)"
+        )
         print(f"  animations retargeted: {result.animations_retargeted}")
         return 0
 

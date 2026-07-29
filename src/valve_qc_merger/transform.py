@@ -116,6 +116,10 @@ class Transform:
             rotated.z + self.translation.z,
         )
 
+    def rotate_vector(self, vector: Vector3) -> Vector3:
+        """Apply only the rotation (for directions such as normals)."""
+        return _apply3(self.rotation, vector)
+
     def compose(self, other: Transform) -> Transform:
         """Return ``self . other`` (apply ``other`` first, then ``self``)."""
         rotation = mat3_multiply(self.rotation, other.rotation)

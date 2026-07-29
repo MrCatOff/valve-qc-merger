@@ -34,10 +34,13 @@ python -m valve_qc_merger --help
 ### replace-hands
 
 Swap a weapon view-model's hands for your own reference hands, reproducing the
-weapon's animation behaviour. The weapon geometry, its bones and every
-animation are preserved exactly; your reference hands are grafted onto the
-weapon's wrist bones and their fingers are retargeted to follow the original
-grip (Stage 1 uses forward-kinematics retargeting).
+weapon's animation behaviour. It is a *replacement*: the weapon's own wrist and
+finger bones are removed and your hand bones take their place (the bone count
+does not double). The gun geometry, its bones and every animation are preserved
+exactly -- kept bones that hung off the old wrist (e.g. the palm the gun is
+skinned to) are re-attached to your hand, and the gun's world motion is
+unchanged. Fingers follow the original grip via forward-kinematics retargeting
+(Stage 1; no IK solver yet).
 
 ```bash
 valve-qc-merger replace-hands path/to/v_anaconda \
@@ -47,8 +50,18 @@ valve-qc-merger replace-hands path/to/v_anaconda \
 
 The reference hands folder must contain `male.smd` and/or `female.smd` (with
 their textures). The output folder is a ready-to-compile copy of the weapon
-with a grafted reference SMD per hand variant, retargeted animations and an
+with a replaced reference SMD per hand variant, retargeted animations and an
 updated QC.
+
+If your hands do not sit correctly on the grip, nudge them with a constant
+alignment offset (rotation in degrees, then translation), given per hand. The
+gun is compensated so it stays put while only the hand moves:
+
+```bash
+valve-qc-merger replace-hands path/to/v_anaconda --hands path/to/reference_hands \
+    --left-offset  "0,0,0,0.5,-1,0" \
+    --right-offset "0,0,10,0,0,0"
+```
 
 ## Project layout
 
