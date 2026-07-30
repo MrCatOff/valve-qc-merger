@@ -497,16 +497,25 @@ class HandGraft:
         world_cache: dict[int, Transform],
         weapon_world: dict[int, Transform],
         iterations: int = 16,
-        tolerance: float = 0.05,
-        max_curl: float = 1.2,
+        tolerance: float = 0.02,
+        max_curl: float = 2.0,
     ) -> None:
-        """CCD: curl the finger so its tip joint reaches the weapon fingertip.
+        """Fold the finger onto the grip with FABRIK, then reorient the bones.
 
-        Adjusts every joint but the last (which sets only the fingertip's own
-        orientation, not the tip position), seeded from the aim pose so the
-        finger keeps its direction and only bends enough to reach the grip. Each
-        joint's bend away from the aim is capped at ``max_curl`` radians so a
-        finger longer than the weapon's does not fold back on itself.
+        A reference finger is longer than the weapon finger it replaces, and the
+        grip contact (the weapon fingertip) is often *closer* to the knuckle than
+        the finger is long -- e.g. our index reaches ~2.3 units but the trigger
+        sits ~1.4 from the knuckle. Such a target can only be met by folding the
+        finger back on itself. Direction-only CCD does not fold (the finger is
+        already aimed correctly, just too long, so it juts straight past the
+        trigger guard). FABRIK solves reach-with-fold directly: it drags the joint
+        chain onto the target while preserving bone lengths, distributing the
+        fold across the knuckles so the finger tucks into the guard.
+
+        The FABRIK joint positions are converted back to bone rotations by
+        swinging each bone from its aim direction onto the solved segment
+        direction (roll is kept from the aim). Each bone's swing is capped at
+        ``max_curl`` radians so it cannot fold implausibly far.
         """
         target = weapon_world.get(chain.weapon_tip)
         if target is None or len(chain.joints) < 2:
@@ -523,27 +532,45 @@ class HandGraft:
             return worlds
 
         worlds = forward()
-        for _ in range(iterations):
-            tip = worlds[-1].translation
-            if _subtract(tip, goal).length() < tolerance:
-                break
-            for j in range(len(locals_) - 2, -1, -1):
-                joint = worlds[j]
-                to_tip = _subtract(tip, joint.translation)
-                to_goal = _subtract(goal, joint.translation)
-                if to_tip.length() < 1e-6 or to_goal.length() < 1e-6:
-                    continue
-                swing = rotation_between(to_tip, to_goal)
-                parent_rot = base.rotation if j == 0 else worlds[j - 1].rotation
-                new_world_rot = mat3_multiply(swing, joint.rotation)
-                local_rot = mat3_multiply(mat3_transpose(parent_rot), new_world_rot)
-                # Keep the bend natural: cap how far this joint turns from the aim.
-                curl = clamp_rotation(
-                    mat3_multiply(mat3_transpose(aim_rotation[j]), local_rot), max_curl
-                )
-                locals_[j] = Transform(mat3_multiply(aim_rotation[j], curl), locals_[j].translation)
-                worlds = forward()
-                tip = worlds[-1].translation
+        points = [w.translation for w in worlds]
+        root = points[0]
+        lengths = [_subtract(points[i + 1], points[i]).length() for i in range(len(points) - 1)]
+        reach = sum(lengths)
+
+        # --- FABRIK: solve joint positions (seeded from the aim pose) ---
+        solved = list(points)
+        if _subtract(goal, root).length() >= reach:
+            direction = _normalize(_subtract(goal, root))
+            for i in range(1, len(solved)):
+                solved[i] = _add(solved[i - 1], _scale(direction, lengths[i - 1]))
+        else:
+            for _ in range(iterations):
+                solved[-1] = goal
+                for i in range(len(solved) - 2, -1, -1):
+                    d = _normalize(_subtract(solved[i], solved[i + 1]))
+                    solved[i] = _add(solved[i + 1], _scale(d, lengths[i]))
+                solved[0] = root
+                for i in range(1, len(solved)):
+                    d = _normalize(_subtract(solved[i], solved[i - 1]))
+                    solved[i] = _add(solved[i - 1], _scale(d, lengths[i - 1]))
+                if _subtract(solved[-1], goal).length() < tolerance:
+                    break
+
+        # --- reorient each bone from its aim direction onto the solved segment ---
+        for i in range(len(locals_) - 1):
+            parent_rot = base.rotation if i == 0 else worlds[i - 1].rotation
+            cur_dir = _subtract(worlds[i + 1].translation, worlds[i].translation)
+            new_dir = _subtract(solved[i + 1], solved[i])
+            if cur_dir.length() < 1e-6 or new_dir.length() < 1e-6:
+                continue
+            swing = rotation_between(cur_dir, new_dir)
+            new_world_rot = mat3_multiply(swing, worlds[i].rotation)
+            local_rot = mat3_multiply(mat3_transpose(parent_rot), new_world_rot)
+            curl = clamp_rotation(
+                mat3_multiply(mat3_transpose(aim_rotation[i]), local_rot), max_curl
+            )
+            locals_[i] = Transform(mat3_multiply(aim_rotation[i], curl), locals_[i].translation)
+            worlds = forward()
 
         for k, index in enumerate(chain.joints):
             finger_local[index] = locals_[k]
@@ -568,6 +595,14 @@ class HandGraft:
 
 def _subtract(a: Vector3, b: Vector3) -> Vector3:
     return Vector3(a.x - b.x, a.y - b.y, a.z - b.z)
+
+
+def _add(a: Vector3, b: Vector3) -> Vector3:
+    return Vector3(a.x + b.x, a.y + b.y, a.z + b.z)
+
+
+def _scale(v: Vector3, s: float) -> Vector3:
+    return Vector3(v.x * s, v.y * s, v.z * s)
 
 
 def _normalize(v: Vector3) -> Vector3:
