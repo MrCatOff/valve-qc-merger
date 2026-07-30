@@ -33,10 +33,10 @@ fingers around the wrong axes.
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Callable
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from statistics import median
+from statistics import median, pvariance
 
 from valve_qc_merger.correspondence import HandLink
 from valve_qc_merger.kinematics import world_transforms
@@ -53,6 +53,7 @@ from valve_qc_merger.transform import (
 )
 
 _ZERO = Vector3(0.0, 0.0, 0.0)
+_GRIP_BONE_SAMPLE = 200  # gun verts nearest a hand whose dominant bone it rides
 _SEAT_ITERATIONS = 6  # closest-point seating passes (converges in 2-3 when close)
 _SEAT_TOLERANCE = 0.25  # stop seating once a pass moves less than this
 
@@ -402,13 +403,15 @@ class HandGraft:
             triangles=self._remap_mesh(),
         )
 
-    def weight_transferred_smd(self) -> Smd:
+    def weight_transferred_smd(self, body_bones: set[int] | None = None) -> Smd:
         """The reference hand mesh re-skinned onto the *weapon's own* skeleton.
 
         Instead of adding reference bones (the graft), the reference hand is posed
         into the weapon's grip, seated onto the gun handle, and bound rigidly to the
-        weapon's wrist bone so the weapon's own animations drive it with no
-        retargeting -- and, being one rigid piece per side, it can never tear.
+        gun's grip bone so the weapon's own animations drive it with no retargeting
+        -- and, being one rigid piece per side, it can never tear. ``body_bones``,
+        if given, restricts grip binding to the gun's rigid body (see
+        :func:`rigid_weapon_bones`) so a hand never rides a bullet or the slide.
         Output is at the weapon's reference (grip) pose.
         """
         # The graft's placed (but flat) reference mesh, on the merged skeleton.
@@ -419,7 +422,6 @@ class HandGraft:
         grip_world = world_transforms(self.merged_nodes(), grip)
         weapon_bind = world_transforms(self._weapon.nodes, self._weapon.frames[0])
         merged_side = {n.index: ("L" if "_L_" in n.name else "R") for n in self.merged_nodes()}
-        # RIGID GRIP: the whole hand rides its weapon wrist as one piece.
         wrist = {("L" if "_L_" in h.name else "R"): h.source_wrist for h in self._plan.hands}
         default_wrist = next(iter(wrist.values()))
 
@@ -432,13 +434,16 @@ class HandGraft:
         # The finger bones aim at the weapon's finger *bones*, which sit inside the
         # gun; slide each hand onto the handle *surface* so it actually grips.
         seat = self._grip_seat(placed, gripped, weapon_bind, merged_side)
+        # RIGID GRIP: bind each hand to the bone the gun's grip rides, so the two
+        # move as one -- the correspondence wrist can move differently and drift off.
+        grip_bones = self._grip_bones(placed, gripped, weapon_bind, merged_side, body_bones)
 
         triangles: list[Triangle] = []
         for triangle in placed.triangles:
             verts: list[Vertex] = []
             for vertex in triangle.vertices:
                 side = merged_side.get(vertex.bone, "?")
-                weapon_bone = wrist.get(side, default_wrist)
+                weapon_bone = grip_bones.get(side, wrist.get(side, default_wrist))
                 world_p = gripped(vertex)
                 nudge = seat.get(side)
                 if nudge is not None:
@@ -462,6 +467,49 @@ class HandGraft:
             frames=[self._weapon.frames[0]],
             triangles=triangles,
         )
+
+    def _grip_bones(
+        self,
+        placed: Smd,
+        gripped: Callable[[Vertex], Vector3],
+        weapon_bind: dict[int, Transform],
+        merged_side: dict[int, str],
+        body_bones: set[int] | None = None,
+    ) -> dict[str, int]:
+        """Per-side weapon bone that carries the gun's grip nearest each hand.
+
+        The hand must ride the same bone the gun's grip does; the correspondence
+        wrist can be a different bone that a fast draw or reload swings by a
+        different amount, leaving the hand floating while the gun animates away
+        (some rigs even have near-duplicate bone names, e.g. ``Bone 04`` beside
+        ``Bone04``, and the wrong one gets picked). For each side this bins the gun
+        vertices nearest the hand and returns their dominant bone -- the bone the
+        handle hangs off -- so hand and grip stay locked through every frame.
+        """
+        gun = [
+            (v.bone, weapon_bind[v.bone].transform_point(v.position))
+            for triangle in self._weapon.triangles
+            for v in triangle.vertices
+            if body_bones is None or v.bone in body_bones
+        ]
+        names = {node.index: node.name for node in self.merged_nodes()}
+        by_side: dict[str, list[Vector3]] = defaultdict(list)
+        for triangle in placed.triangles:
+            for vertex in triangle.vertices:
+                side = merged_side.get(vertex.bone)
+                if side in ("L", "R") and "Forearm" not in names.get(vertex.bone, ""):
+                    by_side[side].append(gripped(vertex))
+
+        bones: dict[str, int] = {}
+        for side, points in by_side.items():
+            cx = sum(p.x for p in points) / len(points)
+            cy = sum(p.y for p in points) / len(points)
+            cz = sum(p.z for p in points) / len(points)
+            nearest = sorted(
+                gun, key=lambda e: (e[1].x - cx) ** 2 + (e[1].y - cy) ** 2 + (e[1].z - cz) ** 2
+            )[:_GRIP_BONE_SAMPLE]
+            bones[side] = Counter(bone for bone, _ in nearest).most_common(1)[0][0]
+        return bones
 
     def _grip_seat(
         self,
@@ -824,6 +872,66 @@ class HandGraft:
             normal=transform.rotate_vector(vertex.normal),
             uv=vertex.uv,
         )
+
+
+def rigid_weapon_bones(
+    weapon: Smd,
+    animations: Iterable[Smd],
+    *,
+    tolerance: float = 0.5,
+    min_body_fraction: float = 0.5,
+) -> set[int]:
+    """Weapon bones that belong to a substantial rigid body of the gun.
+
+    The frame and grip are rigid; sub-parts (a revolver's rounds, a pistol's
+    slide, a hammer) swing free during reload or fire, and an akimbo weapon has
+    *two* independent bodies that move apart on the draw. Bones are clustered into
+    rigid groups -- two bones share a group when the offset between them, in one's
+    own frame, stays put across every animation frame -- seeding from the
+    largest-mesh bones. Groups carrying at least ``min_body_fraction`` of the
+    biggest group's vertices are kept as grip candidates; the tiny sub-part groups
+    (a bullet, a slide) are dropped, so a hand can never bind to one and float off.
+    """
+    counts = Counter(v.bone for triangle in weapon.triangles for v in triangle.vertices)
+    if not counts:
+        return set()
+    names = {node.index: node.name for node in weapon.nodes}
+    frames: list[dict[int, Transform]] = []
+    for animation in animations:
+        index = {node.name: node.index for node in animation.nodes}
+        for pose in animation.frames:
+            world = world_transforms(animation.nodes, pose)
+            frames.append(
+                {bone: world[index[names[bone]]] for bone in counts if names[bone] in index}
+            )
+
+    def rigid(a: int, b: int) -> bool:
+        offsets = [
+            f[a].inverse().transform_point(f[b].translation)
+            for f in frames
+            if a in f and b in f
+        ]
+        if len(offsets) < 2:
+            return True
+        spread: float = sum(pvariance([o[axis] for o in offsets]) ** 0.5 for axis in range(3))
+        return spread < tolerance
+
+    remaining = set(counts)
+    bodies: list[set[int]] = []
+    for seed in sorted(counts, key=lambda b: -counts[b]):
+        if seed not in remaining:
+            continue
+        group = {bone for bone in remaining if rigid(seed, bone)}
+        bodies.append(group)
+        remaining -= group
+
+    biggest = max(sum(counts[bone] for bone in group) for group in bodies)
+    return {
+        bone
+        for group in bodies
+        if sum(counts[b] for b in group) >= min_body_fraction * biggest
+        for bone in group
+    }
 
 
 def _nearest_point(p: Vector3, points: list[Vector3]) -> tuple[Vector3, float]:

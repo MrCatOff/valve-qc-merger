@@ -18,7 +18,7 @@ from valve_qc_merger.commands.replace_hands import (
 from valve_qc_merger.correspondence import build_hand_correspondences
 from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.parsers.smd import parse_smd_file
-from valve_qc_merger.retarget import HandGraft
+from valve_qc_merger.retarget import HandGraft, rigid_weapon_bones
 
 
 def _repo_root() -> Path:
@@ -552,3 +552,43 @@ def test_replace_hands_writes_compilable_build(tmp_path: Path) -> None:
         assert node.parent == -1 or node.parent in indices
     for triangle in reference.triangles:
         assert all(vertex.bone in indices for vertex in triangle.vertices)
+
+
+def _animation_smds(folder: Path) -> list:
+    return [
+        smd
+        for path in sorted(folder.rglob("*.smd"))
+        if (smd := parse_smd_file(path)).is_animation
+    ]
+
+
+@requires_samples
+def test_rigid_weapon_bones_drops_moving_subparts() -> None:
+    # A revolver's rounds swing free on reload; they must not be grip candidates,
+    # while the frame (the largest rigid body) is kept.
+    weapon = parse_smd_file(_anaconda() / "ref_Anaconda.smd")
+    body = rigid_weapon_bones(weapon, _animation_smds(_anaconda()))
+    kept = {n.name for n in weapon.nodes if n.index in body}
+    assert "Bone03" in kept  # the frame
+    assert not any("bullet" in name.lower() for name in kept)
+
+
+@requires_samples
+def test_weight_transfer_hands_ride_a_rigid_gun_body(tmp_path: Path) -> None:
+    # A hand bound to a moving sub-part floats off the gun once it animates;
+    # every hand bone must belong to the gun's rigid body.
+    out = replace_hands(_anaconda(), _hands(), tmp_path / "out").output_dir
+    hand = parse_smd_file(out / "grafted_male.smd")
+    used = {v.bone for t in hand.triangles for v in t.vertices}
+    body = rigid_weapon_bones(parse_smd_file(out / "ref_Anaconda.smd"), _animation_smds(out))
+    assert used <= body
+
+
+@requires_elite
+def test_akimbo_hands_bind_to_separate_gun_bodies(tmp_path: Path) -> None:
+    # Each pistol of an akimbo weapon is its own rigid body; the two hands must
+    # bind to different grip bones or one gun floats free.
+    out = replace_hands(_elite(), _hands(), tmp_path / "out").output_dir
+    hand = parse_smd_file(out / "grafted_male.smd")
+    used = {v.bone for t in hand.triangles for v in t.vertices}
+    assert len(used) == 2
