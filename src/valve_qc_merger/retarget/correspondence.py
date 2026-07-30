@@ -382,10 +382,14 @@ def _map_arm(
     side = tgt_arm.side
     maps: list[BoneMap] = [BoneMap(tgt_arm.wrist, src_arm.wrist, "wrist", side)]
 
-    # Forearm: align distal-to-proximal so the wrist-adjacent bones pair up.
+    # Forearm: align distal-to-proximal so the wrist-adjacent bones pair up. Skip
+    # a shared root (parent is None): in a Bip01 rig both arms hang off the single
+    # Bip01 root, which cannot follow two different source bones, so it is held.
     for tgt_bone, src_bone in zip(
         reversed(tgt_arm.forearm[:-1]), reversed(src_arm.forearm[:-1]), strict=False
     ):
+        if tgt.bones[tgt_bone].parent is None or src.bones[src_bone].parent is None:
+            continue
         maps.append(BoneMap(tgt_bone, src_bone, "forearm", side))
 
     # Fingers: thumb->thumb, the rest by knuckle order.

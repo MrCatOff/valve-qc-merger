@@ -23,7 +23,12 @@ from typing import Any
 
 import addon_utils  # type: ignore[import-not-found]
 import bpy  # type: ignore[import-not-found]
-from mathutils import Vector as BlenderVector  # type: ignore[import-not-found]
+from mathutils import (  # type: ignore[import-not-found]
+    Matrix as BlenderMatrix,
+)
+from mathutils import (
+    Vector as BlenderVector,
+)
 
 # The driver puts the package's ``src`` dir in VQM_PKG_ROOT so this in-Blender
 # process can import the bpy-free algorithm modules (correspondence, etc.).
@@ -38,6 +43,8 @@ from valve_qc_merger.retarget.correspondence import (  # noqa: E402
     RigBone,
     build_correspondence,
 )
+from valve_qc_merger.retarget.pose_retarget import Anchor, compute_bases  # noqa: E402
+from valve_qc_merger.transform import Transform  # noqa: E402
 
 EXIT_OK = 0
 EXIT_DISCOVERY = 3
@@ -242,6 +249,95 @@ def correspond(scene: Scene, classes: dict[str, list[str]], swap_arms: bool) -> 
 
 
 # --------------------------------------------------------------------------- #
+# Phase 2b — rotation retargeting (direct matrix keying)
+# --------------------------------------------------------------------------- #
+def _xf(matrix: BlenderMatrix) -> Transform:
+    r = matrix.to_3x3()
+    rot = (
+        (r[0][0], r[0][1], r[0][2]),
+        (r[1][0], r[1][1], r[1][2]),
+        (r[2][0], r[2][1], r[2][2]),
+    )
+    t = matrix.translation
+    return Transform(rot, Vector3(float(t.x), float(t.y), float(t.z)))
+
+
+def _bmatrix(t: Transform) -> BlenderMatrix:
+    r, p = t.rotation, t.translation
+    return BlenderMatrix((
+        (r[0][0], r[0][1], r[0][2], p.x),
+        (r[1][0], r[1][1], r[1][2], p.y),
+        (r[2][0], r[2][1], r[2][2], p.z),
+        (0.0, 0.0, 0.0, 1.0),
+    ))
+
+
+def _assert_identity_world(*armatures: Any) -> None:
+    ident = BlenderMatrix.Identity(4)
+    for arm in armatures:
+        mw = arm.matrix_world
+        if any(abs(mw[i][j] - ident[i][j]) > 1e-6 for i in range(4) for j in range(4)):
+            raise AssertionFailure(f"{arm.name} has a non-identity object transform (§3)")
+
+
+def _rest_transforms(armature: Any) -> dict[str, Transform]:
+    return {b.name: _xf(b.matrix_local) for b in armature.data.bones}
+
+
+def _parent_map(armature: Any) -> dict[str, str | None]:
+    return {b.name: (b.parent.name if b.parent else None) for b in armature.data.bones}
+
+
+def _anchors(corr: Correspondence, tgt_parent: dict[str, str | None]) -> list[Anchor]:
+    """One translation anchor per arm: the forearm bone hanging off the held root."""
+    roots = {name for name, parent in tgt_parent.items() if parent is None}
+    mapping = corr.as_dict()
+    anchors: list[Anchor] = []
+    for side in {m.side for m in corr.maps}:
+        wrist = next((m.target for m in corr.maps if m.side == side and m.role == "wrist"), None)
+        if wrist is None:
+            continue
+        forearms = [m.target for m in corr.maps if m.side == side and m.role == "forearm"]
+        proximal = [f for f in forearms if tgt_parent.get(f) in roots]
+        anchor_bone = proximal[0] if proximal else wrist
+        source_wrist = mapping.get(wrist)
+        if source_wrist is not None:
+            anchors.append(Anchor(anchor_bone, wrist, source_wrist))
+    return anchors
+
+
+def retarget(scene: Scene, corr: Correspondence) -> int:
+    """Key the reference skeleton from the source animation, frame by frame (§7.4)."""
+    _assert_identity_world(scene.src, scene.reference)
+    tgt_rest = _rest_transforms(scene.reference)
+    tgt_parent = _parent_map(scene.reference)
+    src_rest = _rest_transforms(scene.src)
+    mapping = corr.as_dict()
+    anchors = _anchors(corr, tgt_parent)
+    src_names = {b.name for b in scene.src.data.bones}
+
+    reference = scene.reference
+    for pose_bone in reference.pose.bones:
+        pose_bone.rotation_mode = "XYZ"
+
+    action = scene.src.animation_data.action
+    start, end = int(action.frame_range[0]), int(action.frame_range[1])
+    scene_ctx = bpy.context.scene
+    scene_ctx.frame_start, scene_ctx.frame_end = start, end
+
+    for frame in range(start, end + 1):
+        scene_ctx.frame_set(frame)
+        src_pose = {name: _xf(scene.src.pose.bones[name].matrix) for name in src_names}
+        bases = compute_bases(tgt_rest, tgt_parent, mapping, src_rest, src_pose, anchors)
+        for name, basis in bases.items():
+            pose_bone = reference.pose.bones[name]
+            pose_bone.matrix_basis = _bmatrix(basis)
+            pose_bone.keyframe_insert("location", frame=frame)
+            pose_bone.keyframe_insert("rotation_euler", frame=frame)
+    return end - start + 1
+
+
+# --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
 def run(job: dict[str, Any]) -> dict[str, Any]:
@@ -251,12 +347,14 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
     scene = import_scene(job)
     classes = classify(scene, float(cfg["w_min"]))
     corr = correspond(scene, classes, bool(cfg.get("swap_arms", False)))
+    frames = retarget(scene, corr)
 
     action = scene.src.animation_data.action
     frame_range = [int(action.frame_range[0]), int(action.frame_range[1])]
     return {
         "sequence": job["sequence"]["name"],
-        "status": "MAPPED",
+        "status": "RETARGETED",
+        "frames": frames,
         "blender": bpy.app.version_string,
         "frame_range": frame_range,
         "counts": {
