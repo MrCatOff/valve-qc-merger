@@ -42,6 +42,7 @@ from valve_qc_merger.models.smd import BonePose, Frame, Node, Smd, Triangle, Ver
 from valve_qc_merger.transform import (
     Matrix3,
     Transform,
+    axis_angle,
     clamp_rotation,
     mat3_multiply,
     mat3_transpose,
@@ -122,6 +123,17 @@ class _FingerChain:
     base: int  # output index of the chain's parent (the hand)
     joints: tuple[int, ...]  # output indices, root..tip
     weapon_tip: int  # weapon fingertip index the tip should reach
+    # Extra flexion (radians) to fold this finger deeper than the weapon authored
+    # -- used to tuck the trigger finger further into the guard. 0 for fingers
+    # left at the authored grip.
+    curl: float = 0.0
+    # Whether this finger tracks a ``grip_slide`` (the wrapping fingers follow the
+    # gun as it slides forward; the thumb does not, so the moving body clears it).
+    follow: bool = True
+    # Pull the finger's grip contact back toward the hand by this many units, so a
+    # reference finger whose *mesh* is longer than its bones stops poking through
+    # the weapon. Set per finger by the collision solver.
+    retract: float = 0.0
 
 
 @dataclass
@@ -144,12 +156,18 @@ class HandGraft:
         offsets: dict[str, Transform] | None = None,
         weapon_offset: Vector3 = _ZERO,
         finger_ik: bool = False,
+        index_curl: float = 0.0,
+        grip_slide: Vector3 = _ZERO,
+        retracts: dict[str, float] | None = None,
     ) -> None:
         self._weapon = weapon
         self._hand = hand
         self._offsets = offsets or {}
         self._weapon_offset = weapon_offset
+        self._grip_slide = grip_slide
+        self._retracts = retracts or {}
         self._finger_ik = finger_ik
+        self._index_curl = index_curl
         self._plan = _SidePlan()
         self._mesh_remap: dict[int, int] = {}
         self._mesh_transform: dict[int, Transform] = {}
@@ -325,11 +343,17 @@ class HandGraft:
                 )
                 parent_new = cursor
                 cursor += 1
+            base_name = hand_name[target_joints[0]]
+            is_index = base_name == f"Bip01_{link.side}_Finger1"
+            is_thumb = base_name == f"Bip01_{link.side}_Finger0"
             self._plan.chains.append(
                 _FingerChain(
                     hand_new,
                     tuple(range(chain_start, cursor)),
                     source_joints[-1],
+                    self._index_curl if is_index else 0.0,
+                    not is_thumb,
+                    self._retracts.get(base_name, 0.0),
                 )
             )
 
@@ -393,11 +417,13 @@ class HandGraft:
                 f"weapon geometry is skinned to removed hand bone index {vertex.bone}"
             )
         # Push the gun geometry off the hands (baked into the bind, so it follows
-        # the weapon bones through the animation).
+        # the weapon bones through the animation). ``grip_slide`` moves the gun the
+        # same way, but the wrapping fingers follow it (see ``_frame_poses``) so the
+        # grip slides forward as a whole while the thumb clears the moving body.
         position = Vector3(
-            vertex.position.x + self._weapon_offset.x,
-            vertex.position.y + self._weapon_offset.y,
-            vertex.position.z + self._weapon_offset.z,
+            vertex.position.x + self._weapon_offset.x + self._grip_slide.x,
+            vertex.position.y + self._weapon_offset.y + self._grip_slide.y,
+            vertex.position.z + self._weapon_offset.z + self._grip_slide.z,
         )
         return Vertex(
             bone=new_bone,
@@ -454,7 +480,16 @@ class HandGraft:
         # Curl each finger so its tip reaches the weapon fingertip (grip contact).
         if aim and self._finger_ik:
             for chain in self._plan.chains:
-                self._solve_finger_ik(chain, finger_local, world_cache, weapon_world)
+                if chain.curl:
+                    self._apply_curl(chain, finger_local, world_cache)
+                # Wrapping fingers follow the gun as it slides forward, so they stay
+                # on the grip; the thumb does not, so the moving body clears it.
+                shift = _ZERO
+                weapon_tip = weapon_world.get(chain.weapon_tip)
+                sliding = self._grip_slide.x or self._grip_slide.y or self._grip_slide.z
+                if chain.follow and weapon_tip is not None and sliding:
+                    shift = weapon_tip.rotate_vector(self._grip_slide)
+                self._solve_finger_ik(chain, finger_local, world_cache, weapon_world, shift)
 
         for finger in self._plan.fingers:
             poses.append(_transform_pose(finger.new_index, finger_local[finger.new_index]))
@@ -491,11 +526,69 @@ class HandGraft:
         return Transform(local_rotation, finger.bind_local.translation)
 
     @staticmethod
+    def _apply_curl(
+        chain: _FingerChain,
+        finger_local: dict[int, Transform],
+        world_cache: dict[int, Transform],
+    ) -> None:
+        """Flex the finger ``chain.curl`` radians deeper than the weapon authored.
+
+        The weapon's own grip is reproduced exactly by the aim, which for the
+        trigger finger can leave it draped over the guard rather than tucked in.
+        This adds real finger flexion -- curling the fingertip toward the palm in
+        the finger's own bend plane, split across the knuckle and middle joint --
+        so the finger sinks into the guard. :meth:`_solve_finger_ik` then pulls
+        the tip back onto the trigger, so the finger *body* tucks in while the tip
+        stays on the grip contact.
+        """
+        joints = chain.joints
+        if len(joints) < 3:
+            return
+        base = world_cache[chain.base]
+        locals_ = [finger_local[i] for i in joints]
+
+        def forward() -> list[Transform]:
+            worlds = [base.compose(locals_[0])]
+            for k in range(1, len(locals_)):
+                worlds.append(worlds[k - 1].compose(locals_[k]))
+            return worlds
+
+        worlds = forward()
+        points = [w.translation for w in worlds]
+        normal = _cross(_subtract(points[1], points[0]), _subtract(points[2], points[1]))
+        if normal.length() < 1e-6:
+            return
+        normal = _normalize(normal)
+        # Flexion sign: the rotation that curls the fingertip toward the palm
+        # (the hand base) -- i.e. closes the finger, the way a grip tightens.
+        arm = _subtract(points[2], points[0])
+        plus = _add(points[0], Transform(axis_angle(normal, 0.05), _ZERO).rotate_vector(arm))
+        sign = (
+            1.0
+            if _subtract(plus, base.translation).length()
+            < _subtract(points[2], base.translation).length()
+            else -1.0
+        )
+        # Split the flexion knuckle-heavy so the whole finger sinks into the guard.
+        for k, weight in ((0, 0.6), (1, 0.4)):
+            parent_rot = base.rotation if k == 0 else worlds[k - 1].rotation
+            rot = axis_angle(normal, sign * chain.curl * weight)
+            new_world_rot = mat3_multiply(rot, worlds[k].rotation)
+            local_rot = mat3_multiply(mat3_transpose(parent_rot), new_world_rot)
+            locals_[k] = Transform(local_rot, locals_[k].translation)
+            worlds = forward()
+
+        for k, index in enumerate(joints):
+            finger_local[index] = locals_[k]
+            world_cache[index] = worlds[k]
+
+    @staticmethod
     def _solve_finger_ik(
         chain: _FingerChain,
         finger_local: dict[int, Transform],
         world_cache: dict[int, Transform],
         weapon_world: dict[int, Transform],
+        goal_shift: Vector3 = _ZERO,
         iterations: int = 16,
         tolerance: float = 0.02,
         max_curl: float = 2.0,
@@ -520,8 +613,15 @@ class HandGraft:
         target = weapon_world.get(chain.weapon_tip)
         if target is None or len(chain.joints) < 2:
             return
-        goal = target.translation
+        goal = _add(target.translation, goal_shift)
         base = world_cache[chain.base]
+        if chain.retract:
+            # Pull the contact back toward the hand so the longer mesh, not the
+            # bone tip, meets the grip -- clearing the weapon it would poke through.
+            back = _subtract(base.translation, goal)
+            length = back.length()
+            if length > 1e-6:
+                goal = _add(goal, _scale(back, chain.retract / length))
         locals_ = [finger_local[i] for i in chain.joints]
         aim_rotation = [local.rotation for local in locals_]
 
@@ -599,6 +699,10 @@ def _subtract(a: Vector3, b: Vector3) -> Vector3:
 
 def _add(a: Vector3, b: Vector3) -> Vector3:
     return Vector3(a.x + b.x, a.y + b.y, a.z + b.z)
+
+
+def _cross(a: Vector3, b: Vector3) -> Vector3:
+    return Vector3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
 
 
 def _scale(v: Vector3, s: float) -> Vector3:

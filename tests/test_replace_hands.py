@@ -184,6 +184,90 @@ def test_finger_ik_lands_tips_on_the_weapon_fingertips() -> None:
 
 
 @requires_elite
+def test_index_curl_tucks_the_trigger_finger_without_moving_others() -> None:
+    import math
+
+    from valve_qc_merger.kinematics import world_transforms
+
+    weapon = parse_smd_file(_elite() / "v_elite-PV.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    links = build_hand_correspondences(weapon, hand)
+    animation = parse_smd_file(_elite() / "v_elite_anims" / "draw.smd")
+    frame = next(f for f in animation.frames if f.time == 32)
+    weapon_world = world_transforms(weapon.nodes, frame)
+    tname = {n.index: n.name for n in hand.nodes}
+
+    def solve(curl: float) -> tuple[dict[str, Vector3], dict[str, float]]:
+        graft = HandGraft(weapon, hand, links, finger_ik=True, index_curl=curl)
+        out = graft.retarget_animation(animation)
+        mi = {n.name: n.index for n in out.nodes}
+        world = world_transforms(out.nodes, next(f for f in out.frames if f.time == 32))
+        mids: dict[str, Vector3] = {}
+        tip_gaps: dict[str, float] = {}
+        for link in links:
+            for source, target in link.finger_pairs:
+                base = tname[target.joints[0]]
+                mids[base] = world[mi[tname[target.joints[1]]]].translation
+                my = world[mi[tname[target.joints[-1]]]].translation
+                wp = weapon_world[source.joints[-1]].translation
+                tip_gaps[base] = (
+                    (my.x - wp.x) ** 2 + (my.y - wp.y) ** 2 + (my.z - wp.z) ** 2
+                ) ** 0.5
+        return mids, tip_gaps
+
+    def dist(a: Vector3, b: Vector3) -> float:
+        return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2) ** 0.5
+
+    base_mids, base_gaps = solve(0.0)
+    curl_mids, curl_gaps = solve(math.radians(20.0))
+
+    for side in ("R", "L"):
+        index = f"Bip01_{side}_Finger1"
+        # The trigger finger folds deeper (its middle joint sinks into the guard).
+        assert dist(curl_mids[index], base_mids[index]) > 0.15
+        # ...while its tip stays on the trigger (the weapon fingertip contact).
+        assert curl_gaps[index] < 0.15
+        # Every other finger is left exactly at the game's authored grip.
+        for other in (f"Bip01_{side}_Finger{i}" for i in (0, 2, 3, 4)):
+            assert dist(curl_mids[other], base_mids[other]) < 1e-6
+
+
+@requires_elite
+def test_grip_slide_moves_wrapping_fingers_but_not_the_thumb() -> None:
+    from valve_qc_merger.kinematics import world_transforms
+
+    weapon = parse_smd_file(_elite() / "v_elite-PV.smd")
+    hand = parse_smd_file(_hands() / "male.smd")
+    links = build_hand_correspondences(weapon, hand)
+    animation = parse_smd_file(_elite() / "v_elite_anims" / "draw.smd")
+    tname = {n.index: n.name for n in hand.nodes}
+
+    def tips(slide: Vector3) -> dict[str, Vector3]:
+        graft = HandGraft(weapon, hand, links, finger_ik=True, grip_slide=slide)
+        out = graft.retarget_animation(animation)
+        mi = {n.name: n.index for n in out.nodes}
+        world = world_transforms(out.nodes, next(f for f in out.frames if f.time == 32))
+        return {
+            tname[target.joints[0]]: world[mi[tname[target.joints[-1]]]].translation
+            for link in links
+            for _, target in link.finger_pairs
+        }
+
+    def dist(a: Vector3, b: Vector3) -> float:
+        return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2) ** 0.5
+
+    base = tips(Vector3(0.0, 0.0, 0.0))
+    slid = tips(Vector3(0.0, 2.0, 0.0))
+    for side in ("R", "L"):
+        # The thumb stays put, so the sliding gun body clears it.
+        assert dist(slid[f"Bip01_{side}_Finger0"], base[f"Bip01_{side}_Finger0"]) < 1e-6
+        # The wrapping fingers follow the gun, so the grip is preserved.
+        for wrap in (1, 2, 3, 4):
+            name = f"Bip01_{side}_Finger{wrap}"
+            assert dist(slid[name], base[name]) > 1.0
+
+
+@requires_elite
 def test_palm_seat_offset_matches_the_original_grip() -> None:
     from valve_qc_merger.clearance import palm_seat_offset
 

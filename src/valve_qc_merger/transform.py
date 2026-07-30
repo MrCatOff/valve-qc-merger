@@ -81,6 +81,20 @@ def clamp_rotation(m: Matrix3, max_angle: float) -> Matrix3:
     )
 
 
+def axis_angle(axis: Vector3, angle: float) -> Matrix3:
+    """Rotation matrix of ``angle`` radians about ``axis`` (Rodrigues formula)."""
+    unit = _normalize(axis)
+    x, y, z = unit.x, unit.y, unit.z
+    s = math.sin(angle)
+    c = math.cos(angle)
+    t = 1.0 - c
+    return (
+        (t * x * x + c, t * x * y - s * z, t * x * z + s * y),
+        (t * x * y + s * z, t * y * y + c, t * y * z - s * x),
+        (t * x * z - s * y, t * y * z + s * x, t * z * z + c),
+    )
+
+
 def rotation_between(a: Vector3, b: Vector3) -> Matrix3:
     """Minimal rotation matrix taking direction ``a`` onto direction ``b``."""
     u = _normalize(a)
@@ -206,6 +220,7 @@ class Transform:
 __all__ = [
     "Matrix3",
     "Transform",
+    "axis_angle",
     "clamp_rotation",
     "euler_to_matrix",
     "mat3_multiply",

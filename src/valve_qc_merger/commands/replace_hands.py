@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import math
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from valve_qc_merger.clearance import (
@@ -33,6 +33,7 @@ from valve_qc_merger.clearance import (
 )
 from valve_qc_merger.commands.base import Command
 from valve_qc_merger.correspondence import CorrespondenceError, build_hand_correspondences
+from valve_qc_merger.grip_solver import solve_grip
 from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.models.smd import Smd
 from valve_qc_merger.parsers.smd import SmdParseError, parse_smd_file
@@ -84,6 +85,7 @@ class ReplaceHandsResult:
     weapon_slide: Vector3 | None = None
     intrusion_before: int = 0
     intrusion_after: int = 0
+    retracts: dict[str, float] = field(default_factory=dict)
 
 
 class ReplaceHandsError(RuntimeError):
@@ -146,6 +148,31 @@ def _retarget_animations(graft: HandGraft, weapon_dir: Path, output_dir: Path) -
     return count
 
 
+def _representative_animation(weapon_dir: Path) -> tuple[Smd, list[int]]:
+    """Pick an animation and a few frame times to solve the grip on.
+
+    Prefers an ``idle`` sequence (a settled two-hand grip); otherwise the longest
+    animation. Samples up to four frame times spread across it.
+    """
+    anims: list[tuple[Path, Smd]] = []
+    for smd_path in sorted(weapon_dir.rglob("*.smd")):
+        try:
+            smd = parse_smd_file(smd_path)
+        except SmdParseError:
+            continue
+        if smd.is_animation and len(smd.frames) > 1:
+            anims.append((smd_path, smd))
+    if not anims:
+        raise ReplaceHandsError("no animation found to solve the grip on")
+    idle = [a for a in anims if "idle" in a[0].name.lower() and "empty" not in a[0].name.lower()]
+    chosen = idle[0][1] if idle else max(anims, key=lambda a: len(a[1].frames))[1]
+    times = sorted(frame.time for frame in chosen.frames)
+    count = len(times)
+    if count <= 4:
+        return chosen, times
+    return chosen, sorted({times[round(i * (count - 1) / 3)] for i in range(4)})
+
+
 def replace_hands(
     weapon_dir: Path,
     hands_dir: Path,
@@ -157,6 +184,9 @@ def replace_hands(
     clearance_direction: Vector3 | None = None,
     seat_grip: bool = True,
     finger_ik: bool = True,
+    index_curl: float = 0.0,
+    grip_slide: Vector3 = _NO_WEAPON_OFFSET,
+    auto_grip: bool = False,
 ) -> ReplaceHandsResult:
     """Run the hand replacement and return a summary.
 
@@ -194,7 +224,11 @@ def replace_hands(
         links = build_hand_correspondences(weapon_ref, canonical)
     except CorrespondenceError as exc:
         raise ReplaceHandsError(f"could not match hands to weapon rig: {exc}") from exc
-    canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset, finger_ik)
+    retracts: dict[str, float] = {}
+    canonical_graft = HandGraft(
+        weapon_ref, canonical, links, offsets, weapon_offset, finger_ik, index_curl, grip_slide,
+        retracts,
+    )
 
     weapon_slide: Vector3 | None = None
     intrusion_before = intrusion_after = 0
@@ -217,7 +251,10 @@ def replace_hands(
         weapon_offset = Vector3(
             weapon_offset.x + seat.x, weapon_offset.y + seat.y, weapon_offset.z + seat.z
         )
-        canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset, finger_ik)
+        canonical_graft = HandGraft(
+        weapon_ref, canonical, links, offsets, weapon_offset, finger_ik, index_curl, grip_slide,
+        retracts,
+    )
     if clearance or clearance_direction is not None:
         our_hand = canonical_graft.reference_smd()
         gun_ref = canonical_graft.weapon_reference_smd()
@@ -236,7 +273,28 @@ def replace_hands(
         weapon_offset = Vector3(
             weapon_offset.x + slide.x, weapon_offset.y + slide.y, weapon_offset.z + slide.z
         )
-        canonical_graft = HandGraft(weapon_ref, canonical, links, offsets, weapon_offset, finger_ik)
+        canonical_graft = HandGraft(
+        weapon_ref, canonical, links, offsets, weapon_offset, finger_ik, index_curl, grip_slide,
+        retracts,
+    )
+
+    if auto_grip:
+        grip_anim, sample_times = _representative_animation(weapon_dir)
+        retracts = solve_grip(
+            weapon_ref,
+            canonical,
+            links,
+            grip_anim,
+            sample_times=sample_times,
+            index_curl=index_curl,
+            grip_slide=grip_slide,
+            weapon_offset=weapon_offset,
+            offsets=offsets,
+        )
+        canonical_graft = HandGraft(
+            weapon_ref, canonical, links, offsets, weapon_offset, finger_ik, index_curl,
+            grip_slide, retracts,
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(weapon_dir, output_dir, dirs_exist_ok=True)
@@ -250,7 +308,16 @@ def replace_hands(
     new_studios: list[str] = []
     for name, smd_path in available:
         hand_smd = parse_smd_file(smd_path)
-        graft = HandGraft(weapon_ref, hand_smd, links, offsets, finger_ik=finger_ik)
+        graft = HandGraft(
+            weapon_ref,
+            hand_smd,
+            links,
+            offsets,
+            finger_ik=finger_ik,
+            index_curl=index_curl,
+            grip_slide=grip_slide,
+            retracts=retracts,
+        )
         studio = f"grafted_{name}"
         write_smd_file(graft.reference_smd(), output_dir / f"{studio}.smd")
         _copy_textures(hand_smd, hands_dir, output_dir)
@@ -282,6 +349,7 @@ def replace_hands(
         weapon_slide=weapon_slide,
         intrusion_before=intrusion_before,
         intrusion_after=intrusion_after,
+        retracts=retracts,
     )
 
 
@@ -346,6 +414,30 @@ class ReplaceHandsCommand(Command):
             "contact point) instead of pointing straight and overshooting (on by "
             "default, disable with --no-finger-ik)",
         )
+        parser.add_argument(
+            "--index-curl",
+            type=float,
+            default=0.0,
+            metavar="DEGREES",
+            help="flex the trigger (index) finger this many degrees deeper than the "
+            "weapon authored, tucking it further into the trigger guard while its "
+            "tip stays on the trigger (0 = keep the game's grip; needs --finger-ik)",
+        )
+        parser.add_argument(
+            "--grip-slide",
+            metavar="X,Y,Z",
+            help="slide the gun forward along the grip by X,Y,Z units so its body "
+            "clears the thumb; the wrapping fingers follow the gun (staying on the "
+            "grip) while the thumb stays put, so the moving body clears it "
+            "(needs --finger-ik)",
+        )
+        parser.add_argument(
+            "--auto-grip",
+            action="store_true",
+            help="automatically retract each finger just enough to stop its "
+            "(fleshier) mesh clipping the weapon, solved against the collision "
+            "detector over sampled frames (needs --finger-ik)",
+        )
 
     def run(self, args: argparse.Namespace) -> int:
         weapon_dir: Path = args.weapon_dir
@@ -368,6 +460,9 @@ class ReplaceHandsCommand(Command):
                 if not args.weapon_clearance or args.weapon_clearance == "auto"
                 else parse_translation(args.weapon_clearance)
             )
+            grip_slide = (
+                parse_translation(args.grip_slide) if args.grip_slide else _NO_WEAPON_OFFSET
+            )
             result = replace_hands(
                 weapon_dir,
                 args.hands,
@@ -379,6 +474,9 @@ class ReplaceHandsCommand(Command):
                 clearance_direction,
                 args.seat_grip,
                 args.finger_ik,
+                math.radians(args.index_curl),
+                grip_slide,
+                args.auto_grip,
             )
         except (ReplaceHandsError, SmdParseError, ValueError) as exc:
             print(f"replace-hands: {exc}")
@@ -400,6 +498,12 @@ class ReplaceHandsCommand(Command):
                 else "[grip seated in palm]"
             )
             print(f"  weapon moved:          ({s.x:.2f}, {s.y:.2f}, {s.z:.2f}) {detail}")
+        if result.retracts:
+            fingers = ", ".join(
+                f"{name.replace('Bip01_', '')} {value:.2f}"
+                for name, value in sorted(result.retracts.items())
+            )
+            print(f"  fingers retracted:     {fingers}")
         return 0
 
 
