@@ -63,8 +63,18 @@ def compute_bases(
     src_rest: dict[str, Transform],
     src_pose: dict[str, Transform],
     anchors: list[Anchor],
+    orient: dict[str, tuple[Matrix3, Matrix3]] | None = None,
 ) -> dict[str, Transform]:
-    """Return each target bone's ``matrix_basis`` for one frame (§7.4)."""
+    """Return each target bone's ``matrix_basis`` for one frame (§7.4).
+
+    ``orient`` maps a bone to its (source, target) anatomical rest frames. Because
+    the reference hands are a flat T-pose whose bind orientation is unrelated to
+    the grip, a plain delta-from-rest retarget keeps them splayed. When a bone has
+    an anatomical frame, the correction re-expresses the source's motion in that
+    frame so the target hand adopts the source's *absolute* orientation (arm
+    pointing along the grip), independent of the T-pose. Bones without a frame fall
+    back to the delta form.
+    """
     order = topo_order(tgt_parent)
     posed: dict[str, Transform] = {}
     basis: dict[str, Transform] = {}
@@ -78,10 +88,11 @@ def compute_bases(
 
         source = mapping.get(bone)
         if source is not None and source in src_pose and source in src_rest:
-            delta = mat3_multiply(
-                src_pose[source].rotation, mat3_transpose(src_rest[source].rotation)
+            correction = _correction(
+                src_rest[source].rotation, tgt_rest[bone].rotation,
+                orient.get(bone) if orient else None,
             )
-            desired_world = mat3_multiply(delta, tgt_rest[bone].rotation)
+            desired_world = mat3_multiply(src_pose[source].rotation, correction)
             basis_rot = mat3_multiply(mat3_transpose(seat.rotation), desired_world)
         else:
             basis_rot = _IDENTITY3
@@ -92,6 +103,23 @@ def compute_bases(
 
     _solve_anchors(tgt_rest, tgt_parent, posed, basis, src_pose, anchors)
     return basis
+
+
+def _correction(
+    rest_src: Matrix3, rest_tgt: Matrix3, frames: tuple[Matrix3, Matrix3] | None
+) -> Matrix3:
+    """Rotation C such that ``R_pose_tgt = R_pose_src . C`` (§7.4).
+
+    Delta form (no frame): ``C = R_rest_src^-1 . R_rest_tgt`` -- carries the
+    source's motion onto the target's own rest orientation. Anatomical form: insert
+    ``F_src . F_tgt^-1`` so the target adopts the source's absolute hand orientation
+    rather than the reference T-pose. The two agree when the rest frames coincide.
+    """
+    if frames is None:
+        return mat3_multiply(mat3_transpose(rest_src), rest_tgt)
+    f_src, f_tgt = frames
+    inner = mat3_multiply(f_src, mat3_multiply(mat3_transpose(f_tgt), rest_tgt))
+    return mat3_multiply(mat3_transpose(rest_src), inner)
 
 
 def world_from_bases(

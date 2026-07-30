@@ -19,6 +19,7 @@ import math
 from dataclasses import dataclass, field
 
 from valve_qc_merger.models.geometry import Vector3
+from valve_qc_merger.transform import Matrix3
 
 
 # --------------------------------------------------------------------------- #
@@ -274,6 +275,9 @@ class Correspondence:
     score: float  # orientation-alignment score of the chosen pairing
     margin: float  # score gap to the second-best pairing (confidence)
     warnings: list[str] = field(default_factory=list)
+    # Per mapped target bone: (source, target) anatomical rest frames, so Phase 2b
+    # can orient the hand to the source's absolute orientation (§7.4 rest divergence).
+    frames: dict[str, tuple[Matrix3, Matrix3]] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, str | None]:
         return {m.target: m.source for m in self.maps}
@@ -329,12 +333,30 @@ def build_correspondence(
         warnings.append(f"ambiguous arm pairing (best-second score gap = {margin:.2f})")
 
     maps: list[BoneMap] = []
+    frames: dict[str, tuple[Matrix3, Matrix3]] = {}
     for tgt_idx, src_idx in enumerate(pairing):
-        maps += _map_arm(
+        arm_maps = _map_arm(
             src, tgt, src_arms[src_idx], tgt_arms[tgt_idx],
             src_frames[src_idx], tgt_frames[tgt_idx],
         )
-    return Correspondence(maps=maps, score=score, margin=margin, warnings=warnings)
+        maps += arm_maps
+        f_src = _frame_matrix(src_frames[src_idx])
+        f_tgt = _frame_matrix(tgt_frames[tgt_idx])
+        for m in arm_maps:
+            if m.source is not None:
+                frames[m.target] = (f_src, f_tgt)
+    return Correspondence(
+        maps=maps, score=score, margin=margin, warnings=warnings, frames=frames
+    )
+
+
+def _frame_matrix(hf: HandFrame) -> Matrix3:
+    """The anatomical hand frame as a rotation whose columns are (u, k, n)."""
+    return (
+        (hf.u.x, hf.k.x, hf.n.x),
+        (hf.u.y, hf.k.y, hf.n.y),
+        (hf.u.z, hf.k.z, hf.n.z),
+    )
 
 
 def _pair_score(src_frame: HandFrame, tgt_frame: HandFrame) -> float:

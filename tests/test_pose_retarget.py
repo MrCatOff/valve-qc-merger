@@ -10,7 +10,12 @@ from valve_qc_merger.retarget.pose_retarget import (
     compute_bases,
     world_from_bases,
 )
-from valve_qc_merger.transform import Transform, axis_angle, euler_to_matrix
+from valve_qc_merger.transform import (
+    Matrix3,
+    Transform,
+    axis_angle,
+    euler_to_matrix,
+)
 
 # A simple arm: root -> fore -> wrist -> finger -> tip, laid along +X.
 _HEADS = {
@@ -92,6 +97,32 @@ def test_anchor_lands_the_wrist_on_the_source_wrist() -> None:
     bases = compute_bases(tgt_rest, _PARENT, mapping, src_rest, src_pose, anchors=[anchor])
     posed = world_from_bases(tgt_rest, _PARENT, bases)
     assert _close(posed["wrist"].translation, src_pose["wrist"].translation, 1e-8)
+
+
+def _mat_close(a: Matrix3, b: Matrix3, tol: float = 1e-8) -> bool:
+    return all(abs(a[i][j] - b[i][j]) < tol for i in range(3) for j in range(3))
+
+
+def test_anatomical_frame_gives_absolute_orientation_regardless_of_target_rest() -> None:
+    # Target rest is rotated 90 deg about Z (a stand-in for the flat T-pose whose
+    # bind orientation is unrelated to the grip). With anatomical frames set to each
+    # rig's rest orientation, the correction is identity, so the target adopts the
+    # source's ABSOLUTE world orientation -- not its own rest.
+    rz90 = axis_angle(Vector3(0, 0, 1), math.pi / 2)
+    src_rest = {name: Transform(translation=head) for name, head in _HEADS.items()}
+    tgt_rest = {name: Transform(rz90, head) for name, head in _HEADS.items()}
+
+    given = _identity_bases()
+    given["fore"] = Transform(axis_angle(Vector3(0, 0, 1), 0.4))
+    given["wrist"] = Transform(axis_angle(Vector3(0, 1, 0), 0.5))
+    src_pose = world_from_bases(src_rest, _PARENT, given)
+
+    mapping: dict[str, str | None] = {n: n for n in _HEADS}
+    orient = {n: (src_rest[n].rotation, tgt_rest[n].rotation) for n in _HEADS}
+    bases = compute_bases(tgt_rest, _PARENT, mapping, src_rest, src_pose, [], orient=orient)
+    posed = world_from_bases(tgt_rest, _PARENT, bases)
+    for name in ("fore", "wrist", "finger"):
+        assert _mat_close(posed[name].rotation, src_pose[name].rotation), name
 
 
 def test_held_tip_follows_its_parent() -> None:

@@ -328,7 +328,9 @@ def retarget(scene: Scene, corr: Correspondence) -> int:
     for frame in range(start, end + 1):
         scene_ctx.frame_set(frame)
         src_pose = {name: _xf(scene.src.pose.bones[name].matrix) for name in src_names}
-        bases = compute_bases(tgt_rest, tgt_parent, mapping, src_rest, src_pose, anchors)
+        bases = compute_bases(
+            tgt_rest, tgt_parent, mapping, src_rest, src_pose, anchors, orient=corr.frames
+        )
         for name, basis in bases.items():
             pose_bone = reference.pose.bones[name]
             pose_bone.matrix_basis = _bmatrix(basis)
