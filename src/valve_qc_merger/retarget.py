@@ -450,13 +450,16 @@ class HandGraft:
                     world_p = Vector3(
                         world_p.x + nudge.x, world_p.y + nudge.y, world_p.z + nudge.z
                     )
+                # Reference-SMD vertices are stored in *model* space (like the gun
+                # and the graft path); the compiler derives each vertex's bone-local
+                # offset from the grip bone. Storing bone-local here instead left the
+                # hand parked at the bone origin, off the gun.
                 to_grip = grip_world[vertex.bone].compose(bind_world[vertex.bone].inverse())
-                normal_rot = weapon_bind[weapon_bone].inverse().compose(to_grip)
                 verts.append(
                     Vertex(
                         bone=weapon_bone,
-                        position=weapon_bind[weapon_bone].inverse().transform_point(world_p),
-                        normal=normal_rot.rotate_vector(vertex.normal),
+                        position=world_p,
+                        normal=to_grip.rotate_vector(vertex.normal),
                         uv=vertex.uv,
                     )
                 )

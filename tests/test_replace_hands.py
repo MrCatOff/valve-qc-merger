@@ -592,3 +592,22 @@ def test_akimbo_hands_bind_to_separate_gun_bodies(tmp_path: Path) -> None:
     hand = parse_smd_file(out / "grafted_male.smd")
     used = {v.bone for t in hand.triangles for v in t.vertices}
     assert len(used) == 2
+
+
+def _model_bounds(path: Path) -> tuple[Vector3, Vector3]:
+    positions = [v.position for t in parse_smd_file(path).triangles for v in t.vertices]
+    lo = Vector3(*(min(p[a] for p in positions) for a in range(3)))
+    hi = Vector3(*(max(p[a] for p in positions) for a in range(3)))
+    return lo, hi
+
+
+@requires_samples
+def test_weight_transfer_hand_is_stored_in_model_space_on_the_gun(tmp_path: Path) -> None:
+    # Reference SMD vertices are model space (like the gun and graft path); a
+    # bone-local hand would sit at the bone origin, off the gun. So the hand's raw
+    # positions must overlap the gun's on every axis.
+    out = replace_hands(_anaconda(), _hands(), tmp_path / "out").output_dir
+    hlo, hhi = _model_bounds(out / "grafted_male.smd")
+    glo, ghi = _model_bounds(out / "ref_Anaconda.smd")
+    for axis in range(3):
+        assert hlo[axis] <= ghi[axis] and glo[axis] <= hhi[axis]
