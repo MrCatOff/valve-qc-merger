@@ -9,9 +9,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from valve_qc_merger.commands.base import Command
+from valve_qc_merger.commands.retarget import RetargetCommand
 
 # Command classes exposed by the CLI, in display order.
-_COMMAND_CLASSES: list[type[Command]] = []
+_COMMAND_CLASSES: list[type[Command]] = [RetargetCommand]
 
 
 def iter_commands() -> Iterator[Command]:

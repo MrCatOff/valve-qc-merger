@@ -7,7 +7,7 @@ name = "valve-qc-merger"
 version = "0.1.0"
 description = "CLI toolkit for working with GoldSource QC files, SMDs and hitboxes for Counter-Strike 1.6 models"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 keywords = ["goldsource", "counter-strike", "qc", "smd", "hitbox", "half-life", "mdl"]
 classifiers = [
@@ -15,7 +15,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Games/Entertainment",
@@ -42,13 +41,13 @@ addopts = "-ra"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 files = ["src", "tests"]
