@@ -122,7 +122,6 @@ class _FingerChain:
     base: int  # output index of the chain's parent (the hand)
     joints: tuple[int, ...]  # output indices, root..tip
     weapon_tip: int  # weapon fingertip index the tip should reach
-    matched: bool  # True when the weapon finger has as many bones as ours
 
 
 @dataclass
@@ -331,7 +330,6 @@ class HandGraft:
                     hand_new,
                     tuple(range(chain_start, cursor)),
                     source_joints[-1],
-                    len(source_joints) == len(target_joints),
                 )
             )
 
@@ -454,13 +452,9 @@ class HandGraft:
             world_cache[finger.new_index] = parent_world.compose(local)
 
         # Curl each finger so its tip reaches the weapon fingertip (grip contact).
-        # Skip fingers whose weapon counterpart has fewer bones (e.g. a two-bone
-        # thumb vs our three) -- curling those to reach folds them out of shape,
-        # so they keep the aim pose that follows the weapon finger directly.
         if aim and self._finger_ik:
             for chain in self._plan.chains:
-                if chain.matched:
-                    self._solve_finger_ik(chain, finger_local, world_cache, weapon_world)
+                self._solve_finger_ik(chain, finger_local, world_cache, weapon_world)
 
         for finger in self._plan.fingers:
             poses.append(_transform_pose(finger.new_index, finger_local[finger.new_index]))
