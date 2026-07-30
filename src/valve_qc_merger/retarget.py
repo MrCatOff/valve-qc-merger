@@ -36,7 +36,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from statistics import median, pvariance
+from statistics import pvariance
 
 from valve_qc_merger.correspondence import HandLink
 from valve_qc_merger.kinematics import world_transforms
@@ -54,8 +54,6 @@ from valve_qc_merger.transform import (
 
 _ZERO = Vector3(0.0, 0.0, 0.0)
 _GRIP_BONE_SAMPLE = 200  # gun verts nearest a hand whose dominant bone it rides
-_SEAT_ITERATIONS = 6  # closest-point seating passes (converges in 2-3 when close)
-_SEAT_TOLERANCE = 0.25  # stop seating once a pass moves less than this
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,12 +405,12 @@ class HandGraft:
         """The reference hand mesh re-skinned onto the *weapon's own* skeleton.
 
         Instead of adding reference bones (the graft), the reference hand is posed
-        into the weapon's grip, seated onto the gun handle, and bound rigidly to the
-        gun's grip bone so the weapon's own animations drive it with no retargeting
-        -- and, being one rigid piece per side, it can never tear. ``body_bones``,
-        if given, restricts grip binding to the gun's rigid body (see
-        :func:`rigid_weapon_bones`) so a hand never rides a bullet or the slide.
-        Output is at the weapon's reference (grip) pose.
+        into the weapon's grip (in model space, like the gun) and bound rigidly to
+        the gun's grip bone so the weapon's own animations drive it with no
+        retargeting -- and, being one rigid piece per side, it can never tear.
+        ``body_bones``, if given, restricts grip binding to the gun's rigid body
+        (see :func:`rigid_weapon_bones`) so a hand never rides a bullet or the
+        slide. Output is at the weapon's reference (grip) pose.
         """
         # The graft's placed (but flat) reference mesh, on the merged skeleton.
         placed = self.reference_smd()
@@ -431,9 +429,6 @@ class HandGraft:
             to_grip = grip_world[vertex.bone].compose(bind_world[vertex.bone].inverse())
             return to_grip.transform_point(vertex.position)
 
-        # The finger bones aim at the weapon's finger *bones*, which sit inside the
-        # gun; slide each hand onto the handle *surface* so it actually grips.
-        seat = self._grip_seat(placed, gripped, weapon_bind, merged_side)
         # RIGID GRIP: bind each hand to the bone the gun's grip rides, so the two
         # move as one -- the correspondence wrist can move differently and drift off.
         grip_bones = self._grip_bones(placed, gripped, weapon_bind, merged_side, body_bones)
@@ -445,11 +440,6 @@ class HandGraft:
                 side = merged_side.get(vertex.bone, "?")
                 weapon_bone = grip_bones.get(side, wrist.get(side, default_wrist))
                 world_p = gripped(vertex)
-                nudge = seat.get(side)
-                if nudge is not None:
-                    world_p = Vector3(
-                        world_p.x + nudge.x, world_p.y + nudge.y, world_p.z + nudge.z
-                    )
                 # Reference-SMD vertices are stored in *model* space (like the gun
                 # and the graft path); the compiler derives each vertex's bone-local
                 # offset from the grip bone. Storing bone-local here instead left the
@@ -513,64 +503,6 @@ class HandGraft:
             )[:_GRIP_BONE_SAMPLE]
             bones[side] = Counter(bone for bone, _ in nearest).most_common(1)[0][0]
         return bones
-
-    def _grip_seat(
-        self,
-        placed: Smd,
-        gripped: Callable[[Vertex], Vector3],
-        weapon_bind: dict[int, Transform],
-        merged_side: dict[int, str],
-    ) -> dict[str, Vector3]:
-        """Per-side world translation that seats the hand's grip on the gun.
-
-        The finger bones aim at the weapon's own finger bones, which sit *inside*
-        the gun shell, and some rigs park the wrist well off the grip, so the
-        reference-hand mesh can rest a good way from the handle surface. For each
-        side this takes the finger/palm vertices (never the forearm), measures each
-        one's displacement to the nearest point on the gun, and returns the median
-        of the third that sit closest -- the slide that lands the grip on the gun,
-        driven by the fingers that actually wrap it rather than the whole arm.
-        """
-        gun_pts = [
-            weapon_bind[v.bone].transform_point(v.position)
-            for triangle in self._weapon.triangles
-            for v in triangle.vertices
-        ]
-        names = {node.index: node.name for node in self.merged_nodes()}
-        by_side: dict[str, list[Vector3]] = defaultdict(list)
-        for triangle in placed.triangles:
-            for vertex in triangle.vertices:
-                side = merged_side.get(vertex.bone)
-                if side in ("L", "R") and "Forearm" not in names.get(vertex.bone, ""):
-                    by_side[side].append(gripped(vertex))
-
-        seat: dict[str, Vector3] = {}
-        for side, points in by_side.items():
-            # Iterate closest-point seating: one median slide lands the grip only
-            # partway when the rig parks the wrist far off, so re-measure from the
-            # slid position and add, until the fingers settle on the gun.
-            total = _ZERO
-            for _ in range(_SEAT_ITERATIONS):
-                disp = sorted(
-                    (
-                        (q.x - sx, q.y - sy, q.z - sz, dist)
-                        for p in points
-                        for sx, sy, sz in ((p.x + total.x, p.y + total.y, p.z + total.z),)
-                        for q, dist in (_nearest_point(Vector3(sx, sy, sz), gun_pts),)
-                    ),
-                    key=lambda e: e[3],
-                )
-                contact = disp[: max(1, len(disp) // 3)]
-                step = Vector3(
-                    median([e[0] for e in contact]),
-                    median([e[1] for e in contact]),
-                    median([e[2] for e in contact]),
-                )
-                total = Vector3(total.x + step.x, total.y + step.y, total.z + step.z)
-                if step.x * step.x + step.y * step.y + step.z * step.z < _SEAT_TOLERANCE**2:
-                    break
-            seat[side] = total
-        return seat
 
     def weapon_reference_smd(self, source: Smd | None = None) -> Smd:
         """A weapon (gun) reference re-expressed on the merged skeleton.
@@ -935,17 +867,6 @@ def rigid_weapon_bones(
         if sum(counts[b] for b in group) >= min_body_fraction * biggest
         for bone in group
     }
-
-
-def _nearest_point(p: Vector3, points: list[Vector3]) -> tuple[Vector3, float]:
-    """The point in ``points`` nearest ``p``, and the distance to it."""
-    best = points[0]
-    best_d2 = float("inf")
-    for q in points:
-        d2 = (p.x - q.x) ** 2 + (p.y - q.y) ** 2 + (p.z - q.z) ** 2
-        if d2 < best_d2:
-            best_d2, best = d2, q
-    return best, best_d2**0.5
 
 
 def _subtract(a: Vector3, b: Vector3) -> Vector3:
