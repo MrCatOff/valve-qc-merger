@@ -39,7 +39,7 @@ from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.models.smd import Smd, Triangle, Vertex
 from valve_qc_merger.parsers.smd import SmdParseError, parse_smd_file
 from valve_qc_merger.qc_document import find_bodygroups, replace_bodygroup_studios
-from valve_qc_merger.retarget import HandGraft, rigid_weapon_bones
+from valve_qc_merger.retarget import HandGraft
 from valve_qc_merger.transform import Transform
 from valve_qc_merger.writers.smd import write_smd_file
 
@@ -195,15 +195,6 @@ def _weight_transfer_build(
         baked = _bake_world_offset(gun, weapon_offset)
         write_smd_file(baked, output_dir / studio_path.relative_to(weapon_dir))
 
-    # The gun's rigid body: hands must grip a body bone, never a bullet or slide
-    # that swings free (else they float off the gun the moment it animates).
-    animation_smds = [
-        smd
-        for p in weapon_dir.rglob("*.smd")
-        if (smd := _try_parse(p)) is not None and smd.is_animation
-    ]
-    body_bones = rigid_weapon_bones(weapon_ref, animation_smds)
-
     new_studios: list[str] = []
     for name, smd_path in available:
         hand_smd = parse_smd_file(smd_path)
@@ -213,14 +204,18 @@ def _weight_transfer_build(
             raise ReplaceHandsError(f"could not match hands to weapon rig: {exc}") from exc
         graft = HandGraft(weapon_ref, hand_smd, links, finger_ik=False)
         studio = f"grafted_{name}"
-        write_smd_file(graft.weight_transferred_smd(body_bones), output_dir / f"{studio}.smd")
+        write_smd_file(graft.weight_transferred_smd(), output_dir / f"{studio}.smd")
         _copy_textures(hand_smd, hands_dir, output_dir)
         new_studios.append(studio)
 
     (output_dir / qc_path.name).write_text(
         replace_bodygroup_studios(qc_text, hands_block, new_studios), encoding="latin-1"
     )
-    animations = len(animation_smds)
+    animations = sum(
+        1
+        for p in weapon_dir.rglob("*.smd")
+        if (smd := _try_parse(p)) is not None and smd.is_animation
+    )
     bones = len(weapon_ref.nodes)
     slide = weapon_offset if any((weapon_offset.x, weapon_offset.y, weapon_offset.z)) else None
     return ReplaceHandsResult(
