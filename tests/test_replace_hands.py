@@ -292,8 +292,41 @@ def test_palm_seat_offset_matches_the_original_grip() -> None:
 
 
 @requires_elite
+def test_replace_hands_weight_transfer_keeps_the_weapon_skeleton(tmp_path: Path) -> None:
+    # The default (weight-transfer) re-skins the hands onto the weapon's own bones:
+    # no bones added/removed, animations kept, gun slid by the world offset.
+    result = replace_hands(
+        _elite(), _hands(), tmp_path / "out", weapon_offset=Vector3(0.0, -0.5, 0.1)
+    )
+    assert result.removed_bones == 0 and result.added_bones == 0
+    assert result.weapon_bones == result.output_bones
+
+    out = result.output_dir
+
+    def skeleton(path: Path) -> tuple[tuple[int, str, int], ...]:
+        return tuple((n.index, n.name, n.parent) for n in parse_smd_file(path).nodes)
+
+    reference = skeleton(_elite() / "v_elite-PV.smd")  # the weapon's own skeleton
+    assert skeleton(out / "grafted_male.smd") == reference
+    assert skeleton(out / "v_elite-PV.smd") == reference
+    for animation in sorted((out / "v_elite_anims").glob("*.smd")):
+        assert skeleton(animation) == reference  # animations untouched, share the rig
+
+    # The gun mesh was slid by the world offset (not the hands).
+    from valve_qc_merger.kinematics import world_transforms
+
+    orig = parse_smd_file(_elite() / "v_elite-PV.smd")
+    built = parse_smd_file(out / "v_elite-PV.smd")
+    w = world_transforms(orig.nodes, orig.frames[0])
+    ov, bv = orig.triangles[0].vertices[0], built.triangles[0].vertices[0]
+    o = w[ov.bone].transform_point(ov.position)
+    b = w[bv.bone].transform_point(bv.position)
+    assert abs(b.y - o.y + 0.5) < 1e-3 and abs(b.z - o.z - 0.1) < 1e-3
+
+
+@requires_elite
 def test_replace_hands_on_elite_is_consistent(tmp_path: Path) -> None:
-    result = replace_hands(_elite(), _hands(), tmp_path / "out")
+    result = replace_hands(_elite(), _hands(), tmp_path / "out", use_graft=True)
     out = result.output_dir
 
     def skeleton(path: Path) -> tuple[tuple[int, str, int], ...]:
@@ -481,7 +514,7 @@ def test_offset_moves_hands_but_not_the_gun() -> None:
 
 @requires_samples
 def test_replace_hands_writes_compilable_build(tmp_path: Path) -> None:
-    result = replace_hands(_anaconda(), _hands(), tmp_path / "out")
+    result = replace_hands(_anaconda(), _hands(), tmp_path / "out", use_graft=True)
     assert result.variants == ("male", "female")
     assert result.output_bones == 53
     assert result.removed_bones == 32

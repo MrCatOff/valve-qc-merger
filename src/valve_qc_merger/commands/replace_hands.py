@@ -34,8 +34,9 @@ from valve_qc_merger.clearance import (
 from valve_qc_merger.commands.base import Command
 from valve_qc_merger.correspondence import CorrespondenceError, build_hand_correspondences
 from valve_qc_merger.grip_solver import solve_grip
+from valve_qc_merger.kinematics import world_transforms
 from valve_qc_merger.models.geometry import Vector3
-from valve_qc_merger.models.smd import Smd
+from valve_qc_merger.models.smd import Smd, Triangle, Vertex
 from valve_qc_merger.parsers.smd import SmdParseError, parse_smd_file
 from valve_qc_merger.qc_document import find_bodygroups, replace_bodygroup_studios
 from valve_qc_merger.retarget import HandGraft
@@ -132,6 +133,110 @@ def _copy_textures(hand_smd: Smd, source_dir: Path, output_dir: Path) -> None:
             shutil.copy2(texture, output_dir / texture.name)
 
 
+def _bake_world_offset(gun: Smd, offset: Vector3) -> Smd:
+    """Slide the gun mesh by ``offset`` in world space, baked per bone.
+
+    The offset is a *world* translation (what you'd type as a Location in a
+    modeller); expressing it per bone as ``Rᵀ·offset`` makes it a rigid world move
+    at the reference pose that then rides the gun bones through every animation.
+    """
+    if offset.x == 0.0 and offset.y == 0.0 and offset.z == 0.0:
+        return gun
+    world = world_transforms(gun.nodes, gun.frames[0])
+    triangles: list[Triangle] = []
+    for triangle in gun.triangles:
+        verts: list[Vertex] = []
+        for v in triangle.vertices:
+            r = world[v.bone].rotation
+            dx = r[0][0] * offset.x + r[1][0] * offset.y + r[2][0] * offset.z
+            dy = r[0][1] * offset.x + r[1][1] * offset.y + r[2][1] * offset.z
+            dz = r[0][2] * offset.x + r[1][2] * offset.y + r[2][2] * offset.z
+            moved = Vector3(v.position.x + dx, v.position.y + dy, v.position.z + dz)
+            verts.append(Vertex(bone=v.bone, position=moved, normal=v.normal, uv=v.uv))
+        triangles.append(Triangle(triangle.material, (verts[0], verts[1], verts[2])))
+    return Smd(version=gun.version, nodes=gun.nodes, frames=gun.frames, triangles=triangles)
+
+
+def _weight_transfer_build(
+    weapon_dir: Path,
+    hands_dir: Path,
+    output_dir: Path,
+    variants: tuple[str, ...],
+    weapon_offset: Vector3,
+) -> ReplaceHandsResult:
+    """Assemble a model by weight-transferring the reference hands onto the weapon.
+
+    The reference hand mesh is re-skinned onto the weapon's *own* bones (see
+    ``HandGraft.weight_transferred_smd``), so the weapon's existing animations
+    drive it with no retargeting. Only the hands bodygroup is swapped and the gun
+    slid by ``weapon_offset``; the weapon and every animation are otherwise kept.
+    """
+    qc_path = _find_qc(weapon_dir)
+    qc_text = qc_path.read_text(encoding="latin-1")
+    hands_block = next((b for b in find_bodygroups(qc_text) if b.name.lower() == "hands"), None)
+    if hands_block is None:
+        raise ReplaceHandsError('QC has no "hands" bodygroup to replace')
+    weapon_studios = _weapon_studio_paths(weapon_dir, qc_text)
+    weapon_ref = parse_smd_file(weapon_studios[0])
+    available = [(n, hands_dir / f"{n}.smd") for n in variants]
+    available = [(n, p) for n, p in available if p.exists()]
+    if not available:
+        raise ReplaceHandsError(f"no reference hand SMDs {variants} found in {hands_dir}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(weapon_dir, output_dir, dirs_exist_ok=True)
+    for studio in hands_block.studios:
+        stale = output_dir / _resolve_studio(weapon_dir, studio).relative_to(weapon_dir)
+        stale.unlink(missing_ok=True)
+
+    # Slide the gun (its meshes) by the world offset; animations are untouched.
+    for studio_path in weapon_studios:
+        gun = weapon_ref if studio_path == weapon_studios[0] else parse_smd_file(studio_path)
+        baked = _bake_world_offset(gun, weapon_offset)
+        write_smd_file(baked, output_dir / studio_path.relative_to(weapon_dir))
+
+    new_studios: list[str] = []
+    for name, smd_path in available:
+        hand_smd = parse_smd_file(smd_path)
+        try:
+            links = build_hand_correspondences(weapon_ref, hand_smd)
+        except CorrespondenceError as exc:
+            raise ReplaceHandsError(f"could not match hands to weapon rig: {exc}") from exc
+        graft = HandGraft(weapon_ref, hand_smd, links, finger_ik=False)
+        studio = f"grafted_{name}"
+        write_smd_file(graft.weight_transferred_smd(), output_dir / f"{studio}.smd")
+        _copy_textures(hand_smd, hands_dir, output_dir)
+        new_studios.append(studio)
+
+    (output_dir / qc_path.name).write_text(
+        replace_bodygroup_studios(qc_text, hands_block, new_studios), encoding="latin-1"
+    )
+    animations = sum(
+        1
+        for p in weapon_dir.rglob("*.smd")
+        if (smd := _try_parse(p)) is not None and smd.is_animation
+    )
+    bones = len(weapon_ref.nodes)
+    slide = weapon_offset if any((weapon_offset.x, weapon_offset.y, weapon_offset.z)) else None
+    return ReplaceHandsResult(
+        output_dir=output_dir,
+        variants=tuple(n for n, _ in available),
+        animations_retargeted=animations,
+        weapon_bones=bones,
+        output_bones=bones,
+        removed_bones=0,
+        added_bones=0,
+        weapon_slide=slide,
+    )
+
+
+def _try_parse(path: Path) -> Smd | None:
+    try:
+        return parse_smd_file(path)
+    except SmdParseError:
+        return None
+
+
 def _retarget_animations(graft: HandGraft, weapon_dir: Path, output_dir: Path) -> int:
     count = 0
     for smd_path in sorted(weapon_dir.rglob("*.smd")):
@@ -187,6 +292,7 @@ def replace_hands(
     index_curl: float = 0.0,
     grip_slide: Vector3 = _NO_WEAPON_OFFSET,
     auto_grip: bool = False,
+    use_graft: bool = False,
 ) -> ReplaceHandsResult:
     """Run the hand replacement and return a summary.
 
@@ -204,6 +310,11 @@ def replace_hands(
     output_dir = output_dir.resolve()
     if output_dir == weapon_dir:
         raise ReplaceHandsError("output directory must differ from the weapon directory")
+
+    if not use_graft:
+        # Default: weight-transfer the hands onto the weapon's own bones, so the
+        # weapon's animations drive them directly (what produced tmp/elite_wt).
+        return _weight_transfer_build(weapon_dir, hands_dir, output_dir, variants, weapon_offset)
 
     qc_path = _find_qc(weapon_dir)
     qc_text = qc_path.read_text(encoding="latin-1")
@@ -436,7 +547,14 @@ class ReplaceHandsCommand(Command):
             action="store_true",
             help="automatically retract each finger just enough to stop its "
             "(fleshier) mesh clipping the weapon, solved against the collision "
-            "detector over sampled frames (needs --finger-ik)",
+            "detector over sampled frames (needs --finger-ik and --graft)",
+        )
+        parser.add_argument(
+            "--graft",
+            action="store_true",
+            help="use the legacy graft pipeline (adds reference bones and retargets "
+            "every animation) instead of the default weight-transfer, which re-skins "
+            "the hands onto the weapon's own bones so its animations drive them",
         )
 
     def run(self, args: argparse.Namespace) -> int:
@@ -477,25 +595,33 @@ class ReplaceHandsCommand(Command):
                 math.radians(args.index_curl),
                 grip_slide,
                 args.auto_grip,
+                args.graft,
             )
         except (ReplaceHandsError, SmdParseError, ValueError) as exc:
             print(f"replace-hands: {exc}")
             return 1
 
         print(f"Wrote rehanded weapon to {result.output_dir}")
-        print(f"  variants grafted:      {', '.join(result.variants)}")
-        print(
-            f"  bones: {result.weapon_bones} -> {result.output_bones} "
-            f"(removed {result.removed_bones} weapon hand bones, "
-            f"added {result.added_bones} reference bones)"
-        )
-        print(f"  animations retargeted: {result.animations_retargeted}")
+        print(f"  variants:              {', '.join(result.variants)}")
+        if args.graft:
+            print(
+                f"  bones: {result.weapon_bones} -> {result.output_bones} "
+                f"(removed {result.removed_bones} weapon hand bones, "
+                f"added {result.added_bones} reference bones)"
+            )
+            print(f"  animations retargeted: {result.animations_retargeted}")
+        else:
+            print(
+                f"  hands weight-transferred onto the weapon skeleton "
+                f"({result.output_bones} bones, unchanged)"
+            )
+            print(f"  animations kept:       {result.animations_retargeted}")
         if result.weapon_slide is not None:
             s = result.weapon_slide
             detail = (
                 f"[hand intrusion {result.intrusion_before} -> {result.intrusion_after} verts]"
                 if result.intrusion_before
-                else "[grip seated in palm]"
+                else ("[grip seated in palm]" if args.graft else "[gun world offset]")
             )
             print(f"  weapon moved:          ({s.x:.2f}, {s.y:.2f}, {s.z:.2f}) {detail}")
         if result.retracts:

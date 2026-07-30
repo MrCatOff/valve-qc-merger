@@ -172,6 +172,9 @@ class HandGraft:
         self._mesh_remap: dict[int, int] = {}
         self._mesh_transform: dict[int, Transform] = {}
         self._weapon_kept_pose: dict[int, int] = {}  # old weapon index -> new index
+        # Output (merged) hand-mesh bone -> the weapon bone that drives it, so the
+        # reference mesh can be re-skinned onto the weapon's own skeleton.
+        self._merged_to_weapon: dict[int, int] = {}
         self._build(links)
 
     # -- construction ----------------------------------------------------
@@ -269,6 +272,7 @@ class HandGraft:
         hand_parent_new = old_to_new.get(wrist_parent, -1)
         hand_new = base_index
         self._mesh_remap[link.target_wrist] = hand_new
+        self._merged_to_weapon[hand_new] = link.source_wrist
         self._plan.hands.append(
             _HandBone(
                 hand_new,
@@ -291,6 +295,7 @@ class HandGraft:
         )
         forearm_new = base_index + 1
         self._mesh_remap[forearm_index] = forearm_new
+        self._merged_to_weapon[forearm_new] = weapon_parent[link.source_wrist]
         self._mesh_transform[forearm_index] = mesh_transform
         self._plan.constants.append(
             _ConstantBone(forearm_new, hand_name[forearm_index], hand_new, forearm_local)
@@ -328,6 +333,7 @@ class HandGraft:
                     mat3_transpose(weapon_bind[source_joint].rotation), output_bind_rot
                 )
                 self._mesh_remap[target_joint] = cursor
+                self._merged_to_weapon[cursor] = source_joints[min(depth, len(source_joints) - 1)]
                 self._mesh_transform[target_joint] = mesh_transform
                 self._plan.fingers.append(
                     _FingerBone(
@@ -386,6 +392,41 @@ class HandGraft:
             nodes=self.merged_nodes(),
             frames=[Frame(0, tuple(poses))],
             triangles=self._remap_mesh(),
+        )
+
+    def weight_transferred_smd(self) -> Smd:
+        """The reference hand mesh re-skinned onto the *weapon's own* skeleton.
+
+        Instead of adding reference bones (the graft), this poses the reference
+        hand into the weapon's grip and binds every vertex rigidly to the weapon
+        bone that drives it -- the programmatic equivalent of weight-transferring
+        the hands onto the weapon rig in a modeller. The result shares the weapon
+        skeleton, so the weapon's own animations drive the new hands directly, with
+        no retargeting. It is output at the weapon's reference (grip) pose.
+        """
+        grip = Frame(0, tuple(self._frame_poses(self._weapon.frames[0], aim=True)))
+        grip_world = world_transforms(self.merged_nodes(), grip)
+        weapon_bind = world_transforms(self._weapon.nodes, self._weapon.frames[0])
+        triangles: list[Triangle] = []
+        for triangle in self.reference_smd().triangles:
+            verts: list[Vertex] = []
+            for vertex in triangle.vertices:
+                weapon_bone = self._merged_to_weapon[vertex.bone]
+                into_weapon = weapon_bind[weapon_bone].inverse().compose(grip_world[vertex.bone])
+                verts.append(
+                    Vertex(
+                        bone=weapon_bone,
+                        position=into_weapon.transform_point(vertex.position),
+                        normal=into_weapon.rotate_vector(vertex.normal),
+                        uv=vertex.uv,
+                    )
+                )
+            triangles.append(Triangle(triangle.material, (verts[0], verts[1], verts[2])))
+        return Smd(
+            version=self._hand.version,
+            nodes=self._weapon.nodes,
+            frames=[self._weapon.frames[0]],
+            triangles=triangles,
         )
 
     def weapon_reference_smd(self, source: Smd | None = None) -> Smd:
