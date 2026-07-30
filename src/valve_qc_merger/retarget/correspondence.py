@@ -359,34 +359,37 @@ def _frame_matrix(hf: HandFrame) -> Matrix3:
     )
 
 
-def _pair_score(src_frame: HandFrame, tgt_frame: HandFrame) -> float:
-    """Orientation-alignment score for pairing one source arm with one target arm.
-
-    Finger rest poses differ too much between the two rigs for a positional fit to
-    tell the arms apart (the pose mismatch swamps the chirality signal). What is
-    stable, because the reference hands are authored in the weapon's world, is
-    orientation: corresponding hands share a palm-forward direction *and* a palm
-    normal. The palm normal (``n``) is chirality-signed, so a left-vs-right (mirror)
-    pairing flips it and scores low. Range is roughly ``[-2, 2]``; a correct pair
-    scores near ``+2``, its mirror near ``0``.
-    """
-    return _dot(src_frame.u, tgt_frame.u) + _dot(src_frame.n, tgt_frame.n)
+def _side_offsets(frames: list[HandFrame]) -> list[Vector3]:
+    """Each arm's wrist direction from the arms' shared centroid (its 'side')."""
+    centroid = _centroid([f.origin for f in frames])
+    return [_norm(_sub(f.origin, centroid)) for f in frames]
 
 
 def _best_pairing(
     src_frames: list[HandFrame], tgt_frames: list[HandFrame],
 ) -> tuple[list[int], float, float]:
-    """Choose the source-arm assignment maximising total orientation alignment.
+    """Choose the source-arm assignment by matching each arm's side (§7.3).
 
-    Returns the assignment (target index -> source index), its score, and the
-    score gap to the second-best assignment (the pairing confidence).
+    A flat T-pose reference hand has no intrinsic chirality (a flat left and right
+    hand are exact mirrors), and its bind orientation shares nothing with the
+    gripping source pose, so orientation- and chirality-based pairing are both
+    unreliable here. What *is* stable is spatial arrangement: both rigs are authored
+    in the same world, so the left arm sits to one side and the right to the other.
+    Pair arms whose wrist directions from the arm centroid best agree. This needs
+    the arms to be spatially separated; if they are not, the score gap is small and
+    a warning fires (use the ``swap_arms`` override).
+
+    Returns the assignment (target index -> source index), its score, and the gap
+    to the second-best assignment (the pairing confidence).
     """
     from itertools import permutations
 
+    src_off = _side_offsets(src_frames)
+    tgt_off = _side_offsets(tgt_frames)
     scored: list[tuple[float, tuple[int, ...]]] = []
     for perm in permutations(range(len(src_frames))):
         total = sum(
-            _pair_score(src_frames[src_idx], tgt_frames[tgt_idx])
+            _dot(src_off[src_idx], tgt_off[tgt_idx])
             for tgt_idx, src_idx in enumerate(perm)
         )
         scored.append((total, perm))
