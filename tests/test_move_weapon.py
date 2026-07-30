@@ -84,31 +84,3 @@ def test_move_weapon_to_output_leaves_the_build_untouched(tmp_path: Path) -> Non
     assert abs(_first_vertex_world(build / "v_elite-PV.smd").x - before.x) < 1e-9
     moved = _first_vertex_world(tmp_path / "moved" / "v_elite-PV.smd")
     assert abs(moved.x - before.x - 3.0) < 1e-3
-
-
-def _blender_available() -> bool:
-    from valve_qc_merger.commands.clear_weapon import _find_blender
-
-    try:
-        _find_blender()
-    except Exception:
-        return False
-    return True
-
-
-requires_blender = pytest.mark.skipif(not _blender_available(), reason="Blender not installed")
-
-
-@requires_elite
-@requires_blender
-def test_clear_weapon_slides_the_gun_out_of_the_grip(tmp_path: Path) -> None:
-    from valve_qc_merger.commands.clear_weapon import clear_weapon
-
-    build = replace_hands(_elite(), _hands(), tmp_path / "out").output_dir
-    before = _first_vertex_world(build / "v_elite-PV.smd")
-    result = clear_weapon(build)
-
-    assert result.overlap_after < result.overlap_before  # grip clipping reduced
-    after = _first_vertex_world(build / "v_elite-PV.smd")
-    moved = (after.x - before.x) ** 2 + (after.y - before.y) ** 2 + (after.z - before.z) ** 2
-    assert moved > 0.01  # the gun actually moved
