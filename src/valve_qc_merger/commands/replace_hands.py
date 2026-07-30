@@ -202,7 +202,9 @@ def _weight_transfer_build(
             links = build_hand_correspondences(weapon_ref, hand_smd)
         except CorrespondenceError as exc:
             raise ReplaceHandsError(f"could not match hands to weapon rig: {exc}") from exc
-        graft = HandGraft(weapon_ref, hand_smd, links, finger_ik=False)
+        # finger_ik curls each finger so its tip lands on the weapon fingertip
+        # (wrapping the grip) instead of pointing straight past it.
+        graft = HandGraft(weapon_ref, hand_smd, links, finger_ik=True)
         studio = f"grafted_{name}"
         write_smd_file(graft.weight_transferred_smd(), output_dir / f"{studio}.smd")
         _copy_textures(hand_smd, hands_dir, output_dir)
