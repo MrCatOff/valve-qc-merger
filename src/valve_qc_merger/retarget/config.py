@@ -72,6 +72,7 @@ class RetargetConfig:
 
     # --- §11 author decisions ---------------------------------------------
     anchor_policy: AnchorPolicy = "wrist"  # §11.1
+    swap_arms: bool = False  # manual override if auto L/R arm pairing is backwards
     weapon_offset: tuple[float, float, float] | None = None  # §11.2 (None => zero)
     allow_rerig: bool = False  # §11.3
     frustum_policy: FrustumPolicy = "warn"  # §11.4

@@ -16,12 +16,28 @@ Exit codes match the CLI contract (§9):
 from __future__ import annotations
 
 import json
+import os
 import sys
 import traceback
 from typing import Any
 
 import addon_utils  # type: ignore[import-not-found]
 import bpy  # type: ignore[import-not-found]
+from mathutils import Vector as BlenderVector  # type: ignore[import-not-found]
+
+# The driver puts the package's ``src`` dir in VQM_PKG_ROOT so this in-Blender
+# process can import the bpy-free algorithm modules (correspondence, etc.).
+_PKG_ROOT = os.environ.get("VQM_PKG_ROOT")
+if _PKG_ROOT and _PKG_ROOT not in sys.path:
+    sys.path.insert(0, _PKG_ROOT)
+
+from valve_qc_merger.models.geometry import Vector3  # noqa: E402
+from valve_qc_merger.retarget.correspondence import (  # noqa: E402
+    Correspondence,
+    CorrespondenceError,
+    RigBone,
+    build_correspondence,
+)
 
 EXIT_OK = 0
 EXIT_DISCOVERY = 3
@@ -182,6 +198,50 @@ def classify(scene: Scene, w_min: float) -> dict[str, list[str]]:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 2a — geometric correspondence
+# --------------------------------------------------------------------------- #
+def rig_bones(armature: Any) -> list[RigBone]:
+    """Extract every bone's world rest head/tail into bpy-free records."""
+    mw = armature.matrix_world
+    out: list[RigBone] = []
+    for bone in armature.data.bones:
+        head = mw @ bone.head_local
+        tail = mw @ bone.tail_local
+        parent = bone.parent.name if bone.parent else None
+        out.append(RigBone(bone.name, parent, _v3(head), _v3(tail)))
+    return out
+
+
+def _v3(v: BlenderVector) -> Vector3:
+    return Vector3(float(v.x), float(v.y), float(v.z))
+
+
+def hand_closure(src: Any, weighted_hand: set[str], weapon: set[str]) -> set[str]:
+    """Close the weighted hand set under connectivity (§5).
+
+    Wrists and arm roots often carry no weight; add every non-weapon ancestor of a
+    weighted hand bone so wrists (>=4 finger children) are present for discovery.
+    """
+    parent = {b.name: (b.parent.name if b.parent else None) for b in src.data.bones}
+    closed = set(weighted_hand)
+    for name in list(weighted_hand):
+        cursor = parent.get(name)
+        while cursor is not None and cursor not in weapon:
+            closed.add(cursor)
+            cursor = parent.get(cursor)
+    return closed
+
+
+def correspond(scene: Scene, classes: dict[str, list[str]], swap_arms: bool) -> Correspondence:
+    """Map the reference (Bip01) hand bones onto the source (BoneNN) rig (§7.3)."""
+    hand = hand_closure(scene.src, set(classes["hand"]), set(classes["weapon"]))
+    force = [1, 0] if swap_arms else None
+    return build_correspondence(
+        rig_bones(scene.src), hand, rig_bones(scene.reference), force_pairing=force
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
 def run(job: dict[str, Any]) -> dict[str, Any]:
@@ -190,12 +250,13 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
     clean_scene(float(cfg["fps"]))
     scene = import_scene(job)
     classes = classify(scene, float(cfg["w_min"]))
+    corr = correspond(scene, classes, bool(cfg.get("swap_arms", False)))
 
     action = scene.src.animation_data.action
     frame_range = [int(action.frame_range[0]), int(action.frame_range[1])]
     return {
         "sequence": job["sequence"]["name"],
-        "status": "IMPORTED",
+        "status": "MAPPED",
         "blender": bpy.app.version_string,
         "frame_range": frame_range,
         "counts": {
@@ -203,8 +264,19 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
             "reference_bones": len(scene.reference.data.bones),
             "hand_bones": len(classes["hand"]),
             "weapon_bones": len(classes["weapon"]),
+            "mapped_bones": sum(1 for m in corr.maps if m.source is not None),
+            "held_tips": sum(1 for m in corr.maps if m.source is None),
         },
         "classification": classes,
+        "correspondence": {
+            "score": corr.score,
+            "margin": corr.margin,
+            "warnings": corr.warnings,
+            "map": [
+                {"target": m.target, "source": m.source, "role": m.role, "side": m.side}
+                for m in corr.maps
+            ],
+        },
     }
 
 
@@ -223,7 +295,7 @@ def main() -> int:
     try:
         report = run(job)
         code = EXIT_OK
-    except DiscoveryFailure as exc:
+    except (DiscoveryFailure, CorrespondenceError) as exc:
         report = {"status": "FAIL", "error": str(exc), "kind": "discovery"}
         code = EXIT_DISCOVERY
     except AssertionFailure as exc:

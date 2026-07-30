@@ -155,11 +155,13 @@ def run_sequence(
         json.dump(job, handle)
         job_path = handle.name
 
+    env = dict(os.environ)
+    env["VQM_PKG_ROOT"] = str(Path(__file__).resolve().parents[2])  # the src/ dir
     try:
         proc = subprocess.run(
             [blender, "--background", "--factory-startup", "--python", str(WORKER),
              "--", "--job", job_path],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, timeout=timeout, env=env,
         )
     finally:
         os.unlink(job_path)
