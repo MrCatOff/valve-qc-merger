@@ -134,6 +134,9 @@ class _FingerChain:
     # reference finger whose *mesh* is longer than its bones stops poking through
     # the weapon. Set per finger by the collision solver.
     retract: float = 0.0
+    # The thumb opposes the other fingers; FABRIK folds it into the wrong plane
+    # (turning it backward), so it keeps its aim pose instead of being IK-folded.
+    is_thumb: bool = False
 
 
 @dataclass
@@ -363,6 +366,7 @@ class HandGraft:
                     self._index_curl if is_index else 0.0,
                     not is_thumb,
                     self._retracts.get(base_name, 0.0),
+                    is_thumb,
                 )
             )
 
@@ -538,6 +542,9 @@ class HandGraft:
             for chain in self._plan.chains:
                 if chain.curl:
                     self._apply_curl(chain, finger_local, world_cache)
+                if chain.is_thumb and not chain.retract:
+                    continue  # keep the thumb on aim; FABRIK folds it backward
+
                 # Wrapping fingers follow the gun as it slides forward, so they stay
                 # on the grip; the thumb does not, so the moving body clears it.
                 shift = _ZERO
