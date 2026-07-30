@@ -9,10 +9,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from valve_qc_merger.commands.base import Command
+from valve_qc_merger.commands.move_weapon import MoveWeaponCommand
 from valve_qc_merger.commands.replace_hands import ReplaceHandsCommand
 
 # Command classes exposed by the CLI, in display order.
-_COMMAND_CLASSES: list[type[Command]] = [ReplaceHandsCommand]
+_COMMAND_CLASSES: list[type[Command]] = [ReplaceHandsCommand, MoveWeaponCommand]
 
 
 def iter_commands() -> Iterator[Command]:
