@@ -113,3 +113,29 @@ original's).
 Verified: 70 pytest (new `pre_basis` re-aim test), ruff + mypy --strict clean,
 full run PASS (11/11) exit 0, grip renders regenerated — both hands now match
 the original's finger spacing (`zoom_R.png` / `zoom_L.png`).
+
+## Fix 5 — thumb wrap via hand_offset (user feedback + constraint clarification)
+
+The thumb still did not wrap the grip like the original. Cause: `weapon_offset`
+shifts the grip-contact targets with the gun, and the −0.6 Y shift pulled the
+thumb's target forward along the slide — the thumb reached it in an extended
+pose instead of hooking the true original contact point.
+
+Per the user's direction (hands may move along XYZ; nodes/triangles must stay
+untouched for future bodygroup merging), the shift moved from the weapon to the
+hands: **`hand_offset`** anchors every wrist at `source wrist + offset` while
+the weapon — and the contact points on it — stay exactly where the animation
+puts them. Only the anchor bone's pose translation changes; node table,
+triangles and every other bone's local translation are untouched (the §2
+invariants the gate proves are unaffected). v_elite: `hand_offset = [0, 0.6, 0]`
+replaces `weapon_offset = [0, -0.6, 0]` — same relative seating, but:
+
+- the **weapon is back at its authored zero-offset position** (§7.5 default
+  restored: attachments, dual-gun sync, screen framing exact — verified from
+  the emitted text at 0.00004 u / 0.001°), and
+- the **thumb curls onto the true original contact and wraps the grip** (Z
+  candidates 0/−0.3/+0.3 rendered; 0 matches the original's grip coverage).
+
+Verified: 71 pytest (new anchor-offset test), ruff + mypy --strict clean, full
+run PASS (11/11) exit 0, idle tip error mean 0.216 u; final renders in
+`tmp/verify/model/zoom_{R,L}.png`.

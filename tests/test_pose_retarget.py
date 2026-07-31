@@ -99,6 +99,28 @@ def test_anchor_lands_the_wrist_on_the_source_wrist() -> None:
     assert _close(posed["wrist"].translation, src_pose["wrist"].translation, 1e-8)
 
 
+def test_hand_offset_shifts_the_anchor_target() -> None:
+    src_rest = _rest(_HEADS)
+    tgt_heads = {n: Vector3(h.x, h.y + 10.0, h.z) for n, h in _HEADS.items()}
+    tgt_rest = _rest(tgt_heads)
+
+    given = _identity_bases()
+    given["fore"] = Transform(axis_angle(Vector3(0, 0, 1), 0.3))
+    src_pose = world_from_bases(src_rest, _PARENT, given)
+
+    mapping: dict[str, str | None] = {n: n for n in _HEADS}
+    anchor = Anchor(bone="fore", wrist="wrist", source_wrist="wrist")
+    offset = Vector3(0.25, 0.6, -0.4)
+    bases = compute_bases(
+        tgt_rest, _PARENT, mapping, src_rest, src_pose, anchors=[anchor],
+        hand_offset=offset,
+    )
+    posed = world_from_bases(tgt_rest, _PARENT, bases)
+    expected = src_pose["wrist"].translation
+    shifted = Vector3(expected.x + offset.x, expected.y + offset.y, expected.z + offset.z)
+    assert _close(posed["wrist"].translation, shifted, 1e-8)
+
+
 def _mat_close(a: Matrix3, b: Matrix3, tol: float = 1e-8) -> bool:
     return all(abs(a[i][j] - b[i][j]) < tol for i in range(3) for j in range(3))
 

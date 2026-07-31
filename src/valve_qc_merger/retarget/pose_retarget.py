@@ -64,6 +64,7 @@ def compute_bases(
     src_pose: dict[str, Transform],
     anchors: list[Anchor],
     orient: dict[str, tuple[Matrix3, Matrix3]] | None = None,
+    hand_offset: Vector3 | None = None,
 ) -> dict[str, Transform]:
     """Return each target bone's ``matrix_basis`` for one frame (§7.4).
 
@@ -74,6 +75,14 @@ def compute_bases(
     frame so the target hand adopts the source's *absolute* orientation (arm
     pointing along the grip), independent of the T-pose. Bones without a frame fall
     back to the delta form.
+
+    ``hand_offset`` is a constant world translation added to every anchor's wrist
+    target: the whole hand lands at ``source wrist + offset`` instead of exactly on
+    the source wrist, compensating a hand-size mismatch while the weapon (and the
+    grip contact points on it) stay exactly where the animation puts them. Only the
+    anchor bone's pose translation changes — nodes, triangles and every other
+    bone's local translation are untouched. World-space and identical for all
+    arms, so lateral (X) shifts are asymmetric for mirrored dual-wield arms.
     """
     order = topo_order(tgt_parent)
     posed: dict[str, Transform] = {}
@@ -101,7 +110,7 @@ def compute_bases(
         basis[bone] = this
         posed[bone] = seat.compose(this)
 
-    _solve_anchors(tgt_rest, tgt_parent, posed, basis, src_pose, anchors)
+    _solve_anchors(tgt_rest, tgt_parent, posed, basis, src_pose, anchors, hand_offset)
     return basis
 
 
@@ -145,6 +154,7 @@ def _solve_anchors(
     basis: dict[str, Transform],
     src_pose: dict[str, Transform],
     anchors: list[Anchor],
+    hand_offset: Vector3 | None = None,
 ) -> None:
     """Set each anchor's basis translation so its wrist lands on the source wrist.
 
@@ -156,6 +166,9 @@ def _solve_anchors(
         if anchor.source_wrist not in src_pose or anchor.wrist not in posed:
             continue
         target = src_pose[anchor.source_wrist].translation
+        if hand_offset is not None:
+            target = Vector3(target.x + hand_offset.x, target.y + hand_offset.y,
+                             target.z + hand_offset.z)
         current = posed[anchor.wrist].translation
         delta = Vector3(target.x - current.x, target.y - current.y, target.z - current.z)
 

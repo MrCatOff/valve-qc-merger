@@ -74,6 +74,11 @@ class RetargetConfig:
     anchor_policy: AnchorPolicy = "wrist"  # §11.1
     swap_arms: bool = False  # manual override if auto L/R arm pairing is backwards
     weapon_offset: tuple[float, float, float] | None = None  # §11.2 (None => zero)
+    # Constant world translation for the HANDS instead of the weapon: every arm's
+    # wrist anchors at source wrist + hand_offset, while the weapon and the grip
+    # contact points stay exactly where the animation puts them (§7.5 zero offset
+    # preserved). Compensates a hand-size mismatch without re-authoring the gun.
+    hand_offset: tuple[float, float, float] | None = None
     allow_rerig: bool = False  # §11.3
     frustum_policy: FrustumPolicy = "warn"  # §11.4
     finger_priority: tuple[str, ...] = ("pinky", "ring", "middle", "index", "thumb")  # §11.5
@@ -102,8 +107,9 @@ class RetargetConfig:
             raise ValueError(f"unknown config keys: {sorted(unknown)}")
 
         kwargs: dict[str, Any] = dict(data)
-        if "weapon_offset" in kwargs and kwargs["weapon_offset"] is not None:
-            kwargs["weapon_offset"] = tuple(kwargs["weapon_offset"])
+        for offset_key in ("weapon_offset", "hand_offset"):
+            if offset_key in kwargs and kwargs[offset_key] is not None:
+                kwargs[offset_key] = tuple(kwargs[offset_key])
         if "finger_priority" in kwargs:
             kwargs["finger_priority"] = tuple(kwargs["finger_priority"])
         if "solver" in kwargs:

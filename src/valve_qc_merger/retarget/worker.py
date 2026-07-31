@@ -413,6 +413,8 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
     depth_limits, thumb_limit = _finger_limits(cfg)
     offset = cfg.get("weapon_offset")
     target_shift = Vector3(*offset) if offset else Vector3(0.0, 0.0, 0.0)
+    hoff = cfg.get("hand_offset")
+    hand_offset = Vector3(*hoff) if hoff else None
 
     # Group the chains per wrist and mark each wrist's thumb (most abducted base).
     by_wrist: dict[str, list[tuple[list[str], list[str]]]] = {}
@@ -454,7 +456,8 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
         scene_ctx.frame_set(frame)
         src_pose = {name: _xf(scene.src.pose.bones[name].matrix) for name in src_names}
         bases = compute_bases(
-            tgt_rest, tgt_parent, mapping, src_rest, src_pose, anchors, orient=corr.frames
+            tgt_rest, tgt_parent, mapping, src_rest, src_pose, anchors,
+            orient=corr.frames, hand_offset=hand_offset,
         )
         posed = world_from_bases(tgt_rest, tgt_parent, bases)  # open-hand world (wrist fixed)
         # Per-arm hinge axis: the posed knuckle line of the non-thumb finger bases,
@@ -824,6 +827,7 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
         "sequence": job["sequence"]["name"],
         "status": status,
         "weapon_offset": cfg.get("weapon_offset"),
+        "hand_offset": cfg.get("hand_offset"),
         "frames": solved["frames"],
         "grip": solved["grip"],
         "blender": bpy.app.version_string,
