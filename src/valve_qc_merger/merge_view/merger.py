@@ -18,7 +18,10 @@ from pathlib import Path
 
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.discovery import ModelInput
+from valve_qc_merger.merge_view.skeleton_ops import conform_to_table, fk_worlds
+from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.models.smd import Smd, Triangle
+from valve_qc_merger.transform import matrix_to_euler
 from valve_qc_merger.writers.smd import write_smd_text
 
 BONE_LIMIT = 127
@@ -60,6 +63,59 @@ def _check_skeleton_consistency(models: list[ModelInput]) -> dict[str, str | Non
             merged.setdefault(node.name, parent)
             owner.setdefault(node.name, model.name)
     return merged
+
+
+def _unify_skeletons(models: list[ModelInput], skeleton: dict[str, str | None]) -> None:
+    """Graft the full merged skeleton into every SMD (prior-art _unify_skeleton).
+
+    Every mesh and sequence SMD of every model ends up with the identical node
+    table (names, parents, order). Missing bones are grafted statically at the
+    bind-local transform taken from the first model that owns them — those are
+    always another weapon's (hidden) bones, so a foreign bind is harmless,
+    while studiomdl no longer invents defaults for absent sequence bones.
+    """
+    # Global topological order, deterministic: parents first, then name.
+    order: list[str] = []
+    seen: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in seen:
+            return
+        parent = skeleton.get(name)
+        if parent is not None:
+            visit(parent)
+        seen.add(name)
+        order.append(name)
+
+    for name in sorted(skeleton):
+        visit(name)
+    table = [(name, skeleton[name]) for name in order]
+
+    # Bind locals from each bone's first owner (world -> parent-local).
+    bind_locals: dict[str, tuple[Vector3, Vector3]] = {}
+    for model in models:
+        fullest = max(model.meshes.values(), key=lambda m: len(m.nodes))
+        if not fullest.frames:
+            continue
+        worlds = fk_worlds(fullest, fullest.frames[0])
+        name_of = {n.index: n.name for n in fullest.nodes}
+        world_by_name = {name_of[i]: t for i, t in worlds.items()}
+        for name, transform in world_by_name.items():
+            if name in bind_locals:
+                continue
+            parent = skeleton.get(name)
+            if parent is not None and parent in world_by_name:
+                local = world_by_name[parent].inverse().compose(transform)
+            else:
+                local = transform
+            bind_locals[name] = (local.translation, matrix_to_euler(local.rotation))
+    zero = Vector3(0.0, 0.0, 0.0)
+    for name, _parent in table:
+        bind_locals.setdefault(name, (zero, zero))
+
+    for model in models:
+        for smd in {**model.meshes, **model.anims}.values():
+            conform_to_table(smd, table, bind_locals)
 
 
 def _concat_meshes(meshes: list[Smd]) -> Smd:
@@ -147,6 +203,7 @@ def merge_models(
     models = [model for model, _ in pairs]
     skeleton = _check_skeleton_consistency(models)
     report.bones = len(skeleton)
+    _unify_skeletons(models, skeleton)
     if report.bones > BONE_LIMIT:
         report.warnings.append(
             f"merged skeleton has {report.bones} bones (limit {BONE_LIMIT})"

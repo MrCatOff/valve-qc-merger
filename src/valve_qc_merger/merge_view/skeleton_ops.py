@@ -235,6 +235,62 @@ def graft_bone(smd: Smd, name: str, parent: str) -> None:
     renumber(smd)
 
 
+def conform_to_table(
+    smd: Smd,
+    table: list[tuple[str, str | None]],
+    bind_locals: dict[str, tuple[Vector3, Vector3]],
+) -> None:
+    """Give the SMD the exact global node table (prior-art _unify_skeleton).
+
+    Bones the SMD lacks are grafted with their static bind-local transform in
+    every frame; existing bones keep their own data. Finally every SMD is
+    renumbered to the SAME table order, so all mesh and sequence SMDs of the
+    merged model agree byte-for-byte on the node block — studiomdl fills
+    missing sequence bones from foreign defaults otherwise (animations
+    desynchronise) and skinning breaks when reference tables differ.
+    """
+    present = {n.name for n in smd.nodes}
+    for name, parent in table:
+        if name in present:
+            continue
+        if parent is None or parent not in present:
+            raise ValueError(f"cannot graft {name!r}: parent {parent!r} missing")
+        parent_index = next(n.index for n in smd.nodes if n.name == parent)
+        index = max((n.index for n in smd.nodes), default=-1) + 1
+        smd.nodes = [*smd.nodes, Node(index, name, parent_index)]
+        pos, rot = bind_locals[name]
+        smd.frames = [
+            Frame(f.time, (*f.poses, BonePose(index, pos, rot)))
+            for f in smd.frames
+        ]
+        present.add(name)
+
+    # Reorder to the exact global table.
+    order = [name for name, _ in table]
+    position = {name: i for i, name in enumerate(order)}
+    old_index = {n.name: n.index for n in smd.nodes}
+    parent_by_name = dict(table)
+    remap = {old_index[name]: position[name] for name in order}
+    def parent_position(name: str) -> int:
+        parent = parent_by_name[name]
+        return position[parent] if parent is not None else -1
+
+    smd.nodes = [
+        Node(position[name], name, parent_position(name)) for name in order
+    ]
+    smd.frames = [
+        Frame(f.time, tuple(sorted(
+            (BonePose(remap[p.bone], p.position, p.rotation) for p in f.poses),
+            key=lambda p: p.bone,
+        )))
+        for f in smd.frames
+    ]
+    smd.triangles = [
+        _map_vertices(t, lambda v: dataclasses.replace(v, bone=remap[v.bone]))
+        for t in smd.triangles
+    ]
+
+
 def rebind_vertices(smd: Smd, from_bone: str, to_bone: str) -> int:
     """Move every vertex bound to ``from_bone`` onto ``to_bone``; returns count."""
     src = next(n.index for n in smd.nodes if n.name == from_bone)
@@ -258,6 +314,7 @@ def world_positions(smd: Smd, frame: Frame) -> dict[str, Vector3]:
 
 __all__ = [
     "ensure_root",
+    "conform_to_table",
     "fk_worlds",
     "graft_bone",
     "rename_bones",
