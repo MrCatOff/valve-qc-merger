@@ -155,29 +155,51 @@ def test_finger_count_mismatch_raises() -> None:
         build_correspondence(src, {b.name for b in src}, tgt)
 
 
-def test_thumb_signal_disagreement_aborts() -> None:
-    # One finger is abducted (points sideways, in-plane) so abduction picks it as
-    # the thumb; a different finger is lifted out of the palm plane so the planar
-    # outlier test picks that one. The disagreement must abort (§7.3.4).
+def _stub_hand(fingers: list[tuple[str, tuple[float, float, float],
+                                   tuple[float, float, float]]]) -> list[RigBone]:
+    """A wrist with two-joint finger chains (base direction, then straight tip)."""
     bones = [
         RigBone("S_forearm", None, Vector3(0, -1, 0), Vector3(0, 0, 0)),
         RigBone("S_wrist", "S_forearm", Vector3(0, 0, 0), Vector3(0, 0.3, 0)),
     ]
-    fingers = [
-        ("fa", (-0.4, 1.0, 0.0), (0.0, 0.4, 0.0)),   # four palm fingers span the
-        ("fb", (-0.1, 1.1, 0.0), (0.0, 0.4, 0.0)),   # z=0 plane (x and y vary)
-        ("fc", (0.2, 1.0, 0.0), (0.0, 0.4, 0.0)),
-        ("abd", (0.4, 0.9, 0.0), (0.5, 0.0, 0.0)),   # abducted (sideways), in-plane
-        ("lift", (0.0, 1.0, 0.7), (0.0, 0.4, 0.0)),  # lifted off the z=0 plane
-    ]
-    for name, base, direction in fingers:
-        bx, by, bz = base
-        dx, dy, dz = direction
-        bones.append(RigBone(f"S_{name}0", "S_wrist",
-                             Vector3(bx, by, bz), Vector3(bx + dx, by + dy, bz + dz)))
+    for name, (bx, by, bz), (dx, dy, dz) in fingers:
+        mid = Vector3(bx + dx, by + dy, bz + dz)
+        tip = Vector3(bx + 2 * dx, by + 2 * dy, bz + 2 * dz)
+        bones.append(RigBone(f"S_{name}0", "S_wrist", Vector3(bx, by, bz), mid))
+        bones.append(RigBone(f"S_{name}1", f"S_{name}0", mid, tip))
+    return bones
+
+
+def test_thumb_signal_disagreement_aborts_when_abduction_is_ambiguous() -> None:
+    # TWO fingers are similarly abducted (no decisive primary signal) while a
+    # third is lifted off the palm plane so the planar outlier disagrees with
+    # both. Without a decisive margin the disagreement must abort (§7.3.4).
+    bones = _stub_hand([
+        ("fa", (-0.4, 1.0, 0.0), (0.0, 0.4, 0.0)),
+        ("fb", (-0.1, 1.1, 0.0), (0.0, 0.4, 0.0)),
+        ("abd1", (0.4, 0.9, 0.0), (0.5, 0.05, 0.0)),   # abducted, in-plane
+        ("abd2", (0.5, 0.7, 0.0), (0.5, -0.05, 0.0)),  # abducted almost the same
+        ("lift", (0.0, 1.0, 0.7), (0.0, 0.4, 0.0)),    # planar outlier
+    ])
     tgt, _ = _hand("Bip01 R", _xform(trans=Vector3(6, 0, 0)))
     with pytest.raises(CorrespondenceError, match="thumb signals disagree"):
         build_correspondence(bones, {b.name for b in bones}, tgt)
+
+
+def test_decisive_abduction_overrules_planar_cross_check() -> None:
+    # One clear thumb by abduction; a NON-thumb base nudged off the palm plane
+    # makes the planar cross-check disagree. The decisive margin overrules it
+    # with a warning instead of aborting (curled rest poses break the plane).
+    bones = _stub_hand([
+        ("fa", (-0.4, 1.0, 0.0), (0.0, 0.4, 0.0)),
+        ("fb", (-0.1, 1.1, 0.0), (0.0, 0.4, 0.0)),
+        ("fc", (0.2, 1.0, 0.2), (0.0, 0.4, 0.0)),      # base off-plane: planar pick
+        ("fd", (0.4, 0.9, 0.0), (0.0, 0.4, 0.0)),
+        ("thumb", (0.3, 0.4, 0.0), (0.5, 0.0, 0.0)),   # decisively abducted
+    ])
+    tgt, _ = _hand("Bip01 R", _xform(trans=Vector3(6, 0, 0)))
+    corr = build_correspondence(bones, {b.name for b in bones}, tgt)
+    assert any("overruled" in w for w in corr.warnings)
 
 
 def test_force_pairing_overrides_automatic_assignment() -> None:

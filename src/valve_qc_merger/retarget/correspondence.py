@@ -113,18 +113,63 @@ class Arm:
     forearm: list[str]  # proximal..wrist ancestors within the rig (root..wrist)
     fingers: list[list[str]]  # five chains, each base..tip
     side: str = "?"  # "L" | "R" | "?" (from the target bone names, if present)
+    # Reversed-hierarchy rigs parent the forearm BELOW the hand as a leaf child
+    # (grafted CS rigs). When the wrist has no mappable ancestors, this is the
+    # forearm bone to map instead.
+    reversed_forearm: str | None = None
 
 
 def _discover_arms(rig: Rig) -> list[Arm]:
-    """Wrists = bones with >=4 children; each child seeds a finger chain (§7.3)."""
+    """Wrists = bones with >=4 FINGER chains; each qualifying child seeds one (§7.3).
+
+    A finger chain must have at least two joints. Grafted rigs can parent
+    single-bone stubs under the wrist too — a leaf forearm (reversed hierarchies
+    put the forearm BELOW the hand), attachment helpers, bullet bones — and
+    treating those as fingers poisons the thumb identification: a forearm stub
+    is always the planar outlier of the "knuckle" bases.
+    """
     arms: list[Arm] = []
     for name, kids in rig.children.items():
-        if len(kids) < 4:
+        fingers = [
+            chain for chain in (rig.chain_from(child) for child in kids)
+            if len(chain) >= 2
+        ]
+        if len(fingers) < 4:
             continue
-        fingers = [rig.chain_from(child) for child in kids]
         forearm = _ancestors(rig, name)
-        arms.append(Arm(wrist=name, forearm=forearm, fingers=fingers, side=_side_of(name)))
+        stubs = [child for child in kids if len(rig.chain_from(child)) < 2]
+        arms.append(Arm(
+            wrist=name, forearm=forearm, fingers=fingers, side=_side_of(name),
+            reversed_forearm=_reversed_forearm(rig, name, fingers, stubs),
+        ))
     return arms
+
+
+def _reversed_forearm(
+    rig: Rig, wrist: str, fingers: list[list[str]], stubs: list[str]
+) -> str | None:
+    """The leaf child that IS the forearm on a reversed-hierarchy rig, if any.
+
+    Distinguished from attachment helpers geometrically: its head sits far from
+    the wrist (at the elbow — beyond the knuckle distance) and points opposite
+    palm-forward. Helpers sit on the hand itself.
+    """
+    wrist_head = rig.bones[wrist].head
+    bases = [rig.bones[chain[0]].head for chain in fingers]
+    palm_forward = _norm(_sub(_centroid(bases), wrist_head))
+    knuckle_dist = sum(b.distance_to(wrist_head) for b in bases) / len(bases)
+    best: str | None = None
+    best_dist = 0.0
+    for child in stubs:
+        offset = _sub(rig.bones[child].head, wrist_head)
+        dist = offset.length()
+        if dist <= knuckle_dist:
+            continue  # on the hand: an attachment/helper bone
+        if _dot(_norm(offset), palm_forward) > -0.5:
+            continue  # not pointing back toward the elbow
+        if dist > best_dist:
+            best, best_dist = child, dist
+    return best
 
 
 def _ancestors(rig: Rig, name: str) -> list[str]:
@@ -149,11 +194,20 @@ def _side_of(name: str) -> str:
 # --------------------------------------------------------------------------- #
 # Geometry: thumb identification and the intrinsic hand frame
 # --------------------------------------------------------------------------- #
-def _identify_thumb(rig: Rig, arm: Arm) -> int:
+# Abduction margin (top pick vs runner-up) above which the primary signal is
+# considered decisive and may overrule a disagreeing planar cross-check. On a
+# curled rest pose (rigs whose reference pose is already mid-grip) the base
+# plane is unreliable, while a real thumb's abduction dwarfs every finger's.
+_THUMB_DECISIVE_MARGIN = math.radians(15.0)
+
+
+def _identify_thumb(rig: Rig, arm: Arm, warnings: list[str] | None = None) -> int:
     """Thumb = the chain whose base segment is most abducted from the mean (§7.3.4).
 
-    Cross-checked against the planar-outlier base; the spec is explicit that the two
-    signals disagreeing must abort with a diagnostic rather than guess.
+    Cross-checked against the planar-outlier base. The signals disagreeing aborts
+    (the spec forbids guessing) — unless abduction, the primary signal, is
+    decisive by a clear margin, in which case the fragile cross-check is
+    overruled with a warning instead.
     """
     dirs = [_norm(rig.bones[chain[0]].direction()) for chain in arm.fingers]
     abduction: list[float] = []
@@ -166,9 +220,21 @@ def _identify_thumb(rig: Rig, arm: Arm) -> int:
     bases = [rig.bones[chain[0]].head for chain in arm.fingers]
     plane_thumb = _planar_outlier(bases)
     if plane_thumb != thumb:
+        ranked = sorted(abduction, reverse=True)
+        margin = ranked[0] - ranked[1]
+        if margin >= _THUMB_DECISIVE_MARGIN:
+            if warnings is not None:
+                warnings.append(
+                    f"thumb planar cross-check overruled on {arm.wrist}: abduction "
+                    f"decisively picks {arm.fingers[thumb][0]} "
+                    f"(margin {math.degrees(margin):.0f} deg); planar outlier said "
+                    f"{arm.fingers[plane_thumb][0]}"
+                )
+            return thumb
         raise CorrespondenceError(
             f"thumb signals disagree on {arm.wrist}: abduction picks "
-            f"{arm.fingers[thumb][0]}, planar outlier picks {arm.fingers[plane_thumb][0]}"
+            f"{arm.fingers[thumb][0]} (margin {math.degrees(margin):.0f} deg, "
+            f"ambiguous), planar outlier picks {arm.fingers[plane_thumb][0]}"
         )
     return thumb
 
@@ -311,8 +377,12 @@ def build_correspondence(
         )
 
     warnings: list[str] = []
-    src_frames = [_hand_frame(src, arm, _identify_thumb(src, arm)) for arm in src_arms]
-    tgt_frames = [_hand_frame(tgt, arm, _identify_thumb(tgt, arm)) for arm in tgt_arms]
+    src_frames = [
+        _hand_frame(src, arm, _identify_thumb(src, arm, warnings)) for arm in src_arms
+    ]
+    tgt_frames = [
+        _hand_frame(tgt, arm, _identify_thumb(tgt, arm, warnings)) for arm in tgt_arms
+    ]
 
     pairing, score, margin = _best_pairing(src_frames, tgt_frames)
     if force_pairing is not None:
@@ -413,6 +483,18 @@ def _map_arm(
         if tgt.bones[tgt_bone].parent is None or src.bones[src_bone].parent is None:
             continue
         maps.append(BoneMap(tgt_bone, src_bone, "forearm", side))
+
+    # Reversed-hierarchy source (forearm is a leaf child of the hand): the wrist
+    # has no mappable ancestors, so map the reference forearm to that leaf — an
+    # unmapped reference forearm would hold its T-pose rest orientation and jut
+    # out sideways while the hand tracks the weapon.
+    if (not any(m.role == "forearm" for m in maps)
+            and src_arm.reversed_forearm is not None):
+        for tgt_bone in reversed(tgt_arm.forearm[:-1]):
+            if tgt.bones[tgt_bone].parent is None:
+                continue
+            maps.append(BoneMap(tgt_bone, src_arm.reversed_forearm, "forearm", side))
+            break
 
     # Fingers: thumb->thumb, the rest by knuckle order.
     tgt_by_slot = [tgt_frame.thumb, *tgt_frame.order]
