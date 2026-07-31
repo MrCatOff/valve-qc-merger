@@ -147,6 +147,39 @@ def test_arm_count_mismatch_raises() -> None:
         build_correspondence(one, {b.name for b in one}, tgt_r + tgt_l)
 
 
+def test_finger_count_mismatch_raises() -> None:
+    src, _ = _hand("S", _xform())
+    src = [b for b in src if "pinky" not in b.name]  # a four-finger source hand
+    tgt, _ = _hand("Bip01 R", _xform(trans=Vector3(6, 0, 0)))  # five-finger target
+    with pytest.raises(CorrespondenceError, match="finger-count mismatch"):
+        build_correspondence(src, {b.name for b in src}, tgt)
+
+
+def test_thumb_signal_disagreement_aborts() -> None:
+    # One finger is abducted (points sideways, in-plane) so abduction picks it as
+    # the thumb; a different finger is lifted out of the palm plane so the planar
+    # outlier test picks that one. The disagreement must abort (§7.3.4).
+    bones = [
+        RigBone("S_forearm", None, Vector3(0, -1, 0), Vector3(0, 0, 0)),
+        RigBone("S_wrist", "S_forearm", Vector3(0, 0, 0), Vector3(0, 0.3, 0)),
+    ]
+    fingers = [
+        ("fa", (-0.4, 1.0, 0.0), (0.0, 0.4, 0.0)),   # four palm fingers span the
+        ("fb", (-0.1, 1.1, 0.0), (0.0, 0.4, 0.0)),   # z=0 plane (x and y vary)
+        ("fc", (0.2, 1.0, 0.0), (0.0, 0.4, 0.0)),
+        ("abd", (0.4, 0.9, 0.0), (0.5, 0.0, 0.0)),   # abducted (sideways), in-plane
+        ("lift", (0.0, 1.0, 0.7), (0.0, 0.4, 0.0)),  # lifted off the z=0 plane
+    ]
+    for name, base, direction in fingers:
+        bx, by, bz = base
+        dx, dy, dz = direction
+        bones.append(RigBone(f"S_{name}0", "S_wrist",
+                             Vector3(bx, by, bz), Vector3(bx + dx, by + dy, bz + dz)))
+    tgt, _ = _hand("Bip01 R", _xform(trans=Vector3(6, 0, 0)))
+    with pytest.raises(CorrespondenceError, match="thumb signals disagree"):
+        build_correspondence(bones, {b.name for b in bones}, tgt)
+
+
 def test_force_pairing_overrides_automatic_assignment() -> None:
     src, tgt, src_roles, tgt_roles = _two_arms(
         tgt_left_chirality=1.0, src_left_chirality=1.0,

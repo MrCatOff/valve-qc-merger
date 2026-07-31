@@ -1,5 +1,9 @@
 # Verification report — Phases 0–2b
 
+> **Update (second pass): corrections verified — cleared for Phase 3/4.**
+> See §6 at the bottom for the fix-verification details. The original findings
+> below are kept for the record.
+
 Independent check of the claims in `stages/progress.md` against
 `TECHNICAL_SPECIFICATIONS_V2.md`, following `stages/verify.md`. Method: re-ran
 the quality gates, visually inspected every render pair in `tmp/verify/`, and
@@ -123,3 +127,40 @@ if any behavior-affecting code changed, and then **write a report at
 `stages/fixes.md`** listing, per correction number: what was changed (files and
 approach), what was deliberately deferred and why, and any new tests added.
 That report is the input for the next verification pass.
+
+---
+
+## 6. Fix verification (second pass) — all corrections confirmed
+
+Verified `stages/fixes.md` against commit `49a4e4b` line by line; re-ran all
+gates (**42 passed**, ruff clean, mypy --strict clean on 23 files).
+
+| Correction | Verdict | Evidence |
+|---|---|---|
+| 1. Silent worker failure | ✅ fixed | `--python-exit-code 1` added to the Blender invocation; exit-0-with-no-report returns a `FAIL`/`worker-crash` result with a forced non-zero code; `TimeoutExpired` caught and returned as `FAIL`/`timeout` (`driver.py:run_sequence`). Covered by `test_run_sequence_fails_when_worker_writes_no_report` using a fake blender executable. |
+| 2. `--dry-run` | ✅ implemented | Flag threads CLI → job JSON → worker; worker skips `retarget()`, reports `MAPPED`/0 frames, and the report already carries the full correspondence map + classification, satisfying §9's "writes the map". Covered by `test_run_sequence_threads_dry_run_into_the_job`. |
+| 3. Thumb-disagreement abort | ✅ fixed | `_identify_thumb` now raises `CorrespondenceError` naming both signals' picks (§7.3.4). |
+| 4. Mirroring check | ✅ added | `worker.assert_no_mirrors` checks every rest matrix's 3×3 determinant on both rigs right after import; negative → `DiscoveryFailure` (exit 3). Runs in `bpy`, so not unit-testable outside Blender — acceptable. |
+| 5. Deviations documented | ✅ done | progress.md deviations 3–5 now cover the held-joint behavior (§7.3.6), the broader hand-set closure, and the anchor fallback. §7.3.6 redistribution deferred with a stated reason (not needed for v_elite) — acceptable. |
+| 6. BST scale claim | ✅ resolved | Docstring corrected: the SMD operator exposes no scale factor (I/O is 1:1); the real unit-scale assertion lives in `clean_scene`. |
+| 7. Smaller fixes | ✅ all landed | Exit codes split (inputs→3; §5 gate and Blender-not-found→4 — a sensible reading of §9); finger-count mismatch now a `CorrespondenceError`; `_only_new_mesh` uses before/after set difference instead of name order; side-pairing test renamed to match the code; verify.md filenames carry the `_f<N>` suffix. |
+
+Additional checks: `SequenceResult.ok` is `exit_code == 0` and both new failure
+paths force a non-zero code, so a crash can no longer read as PASS. The
+`tmp/verify/` renders were regenerated at commit time; the idle front render is
+pose-identical to the pre-fix one, confirming the claim that the retarget math
+path was untouched.
+
+Residual notes (non-blocking, fold into later phases):
+- No unit test exercises the thumb-disagreement abort or the finger-count
+  mismatch error; add synthetic-rig cases when Phase 2a is next touched.
+- The gun-subtree→arm bijection §5 check remains deferred (disclosed since the
+  first pass).
+
+**Decision: all first-pass conditions are met. Proceed to Phase 3 (weapon
+placement, zero-offset default) and Phase 4 (grip solve).** On completion,
+write `stages/progress.md` updates plus a `stages/phase34.md` report covering:
+what was implemented per spec section (§7.5, §7.6), the solver parameters used,
+per-sequence metric summaries (`e_pos`, overlap band, `d_max` guard), any
+relaxations applied, and regenerated `tmp/verify/` renders — that is the input
+for the next verification pass.
