@@ -149,12 +149,12 @@ def _side_of(name: str) -> str:
 # --------------------------------------------------------------------------- #
 # Geometry: thumb identification and the intrinsic hand frame
 # --------------------------------------------------------------------------- #
-def _identify_thumb(rig: Rig, arm: Arm) -> tuple[int, list[str]]:
+def _identify_thumb(rig: Rig, arm: Arm) -> int:
     """Thumb = the chain whose base segment is most abducted from the mean (§7.3.4).
 
-    Returns the thumb index and any warnings.
+    Cross-checked against the planar-outlier base; the spec is explicit that the two
+    signals disagreeing must abort with a diagnostic rather than guess.
     """
-    warnings: list[str] = []
     dirs = [_norm(rig.bones[chain[0]].direction()) for chain in arm.fingers]
     abduction: list[float] = []
     for i, di in enumerate(dirs):
@@ -163,15 +163,14 @@ def _identify_thumb(rig: Rig, arm: Arm) -> tuple[int, list[str]]:
         abduction.append(_angle(di, mean))
     thumb = max(range(len(dirs)), key=lambda i: abduction[i])
 
-    # Cross-check: the thumb base should also be the planar outlier of the bases.
     bases = [rig.bones[chain[0]].head for chain in arm.fingers]
     plane_thumb = _planar_outlier(bases)
     if plane_thumb != thumb:
-        warnings.append(
-            f"thumb signals disagree on {arm.wrist}: abduction={arm.fingers[thumb][0]}, "
-            f"planar={arm.fingers[plane_thumb][0]} (using abduction)"
+        raise CorrespondenceError(
+            f"thumb signals disagree on {arm.wrist}: abduction picks "
+            f"{arm.fingers[thumb][0]}, planar outlier picks {arm.fingers[plane_thumb][0]}"
         )
-    return thumb, warnings
+    return thumb
 
 
 def _planar_outlier(points: list[Vector3]) -> int:
@@ -312,16 +311,8 @@ def build_correspondence(
         )
 
     warnings: list[str] = []
-    src_frames = []
-    for arm in src_arms:
-        thumb, warn = _identify_thumb(src, arm)
-        warnings += warn
-        src_frames.append(_hand_frame(src, arm, thumb))
-    tgt_frames = []
-    for arm in tgt_arms:
-        thumb, warn = _identify_thumb(tgt, arm)
-        warnings += warn
-        tgt_frames.append(_hand_frame(tgt, arm, thumb))
+    src_frames = [_hand_frame(src, arm, _identify_thumb(src, arm)) for arm in src_arms]
+    tgt_frames = [_hand_frame(tgt, arm, _identify_thumb(tgt, arm)) for arm in tgt_arms]
 
     pairing, score, margin = _best_pairing(src_frames, tgt_frames)
     if force_pairing is not None:
@@ -335,8 +326,14 @@ def build_correspondence(
     maps: list[BoneMap] = []
     frames: dict[str, tuple[Matrix3, Matrix3]] = {}
     for tgt_idx, src_idx in enumerate(pairing):
+        src_arm, tgt_arm = src_arms[src_idx], tgt_arms[tgt_idx]
+        if len(src_arm.fingers) != len(tgt_arm.fingers):
+            raise CorrespondenceError(
+                f"finger-count mismatch pairing {tgt_arm.wrist} ({len(tgt_arm.fingers)}) "
+                f"with {src_arm.wrist} ({len(src_arm.fingers)})"
+            )
         arm_maps = _map_arm(
-            src, tgt, src_arms[src_idx], tgt_arms[tgt_idx],
+            src, tgt, src_arm, tgt_arm,
             src_frames[src_idx], tgt_frames[tgt_idx],
         )
         maps += arm_maps

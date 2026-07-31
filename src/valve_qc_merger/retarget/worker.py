@@ -63,7 +63,11 @@ class DiscoveryFailure(RuntimeError):
 # Phase 0 — scene setup
 # --------------------------------------------------------------------------- #
 def enable_bst() -> None:
-    """Enable Blender Source Tools and assert its scale is 1.0 (§3, §7.1)."""
+    """Enable Blender Source Tools and assert its import operator registered (§7.1).
+
+    The SMD import/export is 1:1 (the operator exposes no scale factor), so there is
+    no BST scale knob to check; the scene unit scale is asserted in ``clean_scene``.
+    """
     addon_utils.enable("io_scene_valvesource", default_set=True)
     if not hasattr(bpy.ops.import_scene, "smd"):
         raise AssertionFailure("Blender Source Tools did not register import_scene.smd")
@@ -106,6 +110,17 @@ def _only_new_armature(before: set[str]) -> Any:
     return new[0]
 
 
+def _mesh_names() -> set[str]:
+    return {o.name for o in bpy.data.objects if o.type == "MESH"}
+
+
+def _only_new_mesh(before: set[str]) -> Any:
+    new = [o for o in bpy.data.objects if o.type == "MESH" and o.name not in before]
+    if len(new) != 1:
+        raise AssertionFailure(f"expected exactly one new mesh, got {[o.name for o in new]}")
+    return new[0]
+
+
 class Scene:
     """Handles onto the imported, consolidated scene (§7.2)."""
 
@@ -125,44 +140,31 @@ def import_scene(job: dict[str, Any]) -> Scene:
     mesh *and* the original-hand mesh, plus the immutable ``reference`` rig
     carrying the reference mesh.
     """
-    before: set[str] = set()
-
+    arms0: set[str] = set()
+    meshes0 = _mesh_names()
     _import_smd(job["weapon_pv"], "NEW_ARMATURE")
-    src = _only_new_armature(before)
+    src = _only_new_armature(arms0)
     src.name = "SRC"
-    weapon_mesh = _newest_mesh_for(src)
+    weapon_mesh = _only_new_mesh(meshes0)
 
     # Attach the sequence animation onto the matching weapon rig (identical bones).
     _import_smd(job["sequence"]["path"], "APPEND")
     if not (src.animation_data and src.animation_data.action):
         raise AssertionFailure("animation did not attach to the source rig")
 
-    before = {a.name for a in _armatures()}
+    arms1, meshes1 = {a.name for a in _armatures()}, _mesh_names()
     _import_smd(job["original_hands"], "NEW_ARMATURE")
-    original_rig = _only_new_armature(before)
-    original_mesh = _newest_mesh_for(original_rig)
+    original_rig = _only_new_armature(arms1)
+    original_mesh = _only_new_mesh(meshes1)
     _rebind(original_mesh, src)  # pose the original hand by the animation
     bpy.data.objects.remove(original_rig, do_unlink=True)
 
-    before = {a.name for a in _armatures()}
+    arms2, meshes2 = {a.name for a in _armatures()}, _mesh_names()
     _import_smd(job["reference"], "NEW_ARMATURE")
-    reference = _only_new_armature(before)
-    reference_mesh = _newest_mesh_for(reference)
+    reference = _only_new_armature(arms2)
+    reference_mesh = _only_new_mesh(meshes2)
 
     return Scene(src, reference, weapon_mesh, original_mesh, reference_mesh)
-
-
-def _newest_mesh_for(armature: Any) -> Any:
-    """The mesh bound to ``armature`` by an Armature modifier."""
-    bound = [
-        o for o in bpy.data.objects
-        if o.type == "MESH"
-        and any(m.type == "ARMATURE" and m.object == armature for m in o.modifiers)
-    ]
-    if not bound:
-        raise AssertionFailure(f"no mesh bound to {armature.name}")
-    # BST imports one mesh per reference SMD; take the most recently added.
-    return bound[-1]
 
 
 def _rebind(mesh: Any, armature: Any) -> None:
@@ -339,6 +341,20 @@ def retarget(scene: Scene, corr: Correspondence) -> int:
     return end - start + 1
 
 
+def assert_no_mirrors(*armatures: Any) -> None:
+    """Abort if any bone rest matrix is mirrored (negative determinant, §7.3).
+
+    A mirrored duplicate would otherwise silently invert orientations downstream.
+    """
+    for arm in armatures:
+        for bone in arm.data.bones:
+            if bone.matrix_local.to_3x3().determinant() < 0.0:
+                raise DiscoveryFailure(
+                    f"{arm.name} bone {bone.name} has a mirrored (negative-determinant) "
+                    "rest matrix (§7.3)"
+                )
+
+
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
@@ -347,15 +363,17 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
     enable_bst()
     clean_scene(float(cfg["fps"]))
     scene = import_scene(job)
+    assert_no_mirrors(scene.reference, scene.src)
     classes = classify(scene, float(cfg["w_min"]))
     corr = correspond(scene, classes, bool(cfg.get("swap_arms", False)))
-    frames = retarget(scene, corr)
+    dry_run = bool(job.get("dry_run", False))
+    frames = 0 if dry_run else retarget(scene, corr)
 
     action = scene.src.animation_data.action
     frame_range = [int(action.frame_range[0]), int(action.frame_range[1])]
     return {
         "sequence": job["sequence"]["name"],
-        "status": "RETARGETED",
+        "status": "MAPPED" if dry_run else "RETARGETED",
         "frames": frames,
         "blender": bpy.app.version_string,
         "frame_range": frame_range,

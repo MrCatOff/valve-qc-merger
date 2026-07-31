@@ -62,16 +62,20 @@ class RetargetCommand(Command):
                 weapon_pv=args.weapon_pv, original_hands=args.original_hands,
                 only=_selected(args.sequences),
             )
-            assert_identical_node_tables(inputs)
-            blender = find_blender(config)
         except DriverError as exc:
             print(f"error: {exc}")
-            return EXIT_DISCOVERY
+            return EXIT_DISCOVERY  # bad/missing inputs
+        try:
+            assert_identical_node_tables(inputs)  # §5 gate
+            blender = find_blender(config)  # environment
+        except DriverError as exc:
+            print(f"error: {exc}")
+            return EXIT_ENV
 
         args.out.mkdir(parents=True, exist_ok=True)
         results: list[SequenceResult] = []
         for name in inputs.sequences:
-            result = run_sequence(blender, inputs, name, config, args.out)
+            result = run_sequence(blender, inputs, name, config, args.out, dry_run=args.dry_run)
             results.append(result)
             _print_result(result)
 

@@ -82,6 +82,19 @@ Remaining: **Phases 3, 4, 5, 6** (Phase 4 finger curl is the substantive next st
 2. **Hand orientation** — added anatomical absolute-orientation in Phase 2b: the
    spec named the rest-pose divergence risk (§7.4) but left the fix open; without
    it the T-pose bleeds through and the forearms splay along X.
+3. **Unmatched target finger joints are held, not redistributed** — §7.3.6 asks
+   for the source terminal joint's rotation to be distributed across extra target
+   joints proportionally to bone length; instead any target joint deeper than the
+   source chain keeps an identity basis (held). The hold is decided by chain
+   *depth*, not by the `*Nub` name. Fine for v_elite (only Nub tips are unmatched);
+   a real gap for a source with genuinely shorter fingers, to be closed if needed.
+4. **Hand-set closure is broader than the spec** — §5 closes the weighted set over
+   bones on paths *between* weighted bones; the implementation adds *all* non-weapon
+   ancestors up to the root. Equivalent for these rigs (the extra bones are the arm
+   root/forearm) and the disjointness assertion still guards correctness.
+5. **Anchor fallback** — the per-arm translation anchor is the forearm bone hanging
+   off the held root; if no such bone exists (a hierarchy deeper than
+   forearm-off-root) it falls back to anchoring the wrist directly.
 
 ## Not started
 - Phase 3 — weapon placement (default zero offset; hands come to the weapon).

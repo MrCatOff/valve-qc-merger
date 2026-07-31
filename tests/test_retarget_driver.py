@@ -18,6 +18,7 @@ from valve_qc_merger.retarget.driver import (
     assert_identical_node_tables,
     find_blender,
     resolve_inputs,
+    run_sequence,
 )
 
 
@@ -108,6 +109,43 @@ def test_config_roundtrip_and_unknown_key() -> None:
     assert restored.weapon_offset is None
     with pytest.raises(ValueError, match="unknown config keys"):
         RetargetConfig.from_dict({"nonsense": 1})
+
+
+def _fake_blender(tmp_path: Path, body: str) -> str:
+    """A stand-in 'blender' executable (a python script) for driver tests."""
+    script = tmp_path / "fake_blender"
+    script.write_text("#!/usr/bin/env python3\nimport sys, json\n" + body)
+    script.chmod(0o755)
+    return str(script)
+
+
+def _inputs(tmp_path: Path):  # type: ignore[no-untyped-def]
+    ref = tmp_path / "reference_hands.smd"
+    _write_smd(ref, _BIP, mesh=True)
+    return resolve_inputs(ref, _weapon_dir(tmp_path), "v_elite_anims/*.smd", only={"idle"})
+
+
+def test_run_sequence_fails_when_worker_writes_no_report(tmp_path: Path) -> None:
+    # Blender exits 0 but the worker crashed before writing a report: must NOT PASS.
+    blender = _fake_blender(tmp_path, "sys.exit(0)\n")
+    result = run_sequence(blender, _inputs(tmp_path), "idle", RetargetConfig(), tmp_path / "out")
+    assert not result.ok
+    assert result.report["status"] == "FAIL"
+    assert result.report["kind"] == "worker-crash"
+
+
+def test_run_sequence_threads_dry_run_into_the_job(tmp_path: Path) -> None:
+    body = (
+        "job = json.load(open(sys.argv[sys.argv.index('--job') + 1]))\n"
+        "json.dump({'status': 'MAPPED' if job['dry_run'] else 'RETARGETED',\n"
+        "           'dry_run': job['dry_run']}, open(job['report'], 'w'))\n"
+    )
+    blender = _fake_blender(tmp_path, body)
+    inputs = _inputs(tmp_path)
+    dry = run_sequence(blender, inputs, "idle", RetargetConfig(), tmp_path / "out", dry_run=True)
+    assert dry.ok and dry.report["dry_run"] is True and dry.report["status"] == "MAPPED"
+    wet = run_sequence(blender, inputs, "idle", RetargetConfig(), tmp_path / "out", dry_run=False)
+    assert wet.report["dry_run"] is False and wet.report["status"] == "RETARGETED"
 
 
 def test_cli_registers_retarget_command() -> None:

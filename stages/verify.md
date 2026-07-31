@@ -15,9 +15,10 @@ Toggle the original-hand mesh's eye icon in the outliner to compare.
 - `tmp/verify/reload/reload.blend`
 - `tmp/verify/shoot_right1/shoot_right1.blend`
 
-**Quick stills (no Blender).**
-- `tmp/verify/<seq>/ours_{front,side,top}.png` — our result, 3 angles
-- `tmp/verify/<seq>/original_front.png` — shipped hands, same camera, to compare
+**Quick stills (no Blender).** Files carry the rendered frame as a suffix
+(`_f<N>`), e.g. idle uses `_f4`, draw `_f16`, reload `_f69`, shoot_right1 `_f20`.
+- `tmp/verify/<seq>/ours_{front,side,top}_f<N>.png` — our result, 3 angles
+- `tmp/verify/<seq>/original_front_f<N>.png` — shipped hands, same camera
 - `tmp/verify/closeup/{ours,orig}_{front,side}.png` — grip close-ups
 
 Regenerate after code changes:

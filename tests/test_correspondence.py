@@ -125,15 +125,15 @@ def _two_arms(
          **{f"R_{k}": v for k, v in roles_tr.items()}}
 
 
-def test_two_arms_pair_by_chirality_not_world_position() -> None:
-    # Both source arms sit far on +X (same side of origin); pairing must use
-    # handedness, not an X sign.
+def test_two_arms_pair_by_side_offset_from_the_arm_centroid() -> None:
+    # Both source arms sit far out on +X (same side of the origin), so a raw X sign
+    # is useless; pairing uses each arm's direction from the two-arm centroid, which
+    # still separates them (SL at 20 is to the -side of SR at 25).
     src, tgt, src_roles, tgt_roles = _two_arms(
         tgt_left_chirality=1.0, src_left_chirality=1.0,
         src_left_trans=Vector3(20, 0, 0), src_right_trans=Vector3(25, 0, 0),
     )
     mapping = build_correspondence(src, {b.name for b in src}, tgt).as_dict()
-    # Target left (chirality +1) must map to the source left arm (chirality +1).
     assert mapping[tgt_roles["L_wrist"]] == src_roles["L_wrist"]
     assert mapping[tgt_roles["R_wrist"]] == src_roles["R_wrist"]
     assert mapping[tgt_roles["L_thumb"]] == src_roles["L_thumb"]
