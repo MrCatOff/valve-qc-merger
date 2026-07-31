@@ -353,8 +353,10 @@ def _auto_hand_offset(
     mapping: dict[str, str | None],
     tgt_rest: dict[str, Transform],
     src_rest: dict[str, Transform],
+    *,
+    fraction: float = 0.5,
 ) -> Vector3:
-    """Half-length centering: shift the hands back by half the hand-length surplus.
+    """Centering: shift the hands back by ``fraction`` of the hand-length surplus.
 
     Anchoring at the wrists aligns one END of two differently sized hands, so the
     whole length surplus lands on the finger side and the knuckles overshoot the
@@ -411,7 +413,7 @@ def _auto_hand_offset(
                      - sum(src_lengths) / len(src_lengths))
     if not diffs:
         return Vector3(0.0, 0.0, 0.0)
-    back = -(sum(diffs) / len(diffs)) / 2.0
+    back = -(sum(diffs) / len(diffs)) * fraction
     u = _vnorm(Vector3(sum(d.x for d in dirs), sum(d.y for d in dirs),
                        sum(d.z for d in dirs)))
     return Vector3(u.x * back, u.y * back, u.z * back)
@@ -469,7 +471,10 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
         chain_rl[wrist + "|" + chain[0]] = grip_ik.rest_locals(chain, tgt_parent, tgt_rest)
 
     if hand_offset is None:
-        hand_offset = _auto_hand_offset(by_wrist, thumb_of, mapping, tgt_rest, src_rest)
+        hand_offset = _auto_hand_offset(
+            by_wrist, thumb_of, mapping, tgt_rest, src_rest,
+            fraction=float(cfg.get("hand_center_fraction", 0.5)),
+        )
         auto_offset = hand_offset
 
     reference = scene.reference

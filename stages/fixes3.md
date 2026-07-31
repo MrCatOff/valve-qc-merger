@@ -175,3 +175,10 @@ the manual offset should be derivable. Replaced both:
 
 Test deliverable for the author: `tmp/test_draw/v_elite-PV.smd` +
 `tmp/test_draw/anims/draw.smd` (draw-only run, verify PASS 11/11, exit 0).
+
+**Fix 6 finalised (author approval):** the centering fraction is now a config
+knob — `hand_center_fraction`, default **0.5** (0 = wrist-anchored, 1 =
+fingertip-aligned), overridable per weapon alongside the explicit
+`hand_offset` escape hatch. Full 16-sequence run with the final algorithm:
+verify PASS (11/11), exit 0; auto offset [0.008, 0.810, 0.045];
+`tmp/verify/model/` regenerated.

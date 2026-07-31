@@ -1,20 +1,11 @@
 # v_elite pipeline config.
 #
-# hand_offset — constant world translation of the HANDS (each wrist anchors at
-# source wrist + offset) while the weapon stays exactly where its animation puts
-# it (§7.5 zero offset preserved: attachments, dual-gun sync and screen framing
-# untouched). This supersedes the earlier weapon_offset = [0, -0.6, 0], which
-# moved the gun and the contact targets with it — equivalent relative geometry,
-# but the shifted targets pulled the thumb forward along the slide instead of
-# wrapping it onto the true original contact point.
+# Hand placement is automatic (Fix 6, stages/fixes3.md): the hands anchor at
+# the source wrists, then shift back along the source rest grip's palm-forward
+# axis by hand_center_fraction of the hand-length difference (ours - the
+# original's; rest bone spans, mean over non-thumb fingers). The derived vector
+# is recorded per run as hand_offset_auto in the report.
 #
-# Derivation: the reference palm (wrist -> knuckle centroid) is 0.83-0.92 u
-# longer than the original hand's, and the posed palm-forward axis at idle is
-# world -Y; anchoring the wrist exactly on the source wrist therefore overshoots
-# the knuckles past the grip. Moving the hands +0.6 u back along +Y reseats the
-# grip at the reference knuckles. Raised 0.6 -> 1.2 on author feedback ("move
-# the hand further back"): candidates 0.6/0.9/1.2/1.5 rendered side by side;
-# 1.2 lands the wrist where the original's sits while the fingers still hook
-# the grip's front face (visual calibration per §8.4; see stages/fixes3.md).
-# hand_offset: omitted => automatic half-length centering (see stages/fixes3.md,
-# Fix 6). Set an explicit [x, y, z] here only to override the derived value.
+# Overrides, if the automatic seating ever needs art direction:
+#   hand_center_fraction = 0.5      # 0 = wrist-anchored .. 1 = fingertip-aligned
+#   hand_offset = [x, y, z]         # explicit world vector, bypasses the auto rule

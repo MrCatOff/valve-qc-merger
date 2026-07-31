@@ -78,7 +78,13 @@ class RetargetConfig:
     # wrist anchors at source wrist + hand_offset, while the weapon and the grip
     # contact points stay exactly where the animation puts them (§7.5 zero offset
     # preserved). Compensates a hand-size mismatch without re-authoring the gun.
+    # None => automatic: shift back along the source rest grip's palm-forward axis
+    # by hand_center_fraction of the hand-length difference (ours - original's).
     hand_offset: tuple[float, float, float] | None = None
+    # Fraction of the hand-length surplus the auto offset shifts back by. 0.5
+    # centres the two hands (the surplus splits evenly behind and ahead of the
+    # grip); 0.0 reproduces plain wrist anchoring, 1.0 aligns the fingertips.
+    hand_center_fraction: float = 0.5
     allow_rerig: bool = False  # §11.3
     frustum_policy: FrustumPolicy = "warn"  # §11.4
     finger_priority: tuple[str, ...] = ("pinky", "ring", "middle", "index", "thumb")  # §11.5
