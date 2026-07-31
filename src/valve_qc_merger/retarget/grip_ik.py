@@ -1,42 +1,33 @@
-"""Finger-curl grip solve (Phase 4, §7.6).
+"""Finger-curl grip solve (Phase 4, §7.6), hinge-constrained.
 
 Pure Python (no ``bpy``): curl each reference finger onto the weapon so its tip
-reaches where the *original* finger tip rested, in the already-retargeted pose.
-The reference fingers are longer than the original's, so targeting the (nearer)
-original tip makes the extra length wrap further around the grip instead of poking
-through it -- exactly the spec's intent.
+reaches where the *original* finger tip rested (plus any configured weapon
+offset), in the already-retargeted pose. The reference fingers are longer than
+the original's, so targeting the original tip makes the extra length wrap
+further around the grip instead of poking through it.
 
-The solver is Cyclic Coordinate Descent over the finger chain's joints, expressed
-in each joint's local ``matrix_basis`` (so it composes with Phase 2b's output):
+Anatomy is enforced structurally, not by per-axis Euler clamps: every joint of a
+finger rotates about ONE fixed world hinge axis (the hand's knuckle axis for the
+four fingers; the base-to-target arc plane normal for the thumb), with scalar
+flexion limits per joint depth. A free 3-DOF CCD swing clamped at generous
+per-axis bounds can and did fold joints sideways and backward into anatomically
+impossible shapes; a hinge cannot — the curl is planar by construction.
+
+The solver is Cyclic Coordinate Descent over the chain's hinge angles in each
+joint's local ``matrix_basis`` (so it composes with Phase 2b's output):
 
     world(bone) = world(parent) . rest_local(bone) . basis(bone)
 
-Each iteration swings each joint (distal-to-proximal) to bring the tip toward the
-target, then clamps the joint to its flexion-dominant limits. Warm-starting from
-the previous frame's solution keeps the motion temporally coherent and cheap.
+Warm-starting from the previous frame's angles keeps the motion temporally
+coherent and cheap.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
 
 from valve_qc_merger.models.geometry import Vector3
-from valve_qc_merger.transform import (
-    Transform,
-    euler_to_matrix,
-    mat3_multiply,
-    mat3_transpose,
-    matrix_to_euler,
-    rotation_between,
-)
-
-
-@dataclass(frozen=True)
-class Limit:
-    """Per-axis Euler limits in radians (min, max)."""
-
-    lo: tuple[float, float, float]
-    hi: tuple[float, float, float]
+from valve_qc_merger.transform import Matrix3, Transform, axis_angle, mat3_transpose
 
 
 def rest_locals(chain: list[str], parent_of: dict[str, str | None],
@@ -50,6 +41,14 @@ def rest_locals(chain: list[str], parent_of: dict[str, str | None],
     return out
 
 
+def _rot(m: Matrix3, v: Vector3) -> Vector3:
+    return Vector3(
+        m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z,
+        m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z,
+        m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z,
+    )
+
+
 def _fk(chain: list[str], base_parent: Transform, rest_local: dict[str, Transform],
         basis: dict[str, Transform]) -> dict[str, Transform]:
     posed: dict[str, Transform] = {}
@@ -60,14 +59,47 @@ def _fk(chain: list[str], base_parent: Transform, rest_local: dict[str, Transfor
     return posed
 
 
-def _clamp_basis(rot: object, limit: Limit) -> Transform:
-    euler = matrix_to_euler(rot)  # type: ignore[arg-type]
-    clamped = Vector3(
-        min(limit.hi[0], max(limit.lo[0], euler.x)),
-        min(limit.hi[1], max(limit.lo[1], euler.y)),
-        min(limit.hi[2], max(limit.lo[2], euler.z)),
-    )
-    return Transform(euler_to_matrix(clamped))
+def _norm(v: Vector3) -> Vector3:
+    length = v.length() or 1.0
+    return Vector3(v.x / length, v.y / length, v.z / length)
+
+
+def _project_off_axis(v: Vector3, axis: Vector3) -> Vector3:
+    d = v.x * axis.x + v.y * axis.y + v.z * axis.z
+    return Vector3(v.x - d * axis.x, v.y - d * axis.y, v.z - d * axis.z)
+
+
+def _signed_angle(a: Vector3, b: Vector3, axis: Vector3) -> float:
+    """Signed angle from ``a`` to ``b`` about ``axis`` (all in the same space)."""
+    cx = a.y * b.z - a.z * b.y
+    cy = a.z * b.x - a.x * b.z
+    cz = a.x * b.y - a.y * b.x
+    sin = cx * axis.x + cy * axis.y + cz * axis.z
+    cos = a.x * b.x + a.y * b.y + a.z * b.z
+    return math.atan2(sin, cos)
+
+
+def _bases_from_angles(
+    chain: list[str], dof: list[str], base_parent: Transform,
+    rest_local: dict[str, Transform], axis: Vector3, angles: dict[str, float],
+) -> dict[str, Transform]:
+    """Basis transforms realising hinge ``angles`` about the world ``axis``.
+
+    Each joint's local hinge axis is the world axis expressed in that joint's
+    seat frame (parent pose . rest local), so the hinge rides with the chain as
+    proximal joints curl — the anatomical behaviour.
+    """
+    basis: dict[str, Transform] = {b: Transform.identity() for b in chain}
+    prev = base_parent
+    for bone in chain:
+        seat = prev.compose(rest_local[bone])
+        theta = angles.get(bone, 0.0)
+        if bone in dof and theta:
+            local_axis = _norm(_rot(mat3_transpose(seat.rotation), axis))
+            basis[bone] = Transform(axis_angle(local_axis, theta))
+        posed = seat.compose(basis[bone])
+        prev = posed
+    return basis
 
 
 def solve_finger(
@@ -76,53 +108,96 @@ def solve_finger(
     base_parent_world: Transform,
     rest_local: dict[str, Transform],
     target_tip: Vector3,
-    limits: dict[str, Limit],
+    limits: dict[str, tuple[float, float]],
     *,
-    warm_start: dict[str, Transform] | None = None,
+    axis: Vector3,
+    warm_start: dict[str, float] | None = None,
+    max_step: float | None = None,
     iterations: int = 12,
     tolerance: float = 1e-3,
-) -> dict[str, Transform]:
-    """CCD-solve one finger chain; return the basis for every chain bone (§7.6).
+) -> tuple[dict[str, Transform], dict[str, float]]:
+    """Hinge-CCD one finger chain toward ``target_tip`` about a fixed world axis.
 
     ``chain`` is base..tip (the tip bone, e.g. a held ``*Nub``, is not a DOF);
-    ``dof`` is the curlable subset (bones with a source). The tip position is the
-    world head of the last chain bone.
-    """
-    basis: dict[str, Transform] = {b: Transform.identity() for b in chain}
-    if warm_start:
-        for b in chain:
-            if b in warm_start:
-                basis[b] = warm_start[b]
+    ``dof`` is the curlable subset; ``limits`` maps each DOF bone to a scalar
+    (lo, hi) hinge range in radians. Returns the basis for every chain bone plus
+    the solved hinge angles (the warm start for the next frame).
 
-    index = {b: i for i, b in enumerate(chain)}
+    ``max_step`` is the §7.6 temporal regularisation in hinge form: with a warm
+    start, no joint may move more than this many radians from its previous-frame
+    angle — a solution that legitimately wants to jump (e.g. the target crossing
+    the hinge line reverses its planar projection) is spread over several frames
+    instead of popping, at the cost of a transiently larger tip error.
+    """
+    axis = _norm(axis)
+    angles: dict[str, float] = {b: 0.0 for b in dof}
+    if warm_start:
+        for b in dof:
+            if b in warm_start:
+                lo, hi = limits.get(b, (-math.pi, math.pi))
+                angles[b] = min(hi, max(lo, warm_start[b]))
+
     for _ in range(iterations):
+        basis = _bases_from_angles(chain, dof, base_parent_world, rest_local, axis, angles)
         posed = _fk(chain, base_parent_world, rest_local, basis)
-        tip = posed[chain[-1]].translation
-        if tip.distance_to(target_tip) < tolerance:
+        if posed[chain[-1]].translation.distance_to(target_tip) < tolerance:
             break
         for joint in reversed(dof):
+            basis = _bases_from_angles(
+                chain, dof, base_parent_world, rest_local, axis, angles
+            )
             posed = _fk(chain, base_parent_world, rest_local, basis)
             tip = posed[chain[-1]].translation
             pivot = posed[joint].translation
-            to_tip = Vector3(tip.x - pivot.x, tip.y - pivot.y, tip.z - pivot.z)
-            to_target = Vector3(
-                target_tip.x - pivot.x, target_tip.y - pivot.y, target_tip.z - pivot.z
-            )
+            to_tip = _project_off_axis(Vector3(
+                tip.x - pivot.x, tip.y - pivot.y, tip.z - pivot.z), axis)
+            to_target = _project_off_axis(Vector3(
+                target_tip.x - pivot.x, target_tip.y - pivot.y, target_tip.z - pivot.z),
+                axis)
             if to_tip.length() < 1e-6 or to_target.length() < 1e-6:
                 continue
-            swing = rotation_between(to_tip, to_target)
+            delta = _signed_angle(_norm(to_tip), _norm(to_target), axis)
+            lo, hi = limits.get(joint, (-math.pi, math.pi))
+            angles[joint] = min(hi, max(lo, angles[joint] + delta))
 
-            i = index[joint]
-            parent_world = base_parent_world if i == 0 else posed[chain[i - 1]]
-            seat_rot = parent_world.compose(rest_local[joint]).rotation
-            # basis' = seat^-1 . swing . seat . basis  (encode the world swing locally)
-            new_rot = mat3_multiply(
-                mat3_transpose(seat_rot),
-                mat3_multiply(swing, mat3_multiply(seat_rot, basis[joint].rotation)),
-            )
-            limit = limits.get(joint)
-            basis[joint] = _clamp_basis(new_rot, limit) if limit else Transform(new_rot)
-    return basis
+    if warm_start is not None and max_step is not None:
+        for b in dof:
+            prev = warm_start.get(b)
+            if prev is not None:
+                angles[b] = min(prev + max_step, max(prev - max_step, angles[b]))
+
+    basis = _bases_from_angles(chain, dof, base_parent_world, rest_local, axis, angles)
+    return basis, angles
+
+
+def calibrate_axis_sign(
+    chain: list[str],
+    dof: list[str],
+    base_parent_world: Transform,
+    rest_local: dict[str, Transform],
+    target_tip: Vector3,
+    axis: Vector3,
+    *,
+    probe: float = 0.35,
+) -> float:
+    """+1.0 or -1.0: the hinge orientation whose positive curl approaches the target.
+
+    Probes a small positive curl at the base joint about ``+axis`` and ``-axis``
+    and keeps the direction that reduces tip error — self-calibrating, so no
+    handedness convention can flip a finger (or the thumb) the wrong way.
+    """
+    best_sign, best_err = 1.0, math.inf
+    for sign in (1.0, -1.0):
+        probe_axis = Vector3(axis.x * sign, axis.y * sign, axis.z * sign)
+        angles = {b: probe for b in dof}
+        basis = _bases_from_angles(
+            chain, dof, base_parent_world, rest_local, probe_axis, angles
+        )
+        posed = _fk(chain, base_parent_world, rest_local, basis)
+        err = posed[chain[-1]].translation.distance_to(target_tip)
+        if err < best_err:
+            best_sign, best_err = sign, err
+    return best_sign
 
 
 def tip_error(
@@ -134,4 +209,4 @@ def tip_error(
     return posed[chain[-1]].translation.distance_to(target_tip)
 
 
-__all__ = ["Limit", "rest_locals", "solve_finger", "tip_error"]
+__all__ = ["rest_locals", "solve_finger", "calibrate_axis_sign", "tip_error"]

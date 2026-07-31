@@ -64,6 +64,7 @@ def _anim(*, hand_drift: float = 0.0, rot_jump: bool = False) -> Smd:
 def _run(
     tmp_path: Path, mesh: Smd, anim: Smd,
     *, source: Smd | None = None, gun_bones: set[str] | None = None,
+    weapon_offset: tuple[float, float, float] | None = None,
 ) -> object:
     mesh_p = tmp_path / "model-PV.smd"
     anim_p = tmp_path / "idle.smd"
@@ -79,7 +80,7 @@ def _run(
     return verify_export(
         mesh_p, {"idle": anim_p}, ref_p,
         hand_bones={"root", "hand"}, anchor_bones={"root"},
-        source_anims=source_anims, gun_bones=gun_bones,
+        source_anims=source_anims, gun_bones=gun_bones, weapon_offset=weapon_offset,
     )
 
 
@@ -127,6 +128,34 @@ def test_weapon_rotated_from_source_fails(tmp_path: Path) -> None:
     res = _run(tmp_path, _mesh(), _anim(), source=source, gun_bones={"gun"})
     assert not res.ok  # type: ignore[attr-defined]
     assert res.checks["weapon_pose_matches_source"] is False  # type: ignore[attr-defined]
+
+
+def test_weapon_offset_is_compensated(tmp_path: Path) -> None:
+    # With a configured constant offset the exported gun sits shifted from the
+    # source; the pose check must accept exactly that shift and reject others.
+    # Rotation-free skeletons so a local shift on the gun is a rigid world shift.
+    shift = (0.0, -1.25, 0.0)
+
+    def _still(gun_dy: float) -> Smd:
+        frames = [
+            Frame(t, tuple(
+                BonePose(n.index,
+                         Vector3(_REST[n.index].x,
+                                 _REST[n.index].y + (gun_dy if n.index == 2 else 0.0),
+                                 _REST[n.index].z),
+                         Vector3(0, 0, 0))
+                for n in _UNI_NODES
+            ))
+            for t in range(4)
+        ]
+        return Smd(nodes=_UNI_NODES, frames=frames)
+
+    anim = _still(shift[1])
+    ok = _run(tmp_path, _mesh(), anim, source=_still(0.0), gun_bones={"gun"},
+              weapon_offset=shift)
+    assert ok.checks["weapon_pose_matches_source"] is True  # type: ignore[attr-defined]
+    bad = _run(tmp_path, _mesh(), anim, source=_still(0.0), gun_bones={"gun"})
+    assert bad.checks["weapon_pose_matches_source"] is False  # type: ignore[attr-defined]
 
 
 def test_euler_component_wrap_fails_even_when_rotation_is_continuous(tmp_path: Path) -> None:

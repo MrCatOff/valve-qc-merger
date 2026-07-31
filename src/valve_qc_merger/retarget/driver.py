@@ -270,6 +270,7 @@ def finalize_export(
         hand_bones=reference_bones, anchor_bones=anchor_bones,
         source_anims=dict(inputs.sequences),
         gun_bones=gun_bones,
+        weapon_offset=config.weapon_offset,
         epsilon=config.epsilon,
         euler_jump_threshold_degrees=config.euler_jump_threshold_degrees,
         geom_tolerance=config.geom_tolerance,

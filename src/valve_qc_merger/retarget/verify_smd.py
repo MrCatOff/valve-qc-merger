@@ -58,6 +58,7 @@ def verify_export(
     anchor_bones: set[str],
     source_anims: dict[str, Path] | None = None,
     gun_bones: set[str] | None = None,
+    weapon_offset: tuple[float, float, float] | None = None,
     epsilon: float = 1e-4,
     euler_jump_threshold_degrees: float = 120.0,
     geom_tolerance: float = 1e-3,
@@ -99,7 +100,8 @@ def verify_export(
             _check_frame_count(result, name, anim, source)
             if gun_bones:
                 _check_weapon_pose(
-                    result, name, anim, source, gun_bones, weapon_pos_tolerance, rot_tol
+                    result, name, anim, source, gun_bones, weapon_pos_tolerance, rot_tol,
+                    offset=weapon_offset,
                 )
 
     _check_reference_geometry_preserved(result, reference, mesh, geom_tolerance)
@@ -344,14 +346,17 @@ def _fk_worlds(smd: Smd, frame: Frame) -> dict[int, Transform]:
 def _check_weapon_pose(
     result: VerifyResult, name: str, anim: Smd, source: Smd,
     gun_bones: set[str], pos_tolerance: float, rot_tolerance: float,
+    offset: tuple[float, float, float] | None = None,
 ) -> None:
     """Every weapon bone's FK world pose equals the source's, per frame (§7.5/§7.7).
 
-    The zero-offset guarantee — the weapon stays exactly where its own animation
-    puts it — proven from the emitted text. This is the check that catches a broken
+    The placement guarantee — the weapon stays exactly where its own animation
+    puts it, rigidly translated by the configured constant ``offset`` if any —
+    proven from the emitted text. This is the check that catches a broken
     animation transfer (e.g. rotation keys that never took), which the hand-centric
     checks are structurally blind to.
     """
+    ox, oy, oz = offset or (0.0, 0.0, 0.0)
     anim_idx = {n.name: n.index for n in anim.nodes if n.name in gun_bones}
     src_idx = {n.name: n.index for n in source.nodes if n.name in gun_bones}
     shared = sorted(anim_idx.keys() & src_idx.keys())
@@ -367,7 +372,7 @@ def _check_weapon_pose(
             src = src_worlds[src_idx[bone]]
             dp = math.dist(
                 (ours.translation.x, ours.translation.y, ours.translation.z),
-                (src.translation.x, src.translation.y, src.translation.z),
+                (src.translation.x + ox, src.translation.y + oy, src.translation.z + oz),
             )
             dr = rotation_angle(mat3_multiply(ours.rotation, mat3_transpose(src.rotation)))
             if dp > pos_tolerance or dr > rot_tolerance:

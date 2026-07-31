@@ -168,3 +168,15 @@ validators (BVH)** and the §8 per-frame metric CSV. See `stages/phase34.md` and
    Euler *component* jump above π: after a correct unwrap every component is
    within π of the previous frame, so a larger jump can only mean the unwrap was
    skipped or broken.
+11. **Hinge-constrained grip solve, not §7.6's damped least squares** — each
+   finger curls about a single per-frame hinge axis (posed knuckle line; the
+   thumb uses its base→target arc plane) with scalar flexion limits and a
+   self-calibrated curl sign, instead of 3-DOF per-joint solves boxed by
+   per-axis Euler limits. The removed DOFs are exactly the anatomically invalid
+   ones; tip targeting, warm start and limit-relaxation survive. (fixes3.md)
+12. **Weapon offset implemented (§7.5/§11.2)** — `weapon_offset` is a single
+   constant world translation per weapon, applied to gun bones and grip targets
+   alike and compensated in the Phase 6 weapon-pose check. v_elite ships
+   `[0, -0.6, 0]` (configs/v_elite.toml) — derived from the 0.83–0.92 u
+   palm-length mismatch along the −Y palm-forward axis, visually calibrated
+   (§8.4).

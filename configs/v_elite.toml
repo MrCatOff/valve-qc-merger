@@ -1,0 +1,13 @@
+# v_elite pipeline config.
+#
+# weapon_offset — the §11.2 single constant rigid translation per weapon,
+# authorised 2026-07-31 (grip-quality pass; see stages/fixes3.md).
+# Derivation: the reference palm (wrist -> knuckle centroid) is 0.83-0.92 u
+# longer than the original hand's (L/R), and the posed palm-forward axis at idle
+# is world -Y (-0.998/-0.999 for both hands). Anchoring the wrist on the source
+# wrist therefore overshoots the knuckles past the grip; sliding the weapon (and
+# the grip contact targets with it) along -Y reseats the grip at the reference
+# knuckles. Candidates 0 / -0.6 / -0.9 / -1.2 were rendered side by side
+# (§8.4 one-time visual calibration); -0.6 best matches the original's wrap
+# depth — deeper looks claw-like, further looks like the hand chasing the gun.
+weapon_offset = [0.0, -0.6, 0.0]

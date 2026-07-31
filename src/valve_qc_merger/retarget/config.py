@@ -27,14 +27,6 @@ FrustumPolicy = str  # "warn" | "fail" | "trim"
 
 
 @dataclass(frozen=True)
-class JointLimit:
-    """Per-axis Euler rotation limits, in degrees (§7.6)."""
-
-    min: tuple[float, float, float]
-    max: tuple[float, float, float]
-
-
-@dataclass(frozen=True)
 class SolverConfig:
     """Grip-solve (Phase 4) weights, tolerances and limits (§7.6, §8)."""
 
@@ -47,13 +39,18 @@ class SolverConfig:
     tau_pos: float = 0.15  # tip error / distal phalanx length (§7.6)
     tau_depth: float = 0.05  # over-penetration slack vs the original hand (§7.6)
     contact_band: tuple[float, float] = (0.5, 2.0)  # overlap_ref / overlap_src (§7.6)
-    # Joint limits (degrees). Generous by default: the tip target is the *original*
-    # finger's contact point, so the natural curl to reach it is already plausible.
-    # Tight flexion-dominant limits assume a known local flexion axis, which varies
-    # per rig; that is a §8.4 calibration, not a safe default.
-    limit_mcp: JointLimit = JointLimit((-150.0, -150.0, -150.0), (150.0, 150.0, 150.0))
-    limit_pip: JointLimit = JointLimit((-150.0, -150.0, -150.0), (150.0, 150.0, 150.0))
-    limit_dip: JointLimit = JointLimit((-150.0, -150.0, -150.0), (150.0, 150.0, 150.0))
+    # Scalar hinge limits (degrees) per joint depth. The solver constrains each
+    # finger to a single flexion axis (the hand's knuckle axis; the thumb gets its
+    # own arc plane), so anatomy is structural and these ranges are true flexion
+    # bounds rather than per-axis Euler boxes.
+    hinge_mcp: tuple[float, float] = (-25.0, 100.0)
+    hinge_pip: tuple[float, float] = (0.0, 110.0)
+    hinge_dip: tuple[float, float] = (0.0, 90.0)
+    hinge_thumb: tuple[float, float] = (-60.0, 90.0)
+    # §7.6 temporal regularisation, hinge form: max per-frame joint travel
+    # (degrees). Real finger motion stays far below this; a solution that wants
+    # to teleport (target crossing the hinge line) is spread over frames instead.
+    max_step_degrees: float = 35.0
 
 
 @dataclass(frozen=True)
@@ -125,13 +122,10 @@ class RetargetConfig:
 
 def _solver_from_dict(data: dict[str, Any]) -> SolverConfig:
     kwargs = dict(data)
-    for axis_key in ("limit_mcp", "limit_pip", "limit_dip"):
-        if axis_key in kwargs:
-            limit = kwargs[axis_key]
-            kwargs[axis_key] = JointLimit(tuple(limit["min"]), tuple(limit["max"]))
-    if "contact_band" in kwargs:
-        kwargs["contact_band"] = tuple(kwargs["contact_band"])
+    for pair_key in ("contact_band", "hinge_mcp", "hinge_pip", "hinge_dip", "hinge_thumb"):
+        if pair_key in kwargs:
+            kwargs[pair_key] = tuple(kwargs[pair_key])
     return SolverConfig(**kwargs)
 
 
-__all__ = ["RetargetConfig", "SolverConfig", "CameraConfig", "JointLimit"]
+__all__ = ["RetargetConfig", "SolverConfig", "CameraConfig"]
