@@ -145,3 +145,33 @@ run PASS (11/11) exit 0, idle tip error mean 0.216 u; final renders in
 side by side — 1.2 lands the wrist where the original's sits while the fingers
 still hook the grip's front face (1.5 loses the wrap). Full run PASS (11/11),
 exit 0; idle tip error mean 0.233 u, max 0.698 u (max improved from 0.99).
+
+## Fix 6 — algorithm change (author decision): auto half-length centering + finger direction transfer, IK removed
+
+Author conclusions after reviewing renders: the IK wrap "breaks fingers", and
+the manual offset should be derivable. Replaced both:
+
+1. **Auto hand offset** (default when `hand_offset` is absent): shift the hands
+   back along the source rest pose's palm-forward axis by **half** the
+   hand-length difference (mean per non-thumb finger of wrist→base + segment
+   spans, rest positions, ours − original's). Rationale: wrist-anchoring aligns
+   one END of two differently sized hands; half-length centering aligns their
+   CENTRES, splitting the surplus evenly behind and ahead of the grip. The
+   direction comes from the source REST pose (the weapon's authored grip), not
+   a posed frame — a posed frame made the offset sequence-dependent (draw
+   starts with the hands swung away). v_elite derives [0.008, 0.810, 0.045]
+   (half of the 1.62 u measured length difference), recorded per run as
+   `hand_offset_auto`; a manual `hand_offset` still overrides.
+2. **Finger direction transfer, no solver**: every finger joint is aimed so its
+   segment (head→child head) points exactly where the source finger's
+   corresponding segment points. The fingers copy the original grip pose
+   verbatim; longer reference fingers extend a little further along the same
+   directions. Joints deeper than the source chain (Nub tips and the distal
+   joint whose source has no deeper child) keep identity basis and follow their
+   parent straight. The hinge IK (grip_ik) is no longer called from the worker;
+   the module and its tests remain for reference. Report metric is now
+   `joint_drift` (positional surplus of the deepest mapped joint — expected,
+   not an error).
+
+Test deliverable for the author: `tmp/test_draw/v_elite-PV.smd` +
+`tmp/test_draw/anims/draw.smd` (draw-only run, verify PASS 11/11, exit 0).

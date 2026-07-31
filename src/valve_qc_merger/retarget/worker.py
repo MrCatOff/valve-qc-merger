@@ -347,15 +347,74 @@ def _finger_chains(
     return chains
 
 
-def _finger_limits(cfg: dict[str, Any]) -> tuple[list[tuple[float, float]], tuple[float, float]]:
-    """Scalar hinge limits (rad): per-depth [MCP, PIP, DIP] plus the thumb's (§7.6)."""
-    solver = cfg["solver"]
+def _auto_hand_offset(
+    by_wrist: dict[str, list[tuple[list[str], list[str]]]],
+    thumb_of: dict[str, str],
+    mapping: dict[str, str | None],
+    tgt_rest: dict[str, Transform],
+    src_rest: dict[str, Transform],
+) -> Vector3:
+    """Half-length centering: shift the hands back by half the hand-length surplus.
 
-    def lim(pair: Any) -> tuple[float, float]:
-        return (math.radians(float(pair[0])), math.radians(float(pair[1])))
+    Anchoring at the wrists aligns one END of two differently sized hands, so the
+    whole length surplus lands on the finger side and the knuckles overshoot the
+    grip. Shifting back along palm-forward by (ours - original)/2 aligns the two
+    hands' CENTRES instead — the surplus splits evenly behind the grip (longer
+    palm) and ahead of it (longer fingers). Author-approved rule; it reproduced
+    the previously hand-calibrated offset to within a few percent.
 
-    depth = [lim(solver["hinge_mcp"]), lim(solver["hinge_pip"]), lim(solver["hinge_dip"])]
-    return depth, lim(solver["hinge_thumb"])
+    Hand length per non-thumb finger = wrist->base span + chain segment spans,
+    measured on REST positions (pose-invariant). The direction is the SOURCE
+    rest pose's palm-forward axis (source wrist -> source knuckle centroid):
+    the weapon's authored grip pose, identical for every sequence — deriving it
+    from a posed frame would make the offset sequence-dependent (draw starts
+    with the hands swung away).
+    """
+    diffs: list[float] = []
+    dirs: list[Vector3] = []
+    for wrist, group in by_wrist.items():
+        src_wrist = mapping.get(wrist)
+        if src_wrist is None:
+            continue
+        tgt_lengths: list[float] = []
+        src_lengths: list[float] = []
+        src_base_positions: list[Vector3] = []
+        for chain, _dof in group:
+            if chain[0] == thumb_of[wrist]:
+                continue
+            length = tgt_rest[chain[0]].translation.distance_to(
+                tgt_rest[wrist].translation)
+            for prev, bone in zip(chain, chain[1:], strict=False):
+                length += tgt_rest[bone].translation.distance_to(
+                    tgt_rest[prev].translation)
+            tgt_lengths.append(length)
+            src_chain = [s for s in (mapping.get(b) for b in chain) if s is not None]
+            if len(src_chain) < 2:
+                continue
+            src_base_positions.append(src_rest[src_chain[0]].translation)
+            s_len = src_rest[src_chain[0]].translation.distance_to(
+                src_rest[src_wrist].translation)
+            for sprev, sbone in zip(src_chain, src_chain[1:], strict=False):
+                s_len += src_rest[sbone].translation.distance_to(
+                    src_rest[sprev].translation)
+            src_lengths.append(s_len)
+        if not tgt_lengths or not src_lengths or not src_base_positions:
+            continue
+        cen = Vector3(
+            sum(p.x for p in src_base_positions) / len(src_base_positions),
+            sum(p.y for p in src_base_positions) / len(src_base_positions),
+            sum(p.z for p in src_base_positions) / len(src_base_positions),
+        )
+        w = src_rest[src_wrist].translation
+        dirs.append(_vnorm(Vector3(cen.x - w.x, cen.y - w.y, cen.z - w.z)))
+        diffs.append(sum(tgt_lengths) / len(tgt_lengths)
+                     - sum(src_lengths) / len(src_lengths))
+    if not diffs:
+        return Vector3(0.0, 0.0, 0.0)
+    back = -(sum(diffs) / len(diffs)) / 2.0
+    u = _vnorm(Vector3(sum(d.x for d in dirs), sum(d.y for d in dirs),
+                       sum(d.z for d in dirs)))
+    return Vector3(u.x * back, u.y * back, u.z * back)
 
 
 def _identify_thumb_chain(chains: list[list[str]], tgt_rest: dict[str, Transform]) -> int:
@@ -381,24 +440,6 @@ def _vnorm(v: Vector3) -> Vector3:
     return Vector3(v.x / length, v.y / length, v.z / length)
 
 
-def _vcross(a: Vector3, b: Vector3) -> Vector3:
-    return Vector3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
-
-
-def _knuckle_axis(bases: list[Vector3]) -> Vector3:
-    """Direction between the two farthest finger bases — the flexion hinge axis."""
-    best = Vector3(1.0, 0.0, 0.0)
-    best_d = -1.0
-    for i in range(len(bases)):
-        for j in range(i + 1, len(bases)):
-            v = Vector3(bases[i].x - bases[j].x, bases[i].y - bases[j].y,
-                        bases[i].z - bases[j].z)
-            d = v.length()
-            if d > best_d:
-                best_d, best = d, v
-    return _vnorm(best)
-
-
 def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[str, Any]:
     """Key the reference skeleton: rotation retarget (§7.4) + grip solve (§7.6)."""
     _assert_identity_world(scene.src, scene.reference)
@@ -410,11 +451,9 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
     src_names = {b.name for b in scene.src.data.bones}
 
     chains = _finger_chains(mapping, tgt_parent, corr)
-    depth_limits, thumb_limit = _finger_limits(cfg)
-    offset = cfg.get("weapon_offset")
-    target_shift = Vector3(*offset) if offset else Vector3(0.0, 0.0, 0.0)
     hoff = cfg.get("hand_offset")
-    hand_offset = Vector3(*hoff) if hoff else None
+    hand_offset = Vector3(*hoff) if hoff else None  # None => auto (half-length centering)
+    auto_offset: Vector3 | None = None
 
     # Group the chains per wrist and mark each wrist's thumb (most abducted base).
     by_wrist: dict[str, list[tuple[list[str], list[str]]]] = {}
@@ -426,18 +465,12 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
         thumb_of[wrist] = group[idx][0][0]
 
     chain_rl: dict[str, dict[str, Transform]] = {}
-    chain_lim: dict[str, dict[str, tuple[float, float]]] = {}
-    for wrist, chain, dof in chains:
-        key = wrist + "|" + chain[0]
-        chain_rl[key] = grip_ik.rest_locals(chain, tgt_parent, tgt_rest)
-        if chain[0] == thumb_of[wrist]:
-            chain_lim[key] = {b: thumb_limit for b in dof}
-        else:
-            chain_lim[key] = {
-                b: depth_limits[min(k, len(depth_limits) - 1)] for k, b in enumerate(dof)
-            }
-    iters = int(cfg["solver"]["max_iterations"])
-    max_step = math.radians(float(cfg["solver"]["max_step_degrees"]))
+    for wrist, chain, _dof in chains:
+        chain_rl[wrist + "|" + chain[0]] = grip_ik.rest_locals(chain, tgt_parent, tgt_rest)
+
+    if hand_offset is None:
+        hand_offset = _auto_hand_offset(by_wrist, thumb_of, mapping, tgt_rest, src_rest)
+        auto_offset = hand_offset
 
     reference = scene.reference
     for pose_bone in reference.pose.bones:
@@ -448,10 +481,7 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
     scene_ctx = bpy.context.scene
     scene_ctx.frame_start, scene_ctx.frame_end = start, end
 
-    warm: dict[str, dict[str, float]] = {}
-    curl_sign: dict[str, float] = {}
-    prev_axis: dict[str, Vector3] = {}
-    tip_errors: list[float] = []
+    aim_errors: list[float] = []
     for frame in range(start, end + 1):
         scene_ctx.frame_set(frame)
         src_pose = {name: _xf(scene.src.pose.bones[name].matrix) for name in src_names}
@@ -460,114 +490,66 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
             orient=corr.frames, hand_offset=hand_offset,
         )
         posed = world_from_bases(tgt_rest, tgt_parent, bases)  # open-hand world (wrist fixed)
-        # Per-arm hinge axis: the posed knuckle line of the non-thumb finger bases,
-        # oriented away from the thumb so its sign is stable across frames.
-        knuckle: dict[str, Vector3] = {}
-        for wrist, group in by_wrist.items():
-            non_thumb = [posed[chain[0]].translation for chain, _ in group
-                         if chain[0] != thumb_of[wrist]]
-            axis = _knuckle_axis(non_thumb)
-            wrist_pos = posed[wrist].translation
-            thumb_pos = posed[thumb_of[wrist]].translation
-            to_thumb = Vector3(thumb_pos.x - wrist_pos.x, thumb_pos.y - wrist_pos.y,
-                               thumb_pos.z - wrist_pos.z)
-            if axis.x * to_thumb.x + axis.y * to_thumb.y + axis.z * to_thumb.z > 0.0:
-                axis = Vector3(-axis.x, -axis.y, -axis.z)
-            knuckle[wrist] = axis
-        for wrist, chain, dof in chains:
-            key = wrist + "|" + chain[0]
-            base_parent_world = posed[wrist]
-            rl = chain_rl[key]
-            tip = _v3(scene.src.pose.bones[mapping[dof[-1]]].tail)
-            target_tip = Vector3(tip.x + target_shift.x, tip.y + target_shift.y,
-                                 tip.z + target_shift.z)
-            # Abduction aim: the solver starts each finger from the reference
-            # REST fan, so without correction the fingers keep the rest splay
-            # instead of the original grip's tight spacing. Aim each finger's
-            # base segment at the source finger's posed direction (the hand
-            # already adopts the source's absolute orientation, so world
-            # directions are directly comparable); the hinge curls on top.
-            pre: dict[str, Transform] | None = None
-            src_base = mapping.get(chain[0])
-            src_next = mapping.get(chain[1]) if len(chain) >= 2 else None
-            seat0 = base_parent_world.compose(rl[chain[0]])
-            if src_base is not None and src_next is not None:
-                p0 = seat0.translation
-                p1 = seat0.compose(rl[chain[1]]).translation
-                d_ours = Vector3(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z)
-                # Segment direction = head-to-child-head; BST-imported bones have
-                # synthetic tails (SMD stores none), so .tail is meaningless.
-                sb = scene.src.pose.bones[src_base].head
-                sn = scene.src.pose.bones[src_next].head
-                d_src = Vector3(sn[0] - sb[0], sn[1] - sb[1], sn[2] - sb[2])
-                if d_ours.length() > 1e-6 and d_src.length() > 1e-6:
-                    aim = rotation_between(_vnorm(d_ours), _vnorm(d_src))
-                    pre_rot = mat3_multiply(
-                        mat3_transpose(seat0.rotation),
-                        mat3_multiply(aim, seat0.rotation),
-                    )
-                    pre = {chain[0]: Transform(pre_rot)}
-            if chain[0] == thumb_of[wrist]:
-                # Thumb: hinge in the base-to-target arc plane (planar curl straight
-                # toward its own contact point — cannot fold the wrong way). The
-                # plane normal is recomputed per frame, so near-collinear frames
-                # could flip its hemisphere and pop the joint by ~180°: keep the
-                # previous frame's axis when degenerate and hemisphere-align to it
-                # otherwise, so the hinge turns continuously across the sequence.
-                walk = base_parent_world
-                for b in chain:
-                    walk = walk.compose(rl[b])
-                    if pre is not None and b in pre:
-                        walk = walk.compose(pre[b])
-                base = seat0.translation
-                open_tip = walk.translation
-                axis = _vcross(
-                    Vector3(open_tip.x - base.x, open_tip.y - base.y, open_tip.z - base.z),
-                    Vector3(target_tip.x - base.x, target_tip.y - base.y,
-                            target_tip.z - base.z),
-                )
-                if axis.length() < 1e-6:
-                    axis = prev_axis.get(key, knuckle[wrist])
-                else:
-                    axis = _vnorm(axis)
-                previous = prev_axis.get(key)
-                if previous is not None and (
-                    axis.x * previous.x + axis.y * previous.y + axis.z * previous.z
-                ) < 0.0:
-                    axis = Vector3(-axis.x, -axis.y, -axis.z)
-                prev_axis[key] = axis
-            else:
-                axis = knuckle[wrist]
-            if key not in curl_sign:
-                curl_sign[key] = grip_ik.calibrate_axis_sign(
-                    chain, dof, base_parent_world, chain_rl[key], target_tip, axis,
-                    pre_basis=pre,
-                )
-            sign = curl_sign[key]
-            axis = Vector3(axis.x * sign, axis.y * sign, axis.z * sign)
-            finger, angles = grip_ik.solve_finger(
-                chain, dof, base_parent_world, chain_rl[key], target_tip,
-                chain_lim[key], axis=axis, pre_basis=pre, warm_start=warm.get(key),
-                max_step=max_step, iterations=iters,
-            )
-            warm[key] = angles
-            bases.update(finger)
-            tip_errors.append(
-                grip_ik.tip_error(chain, base_parent_world, chain_rl[key], finger, target_tip)
-            )
+        # Finger direction transfer: no solver. Each finger joint is aimed so its
+        # segment (head -> child head) points exactly where the source finger's
+        # corresponding segment points — the fingers copy the original grip pose
+        # verbatim; the longer reference fingers simply extend a little further
+        # along the same directions. Joints deeper than the source chain (the
+        # *Nub tips and the distal joint whose source has no deeper child) keep
+        # an identity basis and follow their parent straight.
+        for wrist, chain, _dof in chains:
+            rl = chain_rl[wrist + "|" + chain[0]]
+            walk = posed[wrist]
+            pos_of: dict[str, Vector3] = {}
+            for i, bone in enumerate(chain):
+                seat = walk.compose(rl[bone])
+                pos_of[bone] = seat.translation
+                basis = Transform.identity()
+                src_bone = mapping.get(bone)
+                src_child = mapping.get(chain[i + 1]) if i + 1 < len(chain) else None
+                if src_bone is not None and src_child is not None:
+                    p0 = seat.translation
+                    p1 = seat.compose(rl[chain[i + 1]]).translation
+                    d_ours = Vector3(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z)
+                    # Segment direction = head-to-child-head; BST-imported bones
+                    # have synthetic tails (SMD stores none), so .tail is useless.
+                    sb = scene.src.pose.bones[src_bone].head
+                    sn = scene.src.pose.bones[src_child].head
+                    d_src = Vector3(sn[0] - sb[0], sn[1] - sb[1], sn[2] - sb[2])
+                    if d_ours.length() > 1e-6 and d_src.length() > 1e-6:
+                        aim = rotation_between(_vnorm(d_ours), _vnorm(d_src))
+                        basis = Transform(mat3_multiply(
+                            mat3_transpose(seat.rotation),
+                            mat3_multiply(aim, seat.rotation),
+                        ))
+                bases[bone] = basis
+                walk = seat.compose(basis)
+            deepest = next((b for b in reversed(chain) if mapping.get(b) is not None), None)
+            if deepest is not None:
+                ours_p = pos_of[deepest]
+                sp = scene.src.pose.bones[mapping[deepest]].head
+                aim_errors.append(math.dist(
+                    (ours_p.x, ours_p.y, ours_p.z), (sp[0], sp[1], sp[2])
+                ))
         for name, basis in bases.items():
             pose_bone = reference.pose.bones[name]
             pose_bone.matrix_basis = _bmatrix(basis)
             pose_bone.keyframe_insert("location", frame=frame)
             pose_bone.keyframe_insert("rotation_euler", frame=frame)
 
-    n = len(tip_errors) or 1
+    n = len(aim_errors) or 1
     return {
         "frames": end - start + 1,
+        "hand_offset_auto": (
+            [auto_offset.x, auto_offset.y, auto_offset.z] if auto_offset else None
+        ),
         "grip": {
+            "mode": "direction-transfer",
             "fingers_per_frame": len(chains),
-            "tip_error_mean": sum(tip_errors) / n,
-            "tip_error_max": max(tip_errors, default=0.0),
+            # Distance of our deepest mapped finger joint from the source's — the
+            # expected finger-length surplus, not a solve error.
+            "joint_drift_mean": sum(aim_errors) / n,
+            "joint_drift_max": max(aim_errors, default=0.0),
         },
     }
 
@@ -828,6 +810,7 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "weapon_offset": cfg.get("weapon_offset"),
         "hand_offset": cfg.get("hand_offset"),
+        "hand_offset_auto": solved.get("hand_offset_auto"),
         "frames": solved["frames"],
         "grip": solved["grip"],
         "blender": bpy.app.version_string,

@@ -16,4 +16,5 @@
 # the hand further back"): candidates 0.6/0.9/1.2/1.5 rendered side by side;
 # 1.2 lands the wrist where the original's sits while the fingers still hook
 # the grip's front face (visual calibration per §8.4; see stages/fixes3.md).
-hand_offset = [0.0, 1.2, 0.0]
+# hand_offset: omitted => automatic half-length centering (see stages/fixes3.md,
+# Fix 6). Set an explicit [x, y, z] here only to override the derived value.
