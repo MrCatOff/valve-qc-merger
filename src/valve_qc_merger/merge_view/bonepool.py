@@ -1,23 +1,32 @@
 """Bone pooling for merge-view (spec §3.7): beat the 127-bone budget.
 
-Only one weapon draws at a time, so unrelated weapons can share bone slots.
-Canonical hand bones (the shared set) keep their names; every other bone maps
-to a pooled slot ``Bone_WPNJ{n}_TYPE1``. The invariant that makes the merged
-node table well-formed is enforced *by construction*: a slot is created under
-exactly one parent key (either another slot or a shared bone name), and a
-model may only claim a free slot whose parent key matches its bone's parent —
-so no slot ever needs two different parents.
+Only one weapon draws at a time, so unrelated weapons share bone slots named
+``Bone_WPNJ{n}_TYPE1``; canonical hand bones (the shared set) keep their names.
 
-Applying a plan is pure renaming: because slot parentage mirrors the model's
-own parentage, hierarchy and animation data survive untouched (no reparenting,
-trivially pose-exact).
+Slot selection, per bone in topological order (prior-art rule):
+
+1. prefer a free slot whose recorded parent key equals the bone's natural
+   parent key — costs nothing;
+2. else claim ANY free slot whose parent key is available to this model (a
+   slot it already claimed, a shared bone, or the root) — the bone is then
+   REPARENTED under that parent when the plan is applied (exact, per frame);
+3. else grow the pool with a new slot under the natural parent key.
+
+Because bones are processed parents-first, a claimed slot's parent was always
+claimed by an earlier bone, which can never be a descendant — so the apply
+step's reparents cannot form cycles. The merged node table sees exactly one
+parent per slot by construction.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from valve_qc_merger.merge_view.discovery import ModelInput
+from valve_qc_merger.merge_view.skeleton_ops import rename_bones, reparent_bone
+
 SLOT_FORMAT = "Bone_WPNJ{n}_TYPE1"
+_ROOT_KEY = ""  # parent key of root-level slots (under the merged Bip01)
 
 
 @dataclass
@@ -50,17 +59,15 @@ def _topological(bones: dict[str, str | None]) -> list[str]:
     return order
 
 
+def _slot_number(slot: str) -> int:
+    return int(slot.split("WPNJ")[1].split("_")[0])
+
+
 def plan_pool(
     model_bones: dict[str, dict[str, str | None]],
     shared: set[str],
 ) -> PoolPlan:
-    """Assign every non-shared bone of every model to a pooled slot.
-
-    ``model_bones`` maps model name to its ``{bone: parent}`` table (from the
-    canonicalised reference mesh). The largest model is processed first so it
-    shapes the pool; slots are reused across models whenever the parent key
-    matches, and the pool grows only when no compatible slot is free.
-    """
+    """Assign every non-shared bone of every model to a pooled slot."""
     plan = PoolPlan()
     counter = 0
 
@@ -78,26 +85,79 @@ def plan_pool(
     for model_name, bones in ordered_models:
         assignment: dict[str, str] = {}
         used: set[str] = set()
+        model_shared = shared & set(bones)
         for bone in _topological(bones):
             if bone in shared:
                 continue
             parent = bones.get(bone)
             if parent is None:
-                parent_key = ""  # a true root pools under the merged root
+                natural_key = _ROOT_KEY
             elif parent in shared:
-                parent_key = parent
+                natural_key = parent
             else:
-                parent_key = assignment.get(parent, parent)
-            candidate = next(
-                (slot for slot, slot_parent in sorted(plan.slot_parent.items())
-                 if slot_parent == parent_key and slot not in used),
-                None,
+                natural_key = assignment[parent]
+            free = sorted(
+                (slot for slot in plan.slot_parent if slot not in used),
+                key=_slot_number,
             )
-            slot = candidate or new_slot(parent_key)
+            # 1. exact parent-key match: no reparent needed on apply.
+            slot = next(
+                (s for s in free if plan.slot_parent[s] == natural_key), None
+            )
+            if slot is None:
+                # 2. any free slot whose parent key this model can satisfy.
+                claimed = set(assignment.values())
+                available = claimed | model_shared | {_ROOT_KEY}
+                slot = next(
+                    (s for s in free if plan.slot_parent[s] in available), None
+                )
+            if slot is None:
+                slot = new_slot(natural_key)
             assignment[bone] = slot
             used.add(slot)
         plan.assignments[model_name] = assignment
     return plan
 
 
-__all__ = ["PoolPlan", "plan_pool", "SLOT_FORMAT"]
+def apply_pool(
+    model: ModelInput,
+    assignment: dict[str, str],
+    slot_parent: dict[str, str],
+    *,
+    root: str = "Bip01",
+) -> list[str]:
+    """Rename a model's bones to their slots and reparent where keys differ.
+
+    Returns the list of reparented slots. Renames apply to every SMD and the
+    QC's bone references; reparents are per-frame exact (skeleton_ops).
+    """
+    slot_of = dict(assignment)
+    reparented: list[str] = []
+    for old, new in sorted(slot_of.items()):
+        model.qc_text = model.qc_text.replace(f'"{old}"', f'"{new}"')
+
+    for smd in {**model.meshes, **model.anims}.values():
+        rename_bones(smd, slot_of)
+        name_parent = {
+            n.name: next((p.name for p in smd.nodes if p.index == n.parent), None)
+            for n in smd.nodes
+        }
+        present = set(name_parent)
+        for bone in sorted(slot_of, key=lambda b: _slot_number(slot_of[b])):
+            slot = slot_of[bone]
+            if slot not in present:
+                continue
+            expected = slot_parent[slot] or root
+            if name_parent.get(slot) != expected and expected in present:
+                reparent_bone(smd, slot, expected)
+                name_parent = {
+                    n.name: next(
+                        (p.name for p in smd.nodes if p.index == n.parent), None)
+                    for n in smd.nodes
+                }
+                if slot not in reparented:
+                    reparented.append(slot)
+    return reparented
+
+
+__all__ = ["PoolPlan", "apply_pool", "plan_pool", "SLOT_FORMAT"]

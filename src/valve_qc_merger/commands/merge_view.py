@@ -13,9 +13,12 @@ import json
 from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
+from valve_qc_merger.merge_view.bodygroups import ModelParts, collapse_bodygroups
+from valve_qc_merger.merge_view.bonepool import apply_pool, plan_pool
 from valve_qc_merger.merge_view.canonicalize import canonicalize_model
 from valve_qc_merger.merge_view.discovery import (
     MergeViewError,
+    ModelInput,
     discover_models,
     load_model,
     sanitize_model_dir,
@@ -26,6 +29,7 @@ from valve_qc_merger.merge_view.hands import (
     load_reference_rig,
     match_hands,
 )
+from valve_qc_merger.merge_view.merger import MergeError, merge_models
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget.config import DEFAULT_REFERENCE
 from valve_qc_merger.retarget.correspondence import CorrespondenceError
@@ -55,6 +59,10 @@ class MergeViewCommand(Command):
                             help="continue past models whose rig cannot be matched")
         parser.add_argument("--no-prune", action="store_true",
                             help="keep vertex-less bones (Nubs are always removed)")
+        parser.add_argument("--no-pool-bones", action="store_true",
+                            help="skip bone pooling (merged table may exceed 127)")
+        parser.add_argument("--manifest-format", choices=("ini", "json", "toml"),
+                            default="ini", help="per-model manifest format")
         parser.add_argument("--dry-run", action="store_true",
                             help="discover, sanitise and load only; print the inventory")
 
@@ -73,6 +81,7 @@ class MergeViewCommand(Command):
 
         inventory: list[dict[str, object]] = []
         failures: list[str] = []
+        merged_pairs: list[tuple[ModelInput, ModelParts]] = []
         for model_dir in model_dirs:
             sanitised = sanitize_model_dir(model_dir)
             try:
@@ -119,13 +128,15 @@ class MergeViewCommand(Command):
                     write_smd_file(anim_smd, out_model / "anims" / f"{seq_name}.smd")
                 (out_model / model.qc_path.name).write_text(model.qc_text,
                                                             encoding="latin-1")
+                parts = collapse_bodygroups(model)
+                merged_pairs.append((model, parts))
                 canonical = {
                     "renamed": result.renamed,
                     "reparented": result.reparented,
                     "nubs_removed": result.nubs_removed,
                     "pruned": len(result.pruned),
                     "max_pose_deviation": result.max_pose_deviation,
-                    "canonical_warnings": result.warnings,
+                    "canonical_warnings": result.warnings + parts.warnings,
                 }
             entry = {
                 "name": model.name,
@@ -153,9 +164,38 @@ class MergeViewCommand(Command):
         (args.out / "inventory.json").write_text(
             json.dumps({"models": inventory, "failures": failures}, indent=1)
         )
-        if not args.dry_run:
-            print("note: canonicalised models written under out/canonical/; "
-                  "merge stages M3-M5 (pooling, merge, textures) still pending")
+        if not args.dry_run and merged_pairs:
+            reference_smd = parse_smd_file(args.reference)
+            shared = {n.name for n in reference_smd.nodes
+                      if not n.name.endswith("Nub")}
+            if not args.no_pool_bones:
+                model_bones = {}
+                for model, _parts in merged_pairs:
+                    fullest = max(model.meshes.values(), key=lambda m: len(m.nodes))
+                    name_of = {n.index: n.name for n in fullest.nodes}
+                    model_bones[model.name] = {
+                        n.name: (name_of.get(n.parent) if n.parent >= 0 else None)
+                        for n in fullest.nodes
+                    }
+                plan = plan_pool(model_bones, shared)
+                pooled = 0
+                for model, _parts in merged_pairs:
+                    pooled += len(apply_pool(
+                        model, plan.assignments[model.name], plan.slot_parent
+                    ))
+                print(f"  pool: {plan.size} slots, {pooled} reparents applied")
+            try:
+                report = merge_models(
+                    merged_pairs, args.out, args.name,
+                    manifest_format=args.manifest_format,
+                )
+            except MergeError as exc:
+                print(f"error: merge failed: {exc}")
+                return EXIT_FAIL
+            print(f"  merged: bones={report.bones} bodyparts={report.bodyparts} "
+                  f"sequences={report.sequences} textures={report.textures}")
+            for warning in report.warnings:
+                print(f"    warn: {warning}")
         return EXIT_FAIL if failures else EXIT_OK
 
 

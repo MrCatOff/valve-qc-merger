@@ -214,6 +214,27 @@ def ensure_root(smd: Smd, name: str = "Bip01") -> None:
     renumber(smd)
 
 
+def graft_bone(smd: Smd, name: str, parent: str) -> None:
+    """Insert a vertex-less bone under ``parent`` with identity local transforms.
+
+    Used to complete canonical subtrees on rigs that lack a bone (a missing
+    forearm): the graft carries no vertices and no motion of its own, so world
+    poses of everything else are untouched; children reparented under it later
+    stay exact because its world equals its parent's.
+    """
+    if any(n.name == name for n in smd.nodes):
+        raise ValueError(f"bone {name!r} already exists")
+    parent_index = next(n.index for n in smd.nodes if n.name == parent)
+    index = max((n.index for n in smd.nodes), default=-1) + 1
+    smd.nodes = [*smd.nodes, Node(index, name, parent_index)]
+    zero = Vector3(0.0, 0.0, 0.0)
+    smd.frames = [
+        Frame(f.time, (*f.poses, BonePose(index, zero, zero)))
+        for f in smd.frames
+    ]
+    renumber(smd)
+
+
 def rebind_vertices(smd: Smd, from_bone: str, to_bone: str) -> int:
     """Move every vertex bound to ``from_bone`` onto ``to_bone``; returns count."""
     src = next(n.index for n in smd.nodes if n.name == from_bone)
@@ -238,6 +259,7 @@ def world_positions(smd: Smd, frame: Frame) -> dict[str, Vector3]:
 __all__ = [
     "ensure_root",
     "fk_worlds",
+    "graft_bone",
     "rename_bones",
     "remove_bones",
     "reparent_bone",

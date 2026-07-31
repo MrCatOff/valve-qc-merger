@@ -26,6 +26,7 @@ from valve_qc_merger.merge_view.hands import HandMatch
 from valve_qc_merger.merge_view.skeleton_ops import (
     ensure_root,
     fk_worlds,
+    graft_bone,
     rebind_vertices,
     remove_bones,
     rename_bones,
@@ -43,6 +44,7 @@ class CanonicalReport:
     """What canonicalisation did to one model."""
 
     renamed: int = 0
+    grafted: list[str] = field(default_factory=list)
     reparented: list[str] = field(default_factory=list)
     nubs_removed: list[str] = field(default_factory=list)
     pruned: list[str] = field(default_factory=list)
@@ -113,6 +115,15 @@ def canonicalize_model(
         rename_bones(smd, renames)
         ensure_root(smd, _ROOT)
         present = {n.name for n in smd.nodes}
+        # Complete the canonical subtree: graft bones this rig lacks (frozen,
+        # vertex-less) so every model agrees on the merged table's parentage.
+        for bone, expected in plan:
+            if bone in present or expected is None:
+                continue
+            graft_bone(smd, bone, expected)  # plan is parents-first
+            present.add(bone)
+            if bone not in report.grafted:
+                report.grafted.append(bone)
         parent_of = {n.name: next(
             (p.name for p in smd.nodes if p.index == n.parent), None)
             for n in smd.nodes}
