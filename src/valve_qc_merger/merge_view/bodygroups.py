@@ -49,7 +49,7 @@ def _hand_fraction(smd: Smd) -> float:
 
 
 def collapse_bodygroups(
-    model: ModelInput, *, keep_groups: set[str] = frozenset()
+    model: ModelInput, *, keep_groups: frozenset[str] = frozenset()
 ) -> ModelParts:
     """Reduce a canonicalised model to weapon submodels + one hands mesh."""
     parts = ModelParts()
