@@ -11,10 +11,11 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from valve_qc_merger.models.smd import Node, Smd
+from valve_qc_merger.models.smd import Frame, Node, Smd
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.transform import (
     Matrix3,
+    Transform,
     euler_to_matrix,
     mat3_multiply,
     mat3_transpose,
@@ -56,16 +57,21 @@ def verify_export(
     hand_bones: set[str],
     anchor_bones: set[str],
     source_anims: dict[str, Path] | None = None,
+    gun_bones: set[str] | None = None,
     epsilon: float = 1e-4,
     euler_jump_threshold_degrees: float = 120.0,
     geom_tolerance: float = 1e-3,
+    weapon_pos_tolerance: float = 0.05,
+    weapon_rot_tolerance_degrees: float = 1.0,
 ) -> VerifyResult:
     """Run every §7.8 check over the emitted model.
 
     ``hand_bones`` are the reference bone names whose local translation must be
     frozen at rest in every frame (§2.2/§2.3); ``anchor_bones`` are excused (they
     carry the retargeted wrist translation). ``source_anims`` maps sequence name
-    to the *input* animation SMD so frame counts/time indices can be cross-checked.
+    to the *input* animation SMD so frame counts/time indices can be cross-checked
+    and — with ``gun_bones`` — so every weapon bone's FK world pose can be proven
+    equal to the source's per frame (§7.5 zero offset, §7.7).
     """
     result = VerifyResult()
     mesh = parse_smd_file(mesh_smd)
@@ -74,9 +80,11 @@ def verify_export(
 
     _check_node_tables(result, mesh_table, anim_smds)
     _check_reference_bones_preserved(result, reference, mesh)
+    _check_reference_rest_preserved(result, reference, mesh, epsilon)
     _check_reference_first(result, mesh.nodes, reference)
 
     threshold = math.radians(euler_jump_threshold_degrees)
+    rot_tol = math.radians(weapon_rot_tolerance_degrees)
     for name, path in sorted(anim_smds.items()):
         anim = parse_smd_file(path)
         _check_no_nan(result, name, anim)
@@ -84,9 +92,15 @@ def verify_export(
             result, name, anim, mesh, hand_bones, anchor_bones, epsilon
         )
         _check_euler_continuity(result, name, anim, threshold)
+        _check_euler_component_continuity(result, name, anim)
         _check_frame_indices(result, name, anim)
         if source_anims and name in source_anims:
-            _check_frame_count(result, name, anim, parse_smd_file(source_anims[name]))
+            source = parse_smd_file(source_anims[name])
+            _check_frame_count(result, name, anim, source)
+            if gun_bones:
+                _check_weapon_pose(
+                    result, name, anim, source, gun_bones, weapon_pos_tolerance, rot_tol
+                )
 
     _check_reference_geometry_preserved(result, reference, mesh, geom_tolerance)
     return result
@@ -126,6 +140,66 @@ def _check_reference_bones_preserved(result: VerifyResult, reference: Smd, mesh:
             ok = False
     if ok:
         result.passed("reference_bones_preserved")
+
+
+def _check_reference_rest_preserved(
+    result: VerifyResult, reference: Smd, mesh: Smd, epsilon: float
+) -> None:
+    """Every reference bone's rest local transform survives into the unified mesh.
+
+    ``hand_translation_frozen`` baselines against the exported mesh's *own* rest
+    frame, so a uniformly drifted or scaled rest would self-consistently pass it.
+    This check closes that hole by comparing the exported rest against the *input*
+    reference SMD, by name: translations componentwise within ``epsilon`` (plus
+    float32 round-trip headroom) and rotations geodesically (BST may re-name the
+    same rotation with a gimbal-equivalent Euler).
+    """
+    if not reference.frames or not mesh.frames:
+        result.fail("reference_rest_preserved", "missing rest skeleton frame")
+        return
+    # Compare in WORLD space: Blender's first edit-mode roundtrip re-derives each
+    # bone's local from head/tail/roll, which can rename a parent's roll by ~2e-4
+    # rad and shift a child's *local* translation by lever-arm times that angle
+    # while every bone stays exactly where it was. §2.1 is about where the bones
+    # are; the local re-decomposition is reported as a warning, not a failure.
+    ref_world = _fk_worlds(reference, reference.frames[0])
+    mesh_world = _fk_worlds(mesh, mesh.frames[0])
+    ref_by_name = {n.name: n.index for n in reference.nodes}
+    mesh_by_name = {n.name: n.index for n in mesh.nodes}
+    pos_tol = max(epsilon, 1e-3)  # float32 head positions at ~20u, FK-accumulated
+    rot_tol = 1e-3  # radians, geodesic
+    max_local = 0.0
+    for name, ref_idx in ref_by_name.items():
+        mesh_idx = mesh_by_name.get(name)
+        if mesh_idx is None:
+            continue  # reference_bones_preserved already reports missing bones
+        rw, mw = ref_world[ref_idx], mesh_world[mesh_idx]
+        dp = math.dist(
+            (rw.translation.x, rw.translation.y, rw.translation.z),
+            (mw.translation.x, mw.translation.y, mw.translation.z),
+        )
+        dr = rotation_angle(mat3_multiply(mw.rotation, mat3_transpose(rw.rotation)))
+        if dp > pos_tol or dr > rot_tol:
+            result.fail(
+                "reference_rest_preserved",
+                f"world rest of {name!r} drifted from the input reference: "
+                f"pos {dp:.5f}u, rot {math.degrees(dr):.3f} deg (§2.1)",
+            )
+            return
+        rp = next(p for p in reference.frames[0].poses if p.bone == ref_idx)
+        mp = next(p for p in mesh.frames[0].poses if p.bone == mesh_idx)
+        max_local = max(
+            max_local,
+            abs(mp.position.x - rp.position.x),
+            abs(mp.position.y - rp.position.y),
+            abs(mp.position.z - rp.position.z),
+        )
+    if max_local > 1e-4:
+        result.warnings.append(
+            f"[reference_rest_preserved] local rest decompositions re-derived by the "
+            f"exporter (max component shift {max_local:.5f}u); world rest is unchanged"
+        )
+    result.passed("reference_rest_preserved")
 
 
 def _check_reference_first(result: VerifyResult, nodes: list[Node], reference: Smd) -> None:
@@ -214,6 +288,97 @@ def _check_euler_continuity(
                     return
             prev[pose.bone] = cur
     result.passed("euler_continuity")
+
+
+def _check_euler_component_continuity(result: VerifyResult, name: str, anim: Smd) -> None:
+    """No Euler *component* jumps by more than pi between adjacent frames (§7.8).
+
+    After a correct unwrap every component is wrapped within pi of the previous
+    frame, so a larger jump can only mean the unwrap was skipped or broken — the
+    naming discontinuity that GoldSrc's per-component interpolation turns into a
+    visible spin. This is the per-component check the spec asks for; the geodesic
+    check above guards real motion, this one guards the representation.
+    """
+    limit = math.pi + 1e-6
+    prev: dict[int, tuple[float, float, float]] = {}
+    for frame in anim.frames:
+        for pose in frame.poses:
+            cur = (pose.rotation.x, pose.rotation.y, pose.rotation.z)
+            last = prev.get(pose.bone)
+            if last is not None:
+                for axis, (a, b) in zip("xyz", zip(last, cur, strict=True), strict=True):
+                    if abs(b - a) > limit:
+                        result.fail(
+                            "euler_component_continuity",
+                            f"{name} bone {pose.bone} euler {axis} jumps "
+                            f"{math.degrees(abs(b - a)):.0f} deg at frame {frame.time} "
+                            "(unwrap missing or broken)",
+                        )
+                        return
+            prev[pose.bone] = cur
+    result.passed("euler_component_continuity")
+
+
+def _fk_worlds(smd: Smd, frame: Frame) -> dict[int, Transform]:
+    """World transform per bone index for one skeleton frame, by FK over the nodes."""
+    local = {
+        p.bone: Transform.from_pos_euler(p.position, p.rotation) for p in frame.poses
+    }
+    parent_of = {n.index: n.parent for n in smd.nodes}
+    world: dict[int, Transform] = {}
+
+    def resolve(index: int) -> Transform:
+        cached = world.get(index)
+        if cached is not None:
+            return cached
+        parent = parent_of[index]
+        xf = local[index] if parent < 0 else resolve(parent).compose(local[index])
+        world[index] = xf
+        return xf
+
+    for n in smd.nodes:
+        resolve(n.index)
+    return world
+
+
+def _check_weapon_pose(
+    result: VerifyResult, name: str, anim: Smd, source: Smd,
+    gun_bones: set[str], pos_tolerance: float, rot_tolerance: float,
+) -> None:
+    """Every weapon bone's FK world pose equals the source's, per frame (§7.5/§7.7).
+
+    The zero-offset guarantee — the weapon stays exactly where its own animation
+    puts it — proven from the emitted text. This is the check that catches a broken
+    animation transfer (e.g. rotation keys that never took), which the hand-centric
+    checks are structurally blind to.
+    """
+    anim_idx = {n.name: n.index for n in anim.nodes if n.name in gun_bones}
+    src_idx = {n.name: n.index for n in source.nodes if n.name in gun_bones}
+    shared = sorted(anim_idx.keys() & src_idx.keys())
+    if not shared:
+        result.fail("weapon_pose_matches_source", f"{name}: no gun bones found to compare")
+        return
+    # frame_count reports length mismatches; compare the overlapping prefix here.
+    for exported_frame, source_frame in zip(anim.frames, source.frames, strict=False):
+        worlds = _fk_worlds(anim, exported_frame)
+        src_worlds = _fk_worlds(source, source_frame)
+        for bone in shared:
+            ours = worlds[anim_idx[bone]]
+            src = src_worlds[src_idx[bone]]
+            dp = math.dist(
+                (ours.translation.x, ours.translation.y, ours.translation.z),
+                (src.translation.x, src.translation.y, src.translation.z),
+            )
+            dr = rotation_angle(mat3_multiply(ours.rotation, mat3_transpose(src.rotation)))
+            if dp > pos_tolerance or dr > rot_tolerance:
+                result.fail(
+                    "weapon_pose_matches_source",
+                    f"{name} frame {exported_frame.time} bone {bone!r} deviates from the "
+                    f"source weapon pose: pos {dp:.3f}u, rot {math.degrees(dr):.1f} deg "
+                    f"(tol {pos_tolerance}u / {math.degrees(rot_tolerance):.1f} deg)",
+                )
+                return
+    result.passed("weapon_pose_matches_source")
 
 
 def _check_frame_indices(result: VerifyResult, name: str, anim: Smd) -> None:

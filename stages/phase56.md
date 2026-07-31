@@ -23,6 +23,14 @@ clean** (28 source files). A ready-to-inspect run is in `tmp/verify/model/`.
   against the new wrist parent); deeper gun bones copy the source `matrix_basis`
   directly, reproducing the source weapon world pose exactly (Phase 3 zero-offset:
   the weapon stays where its own animation puts it, the hands come to it).
+  **Correction (third verification pass):** as originally shipped this claim was
+  false — the appended pose bones were left in Blender's default QUATERNION
+  rotation mode, so the `rotation_euler` keys recorded dead identity values and
+  the exported guns were frozen at rest orientation (~125° off at idle, slide and
+  reload part motion lost). Fixed by forcing `rotation_mode = "XYZ"` on every
+  appended bone in `build_unified` (asserted in `key_guns`), and the gate now
+  proves weapon-pose fidelity from the emitted text (`weapon_pose_matches_source`).
+  See `stages/fixes2.md`.
 - **Export**: the original armature + original hand mesh are deleted, then the
   reference-hands + weapon meshes are exported merged into one rest-pose
   `<weapon>-PV.smd`, and the unified armature's action into `anims/<seq>.smd`.

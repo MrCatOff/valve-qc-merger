@@ -158,3 +158,13 @@ validators (BVH)** and the §8 per-frame metric CSV. See `stages/phase34.md` and
 - Add Phase 3 (zero-offset) and Phase 4 core grip solve
 - Phase 5: unify skeleton, transfer weapon anim, export merged SMDs + QC
 - Phase 6: text-verify emitted SMDs; Euler-unwrap animation tracks in place
+9. **FAIL still leaves outputs on disk (§8.3)** — the spec says a FAIL sequence
+   writes no output; the pipeline instead keeps the written SMDs/QC when the
+   Phase 6 gate fails and signals failure via exit code 2. Deliberate: the
+   emitted files are the primary debugging artifact for a text-level gate
+   failure. Nothing downstream consumes the output directory automatically.
+10. **Euler component continuity is a hard invariant, not a threshold (§7.8)** —
+   alongside the geodesic check (deviation 8), the gate now fails any per-frame
+   Euler *component* jump above π: after a correct unwrap every component is
+   within π of the previous frame, so a larger jump can only mean the unwrap was
+   skipped or broken.

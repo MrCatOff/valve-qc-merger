@@ -61,16 +61,25 @@ def _anim(*, hand_drift: float = 0.0, rot_jump: bool = False) -> Smd:
     return Smd(nodes=_UNI_NODES, frames=frames)
 
 
-def _run(tmp_path: Path, mesh: Smd, anim: Smd) -> object:
+def _run(
+    tmp_path: Path, mesh: Smd, anim: Smd,
+    *, source: Smd | None = None, gun_bones: set[str] | None = None,
+) -> object:
     mesh_p = tmp_path / "model-PV.smd"
     anim_p = tmp_path / "idle.smd"
     ref_p = tmp_path / "reference.smd"
     write_smd_file(mesh, mesh_p)
     write_smd_file(anim, anim_p)
     write_smd_file(_reference(), ref_p)
+    source_anims = None
+    if source is not None:
+        source_p = tmp_path / "source_idle.smd"
+        write_smd_file(source, source_p)
+        source_anims = {"idle": source_p}
     return verify_export(
         mesh_p, {"idle": anim_p}, ref_p,
         hand_bones={"root", "hand"}, anchor_bones={"root"},
+        source_anims=source_anims, gun_bones=gun_bones,
     )
 
 
@@ -96,3 +105,56 @@ def test_hand_translation_drift_fails(tmp_path: Path) -> None:
 def test_rotation_teleport_fails(tmp_path: Path) -> None:
     res = _run(tmp_path, _mesh(), _anim(rot_jump=True))
     assert res.checks["euler_continuity"] is False  # type: ignore[attr-defined]
+
+
+def test_weapon_pose_matching_source_passes(tmp_path: Path) -> None:
+    res = _run(tmp_path, _mesh(), _anim(), source=_anim(), gun_bones={"gun"})
+    assert res.checks["weapon_pose_matches_source"] is True  # type: ignore[attr-defined]
+
+
+def test_weapon_rotated_from_source_fails(tmp_path: Path) -> None:
+    # The pre-fix failure mode: gun rotation keys dead, gun frozen at rest while
+    # the source rotates it. Constant rotation, so continuity checks cannot see it.
+    source = _anim()
+    source.frames = [
+        Frame(f.time, tuple(
+            BonePose(p.bone, p.position,
+                     Vector3(0, 0, math.radians(90)) if p.bone == 2 else p.rotation)
+            for p in f.poses
+        ))
+        for f in source.frames
+    ]
+    res = _run(tmp_path, _mesh(), _anim(), source=source, gun_bones={"gun"})
+    assert not res.ok  # type: ignore[attr-defined]
+    assert res.checks["weapon_pose_matches_source"] is False  # type: ignore[attr-defined]
+
+
+def test_euler_component_wrap_fails_even_when_rotation_is_continuous(tmp_path: Path) -> None:
+    # A 2pi naming wrap: identical rotation every frame (geodesic delta 0), but the
+    # emitted component jumps by 360 deg — the unwrap was skipped or broken.
+    anim = _anim()
+    anim.frames = [
+        Frame(f.time, tuple(
+            BonePose(p.bone, p.position,
+                     Vector3(0, 0, 2 * math.pi) if p.bone == 2 and f.time >= 2
+                     else p.rotation)
+            for p in f.poses
+        ))
+        for f in anim.frames
+    ]
+    res = _run(tmp_path, _mesh(), anim)
+    assert res.checks["euler_continuity"] is True  # type: ignore[attr-defined]
+    assert res.checks["euler_component_continuity"] is False  # type: ignore[attr-defined]
+
+
+def test_reference_rest_drift_fails(tmp_path: Path) -> None:
+    # A drifted rest offset is invisible to hand_translation_frozen (it baselines
+    # against the exported mesh itself); the input reference is the ground truth.
+    mesh = _mesh()
+    drifted = Vector3(_REST[1].x + 0.01, _REST[1].y, _REST[1].z)
+    mesh.frames = [Frame(0, tuple(
+        BonePose(p.bone, drifted if p.bone == 1 else p.position, p.rotation)
+        for p in mesh.frames[0].poses
+    ))]
+    res = _run(tmp_path, mesh, _anim())
+    assert res.checks["reference_rest_preserved"] is False  # type: ignore[attr-defined]

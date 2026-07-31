@@ -230,18 +230,27 @@ def finalize_export(
     """
     weapon_stem = inputs.weapon_pv.stem
     mesh_smd = out_dir / f"{weapon_stem}.smd"
-    anim_smds = {
-        r.name: out_dir / "anims" / f"{r.name}.smd"
-        for r in results
-        if r.ok and (out_dir / "anims" / f"{r.name}.smd").exists()
-    }
+
     def _has_export(result: SequenceResult) -> bool:
         block = result.report.get("export")
         return result.ok and isinstance(block, dict) and bool(block.get("gun_bones"))
 
     exported = next((r for r in results if _has_export(r)), None)
-    if not mesh_smd.exists() or not anim_smds or exported is None:
-        return None, None
+    if exported is None:
+        return None, None  # nothing attempted export (e.g. dry run or all failed)
+
+    # Every ok sequence must have produced its SMD; a missing file is a hard
+    # verify failure, not a silent exclusion (the QC would still reference it).
+    anim_smds = {r.name: out_dir / "anims" / f"{r.name}.smd" for r in results if r.ok}
+    missing = sorted(n for n, p in anim_smds.items() if not p.exists())
+    if not mesh_smd.exists() or missing:
+        failed = VerifyResult()
+        if not mesh_smd.exists():
+            failed.fail("outputs_present", f"mesh SMD missing: {mesh_smd}")
+        if missing:
+            failed.fail("outputs_present",
+                        f"anim SMDs missing for ok sequences: {missing}")
+        return failed, None
 
     report = exported.report
     export_block = report["export"]
@@ -260,7 +269,10 @@ def finalize_export(
         mesh_smd, anim_smds, inputs.reference,
         hand_bones=reference_bones, anchor_bones=anchor_bones,
         source_anims=dict(inputs.sequences),
+        gun_bones=gun_bones,
+        epsilon=config.epsilon,
         euler_jump_threshold_degrees=config.euler_jump_threshold_degrees,
+        geom_tolerance=config.geom_tolerance,
     )
 
     qc_out: Path | None = None

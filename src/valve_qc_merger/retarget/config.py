@@ -87,6 +87,7 @@ class RetargetConfig:
     seed: int = 0
     epsilon: float = 1e-5  # format-level equality tolerance (Phase 6)
     euler_jump_threshold_degrees: float = 120.0  # §7.8 continuity
+    geom_tolerance: float = 1e-3  # Phase 6 mesh-preservation tolerance (model units)
 
     # Environment / pinning (§6). Recorded in the report.
     blender: str | None = None  # explicit Blender executable; None => autodiscover

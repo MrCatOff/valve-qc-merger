@@ -473,6 +473,11 @@ def build_unified(scene: Scene, corr: Correspondence, classes: dict[str, list[st
     # tables are byte-identical (§2.1, §7.8).
     for bone in ref.data.bones:
         bone.use_deform = True
+    # Freshly created pose bones default to QUATERNION; a matrix assignment would
+    # then update the quaternion while rotation_euler stays at identity, and
+    # key_guns's euler keys would record dead values (guns frozen at rest).
+    for name in ordered:
+        ref.pose.bones[name].rotation_mode = "XYZ"
     _rebind(scene.weapon_mesh, ref)
     return ordered
 
@@ -487,6 +492,11 @@ def key_guns(scene: Scene, gun_names: list[str], start: int, end: int) -> None:
     """
     ref = scene.reference
     src = scene.src
+    non_euler = [n for n in gun_names if ref.pose.bones[n].rotation_mode != "XYZ"]
+    if non_euler:
+        raise AssertionFailure(
+            f"gun bones not in XYZ rotation mode (euler keys would be dead): {non_euler}"
+        )
     roots = {name for name in gun_names if src.data.bones[name].parent is not None
              and src.data.bones[name].parent.name not in gun_names}
     scene_ctx = bpy.context.scene
@@ -542,7 +552,10 @@ def export_mesh_smd(scene: Scene, out_dir: str, weapon_stem: str) -> str:
     ref.data.pose_position = prev_pos
     bpy.context.view_layer.update()
     # BST names the file after the collection.
-    return os.path.join(out_dir, weapon_stem + ".smd")
+    path = os.path.join(out_dir, weapon_stem + ".smd")
+    if not os.path.exists(path):
+        raise AssertionFailure(f"BST wrote no mesh SMD at {path}")
+    return path
 
 
 def export_anim_smd(scene: Scene, out_dir: str, sequence: str) -> str:
@@ -569,7 +582,10 @@ def export_anim_smd(scene: Scene, out_dir: str, sequence: str) -> str:
     bpy.context.view_layer.objects.active = ref
     _prepare_export(out_dir)
     bpy.ops.export_scene.smd()
-    return os.path.join(anim_dir, sequence + ".smd")
+    path = os.path.join(anim_dir, sequence + ".smd")
+    if not os.path.exists(path):
+        raise AssertionFailure(f"BST wrote no anim SMD at {path}")
+    return path
 
 
 def unify_and_export(

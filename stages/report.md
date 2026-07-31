@@ -1,5 +1,15 @@
 # Verification report — Phases 0–2b
 
+> **Update (fourth pass): the §7 defect is FIXED and re-verified — see §8.**
+> Weapon world pose now matches the source to ≤0.001° / 0.00004 u in every
+> sequence; gate hardened to 11 checks incl. `weapon_pose_matches_source`
+> (red on the pre-fix output, green on the fixed one). Details in
+> `stages/fixes2.md`. Phases 5/6 accepted.
+>
+> **Update (third pass, Phases 3–6): NO-GO — see §7.** The exported model does
+> not hold the weapons correctly (gun rotation animation is lost in export);
+> one mandatory fix plus gate hardening required before acceptance.
+>
 > **Update (second pass): corrections verified — cleared for Phase 3/4.**
 > See §6 at the bottom for the fix-verification details. The original findings
 > below are kept for the record.
@@ -164,3 +174,158 @@ what was implemented per spec section (§7.5, §7.6), the solver parameters used
 per-sequence metric summaries (`e_pos`, overlap band, `d_max` guard), any
 relaxations applied, and regenerated `tmp/verify/` renders — that is the input
 for the next verification pass.
+
+---
+
+## 7. Phase 3–6 verification (third pass) — **NO-GO: the exported weapon is not held correctly**
+
+Scope: commits `fc5f665` (Phases 3/4) and `2f2d84b` (Phases 5/6), claims in
+`stages/phase34.md` / `stages/phase56.md`. Method: re-ran the gates (**62
+passed**, ruff clean, mypy --strict clean), re-ran the full pipeline end-to-end
+(all 16 sequences EXPORTED, verify PASS 8/8, exit 0 — reproduces the claim),
+line-level code review of the new modules, **and an independent render of the
+emitted SMD text** — both meshes skinned in pure Python straight from
+`tmp/verify/model/` (no Blender, no pipeline code), side-by-side with the
+original model posed by the original idle animation. Artifacts:
+`tmp/verify/model/compare_idle_f4.png` (the render) and
+`tmp/verify/model/render_smd.py` (regenerate with any frame).
+
+### 7.1 The critical defect
+
+**The exported weapons do not follow their animation; rotation is lost
+entirely.** From the emitted text, independently confirmed two ways (my
+FK reconstruction and the reviewer's):
+
+- Every gun bone's **local rotation equals its rest rotation in every frame of
+  every sequence** (delta = 0.000°). Only `location` was keyed.
+- Gun-root world **positions** are exact (0.000 vs source, every frame), but
+  world **orientations** are off by ~124–166° depending on the wrist pose; gun
+  sub-bones land up to ~7 units off. Skinned weapon-mesh vertices are a mean
+  2.3 u (max 3.6 u) from where the original puts them — on a pistol ~8 u long.
+- Visually (`compare_idle_f4.png`): the original pistols point forward along
+  the grip; ours stand ~vertical at the wrists. The hands themselves are
+  correct — curled at the *source* weapon's grip — so the hand grips where the
+  gun should be while the gun is rotated out of the grip. Slide recoil and
+  reload part motion are also gone (those bones are fully frozen).
+
+**Root cause (both reviews agree, high confidence):** `retarget()` sets
+`rotation_mode = "XYZ"` only on pose bones that exist at that point
+(worker.py:379-380). `build_unified` creates the gun pose bones *later*; they
+default to `QUATERNION`. `key_guns` (worker.py:493-506) assigns
+`pose_bone.matrix` / `matrix_basis` — which decompose into
+`rotation_quaternion` — then keys `"rotation_euler"`, recording untouched
+identity eulers. Location decomposes into `location` regardless of rotation
+mode, which is exactly why translations survived and rotations did not.
+
+**Fix:** set `rotation_mode = "XYZ"` on every appended gun pose bone (in
+`build_unified`, before `key_guns`), then re-export and re-verify. One line,
+plus the gate check below so this class of failure can never pass again.
+
+### 7.2 Why the 8/8 gate said PASS on a broken model
+
+The Phase 6 gate proves the *hands* are intact (translation frozen, mesh
+preserved at 0.00000 u — both genuinely hold, confirmed) but has blind spots
+exactly where the pipeline broke:
+
+1. **Nothing compares the exported weapon pose to the source.** Required new
+   check: for every weapon bone, per frame, FK world matrix from the exported
+   anim == FK world matrix from the source anim within ε (both computable from
+   text; my scratch check in `render_smd.py` shows how). This turns today's
+   failure into a red gate.
+2. **`euler_continuity` measures geodesic rotation delta, not per-component
+   jumps** (verify_smd.py:188-216) — it cannot fail on the Euler-naming flips
+   it nominally gates (a frozen-rotation track passes trivially). Add a
+   per-component continuity check on the emitted numbers, per spec §7.8.
+3. **Rest offsets are never compared to the input reference** —
+   `hand_translation_frozen` baselines against the exported mesh's own frame 0
+   (verify_smd.py:145-149), so a uniformly drifted rest would self-consistently
+   pass, and phase56.md's "rest unchanged" claim is unproven. Compare the
+   exported mesh SMD's rest locals against the input `reference_hands.smd`.
+
+### 7.3 What did verify clean
+
+- **Phase 3** (zero offset, non-zero rejected): verified (config.py:79,
+  worker.py:620-624). Nit: `[0,0,0]` is rejected as "non-zero".
+- **Phase 4 core CCD**: math independently checked and correct (conjugation
+  into basis space, spaces, warm start, Nub exclusion, joint-limit clamping);
+  the deferred spec parts (w_d, λ_t/λ_b, relaxation order, both BVH
+  validators, e_pos normalisation) are genuinely absent and **honestly
+  disclosed** in phase34.md. Note the ±150° default limits are effectively
+  unconstrained — disclosed, revisit at §8.4 calibration.
+- **Phase 5 structure**: unification itself is right — gun subtrees appended
+  with world rest matrices preserved (0.000 delta verified from the emitted
+  text), only gun roots reparented, weights carried by name, animation keyed
+  before originals deleted, reference bones untouched (§2 holds).
+- **Phase 6 machinery**: checks are wired as a real gate (fail → exit 2) and
+  the euler_unwrap math (gimbal-equivalent `(x+π, π−y, z+π)` under Rz·Ry·Rx) is
+  algebraically correct.
+- Both stage reports' test/lint counts reproduce (62/62, clean, clean).
+
+### 7.4 Additional corrections (from the code review)
+
+4. **Silent sequence loss** (driver.py:233-237): an ok worker whose anim SMD
+   is missing under the expected name is silently excluded from verification
+   (exit stays 0) while the QC still references it. Make a missing SMD for an
+   ok sequence a hard failure; have `export_anim_smd` assert the file exists.
+5. **§8.3 failure policy**: on verify FAIL the CLI exits 2 but all outputs stay
+   written; spec says FAIL writes nothing. Either quarantine outputs on FAIL
+   (e.g. write to a temp dir, promote on PASS) or document the deviation.
+6. `config.epsilon` is never passed to `verify_export` (1e-4 default used);
+   `geom_tolerance` hardcoded. Wire them through.
+7. phase56.md corrections: the "reproducing the source weapon world pose
+   exactly" and "recoil on shoot" claims are false as shipped — rewrite after
+   the fix; `emitted_model.png` (sparse scatter) is not evidence of grip or
+   orientation, keep `compare_idle_f4.png`-style skinned renders instead.
+
+### 7.5 Decision
+
+- **Phases 3 and 4 (core): accepted** as scoped, deferrals disclosed.
+- **Phase 5: rejected — correction 1 (rotation_mode) is mandatory**; the
+  shipped model does not hold the weapons in line with the original.
+- **Phase 6: accepted as machinery, but corrections 1–3 of §7.2 are required**
+  before the gate's PASS can be trusted; correction 4 strongly recommended now,
+  5–7 may follow.
+- Re-verification will repeat the independent SMD-text render and the numeric
+  weapon-pose comparison; acceptance requires gun world matrices to match the
+  source within ε in all sequences, and the new gate check red/green to be
+  demonstrated (break it deliberately in a test).
+
+**To the implementing agent:** apply §7.1's fix and §7.2's gate checks (plus
+§7.4 items 4–6 or a stated deferral), re-run the full pipeline, regenerate
+`tmp/verify/model/`, and write `stages/fixes2.md` describing per item what was
+changed, with the new gate shown failing on the pre-fix output (or an
+equivalent test) and passing on the fixed output. That report is the input for
+the next verification pass.
+
+---
+
+## 8. Fix verification (fourth pass) — weapon defect fixed, Phases 5/6 accepted
+
+The §7 corrections were applied in-session (see `stages/fixes2.md` for the full
+account). Verification of the result:
+
+- **Gates:** 66 pytest passed, ruff clean, mypy --strict clean.
+- **Red/green:** the hardened gate run against the *pre-fix* output fails
+  exactly one check — `weapon_pose_matches_source` (rot 125.4–136.5°) — with
+  the benign local-rest re-decomposition correctly demoted to a warning. The
+  fixed pipeline run passes **11/11 checks, exit 0** on all 16 sequences.
+- **Independent numeric check** (pure-Python FK from the emitted text, no
+  pipeline code): every gun bone's world transform matches the source within
+  **0.00004 u / 0.001°** across idle, draw, reload and shoot_right1 (was 2.3 u
+  mean / ~125° before). Skinned weapon-mesh vertices at idle f4 match within
+  0.0001 u.
+- **Independent visual check:** `tmp/verify/model/compare_idle_f4.png`
+  (regenerated) — the exported model and the original now hold the pistols
+  identically in all three views; slide/reload sub-bone animation is restored.
+- The one-bone rest "drift" flagged in the first red run was root-caused to
+  Blender's edit-mode local re-derivation (parent roll renamed by ~2e-4 rad,
+  world rest unchanged, hand mesh bit-identical) — a naming artifact, not a
+  reshape; the new `reference_rest_preserved` check therefore proves world-rest
+  preservation and warns on local re-decomposition.
+
+**Decision: Phases 5 and 6 are now accepted.** The exported SMD holds the
+weapon correctly, in line with the original, and the gate can no longer pass a
+model that doesn't. Remaining open items are the previously disclosed
+deferrals: Phase 4 BVH validators + §8 metrics CSV, the §10 generality gate
+(second weapon, 2-joint-finger weapon), non-zero weapon offset, and an actual
+`studiomdl` compile check of the generated QC.
