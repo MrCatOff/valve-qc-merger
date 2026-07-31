@@ -170,16 +170,32 @@ def _stub_hand(fingers: list[tuple[str, tuple[float, float, float],
     return bones
 
 
-def test_thumb_signal_disagreement_aborts_when_abduction_is_ambiguous() -> None:
-    # TWO fingers are similarly abducted (no decisive primary signal) while a
-    # third is lifted off the palm plane so the planar outlier disagrees with
-    # both. Without a decisive margin the disagreement must abort (§7.3.4).
+def test_ambiguous_abduction_resolved_by_collinearity_two_of_three() -> None:
+    # Abduction is ambiguous between abd1/abd2; the planar outlier picks lift,
+    # and collinearity decisively agrees (removing lift leaves the others on a
+    # line) — the 2-of-3 arbiter resolves to lift instead of aborting.
     bones = _stub_hand([
         ("fa", (-0.4, 1.0, 0.0), (0.0, 0.4, 0.0)),
         ("fb", (-0.1, 1.1, 0.0), (0.0, 0.4, 0.0)),
         ("abd1", (0.4, 0.9, 0.0), (0.5, 0.05, 0.0)),   # abducted, in-plane
         ("abd2", (0.5, 0.7, 0.0), (0.5, -0.05, 0.0)),  # abducted almost the same
-        ("lift", (0.0, 1.0, 0.7), (0.0, 0.4, 0.0)),    # planar outlier
+        ("lift", (0.0, 1.0, 0.7), (0.0, 0.4, 0.0)),    # planar + collinear pick
+    ])
+    tgt, tgt_roles = _hand("Bip01 R", _xform(trans=Vector3(6, 0, 0)))
+    corr = build_correspondence(bones, {b.name for b in bones}, tgt)
+    assert corr.as_dict()[tgt_roles["thumb"]] == "S_lift0"
+    assert any("2-of-3" in w for w in corr.warnings)
+
+
+def test_three_way_thumb_disagreement_still_aborts() -> None:
+    # Abduction ambiguous (abd1/abd2), planar picks lift, and collinearity is
+    # ambiguous too (no removal leaves a clean line) — abort, never guess.
+    bones = _stub_hand([
+        ("fa", (-0.4, 1.0, 0.0), (0.0, 0.4, 0.0)),
+        ("fb", (0.4, 1.05, 0.0), (0.0, 0.4, 0.0)),
+        ("abd1", (0.1, 0.6, 0.0), (0.5, 0.05, 0.0)),
+        ("abd2", (-0.1, 1.45, 0.0), (0.5, -0.05, 0.0)),
+        ("lift", (0.0, 1.0, 0.7), (0.0, 0.4, 0.0)),
     ])
     tgt, _ = _hand("Bip01 R", _xform(trans=Vector3(6, 0, 0)))
     with pytest.raises(CorrespondenceError, match="thumb signals disagree"):

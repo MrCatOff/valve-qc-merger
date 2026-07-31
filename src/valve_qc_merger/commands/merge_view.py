@@ -19,6 +19,14 @@ from valve_qc_merger.merge_view.discovery import (
     load_model,
     sanitize_model_dir,
 )
+from valve_qc_merger.merge_view.hands import (
+    collision_guard,
+    hand_bone_names,
+    load_reference_rig,
+    match_hands,
+)
+from valve_qc_merger.retarget.config import DEFAULT_REFERENCE
+from valve_qc_merger.retarget.correspondence import CorrespondenceError
 
 EXIT_OK = 0
 EXIT_FAIL = 2
@@ -38,6 +46,10 @@ class MergeViewCommand(Command):
         parser.add_argument("--name", default="v_merged", help="output model name stem")
         parser.add_argument("--exclude", action="append", default=[],
                             metavar="NAME", help="skip a model directory (repeatable)")
+        parser.add_argument("--reference", type=Path, default=Path(DEFAULT_REFERENCE),
+                            help="canonical hand skeleton SMD")
+        parser.add_argument("--skip-unmatched", action="store_true",
+                            help="continue past models whose rig cannot be matched")
         parser.add_argument("--dry-run", action="store_true",
                             help="discover, sanitise and load only; print the inventory")
 
@@ -48,29 +60,56 @@ class MergeViewCommand(Command):
             print(f"error: {exc}")
             return EXIT_DISCOVERY
 
+        try:
+            reference = load_reference_rig(args.reference)
+        except (OSError, CorrespondenceError) as exc:
+            print(f"error: reference hands unusable: {exc}")
+            return EXIT_DISCOVERY
+
         inventory: list[dict[str, object]] = []
         failures: list[str] = []
         for model_dir in model_dirs:
-            renames = sanitize_model_dir(model_dir)
+            sanitised = sanitize_model_dir(model_dir)
             try:
                 model = load_model(model_dir)
             except MergeViewError as exc:
                 failures.append(str(exc))
                 print(f"  {model_dir.name:<20} FAIL  {exc}")
                 continue
+            fullest = max(model.meshes.values(), key=lambda m: len(m.nodes))
+            include = hand_bone_names(model.meshes, model.bodygroups)
+            try:
+                match = match_hands(fullest, reference, include)
+                conflicts = collision_guard(fullest, match.renames)
+                if conflicts:
+                    raise CorrespondenceError(
+                        f"rename collisions: {'; '.join(conflicts)}"
+                    )
+            except CorrespondenceError as exc:
+                message = f"model {model.name!r}: {exc}"
+                failures.append(message)
+                print(f"  {model.name:<20} UNMATCHED  {exc}")
+                if not args.skip_unmatched:
+                    continue
+                continue
+            already = sum(1 for old, new in match.renames.items() if old == new)
             entry = {
                 "name": model.name,
                 "bones": len(model.bone_names),
                 "meshes": len(model.meshes),
                 "sequences": len(model.anims),
-                "sanitised": renames,
+                "hand_renames": dict(sorted(match.renames.items())),
+                "already_canonical": already,
+                "held_reference": match.held_reference,
+                "match_warnings": match.warnings,
+                "sanitised": sanitised,
                 "warnings": model.warnings,
             }
             inventory.append(entry)
             warn = f"  ({len(model.warnings)} warnings)" if model.warnings else ""
-            san = f"  ({len(renames)} files sanitised)" if renames else ""
+            san = f"  ({len(sanitised)} files sanitised)" if sanitised else ""
             print(f"  {model.name:<20} OK    bones={entry['bones']:<4} "
-                  f"meshes={entry['meshes']:<2} sequences={entry['sequences']}{san}{warn}")
+                  f"mapped={len(match.renames):<3} sequences={entry['sequences']}{san}{warn}")
 
         print(f"  {'-' * 60}")
         print(f"  {len(inventory)} models loaded, {len(failures)} failed")

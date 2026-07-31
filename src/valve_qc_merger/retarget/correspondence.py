@@ -239,12 +239,68 @@ def _identify_thumb(rig: Rig, arm: Arm, warnings: list[str] | None = None) -> in
                     f"{arm.fingers[plane_thumb][0]}"
                 )
             return thumb
+        # Third signal, 2-of-3 arbiter: the four non-thumb knuckles lie on a
+        # line regardless of how curled the rest pose is, so the thumb is the
+        # base whose removal leaves the rest most COLLINEAR. Classic CS left
+        # hands rest in a tight grip where abduction is ambiguous; this signal
+        # stays sharp there. It only decides when it sides with one of the two
+        # existing picks — three-way disagreement still aborts.
+        collinear = _collinearity_pick(bases)
+        if collinear is not None and collinear in (thumb, plane_thumb):
+            if warnings is not None:
+                other = plane_thumb if collinear == thumb else thumb
+                warnings.append(
+                    f"thumb resolved 2-of-3 on {arm.wrist}: collinearity sides "
+                    f"with {arm.fingers[collinear][0]} (abduction margin "
+                    f"{math.degrees(margin):.0f} deg was ambiguous; other signal "
+                    f"said {arm.fingers[other][0]})"
+                )
+            return collinear
         raise CorrespondenceError(
             f"thumb signals disagree on {arm.wrist}: abduction picks "
             f"{arm.fingers[thumb][0]} (margin {math.degrees(margin):.0f} deg, "
-            f"ambiguous), planar outlier picks {arm.fingers[plane_thumb][0]}"
+            f"ambiguous), planar outlier picks {arm.fingers[plane_thumb][0]}, "
+            f"collinearity "
+            + (f"picks {arm.fingers[collinear][0]}" if collinear is not None
+               else "is ambiguous too")
         )
     return thumb
+
+
+def _line_residual(points: list[Vector3]) -> float:
+    """Sum of squared distances from ``points`` to their best-fit line."""
+    n = len(points)
+    cx = sum(p.x for p in points) / n
+    cy = sum(p.y for p in points) / n
+    cz = sum(p.z for p in points) / n
+    rel = [Vector3(p.x - cx, p.y - cy, p.z - cz) for p in points]
+    direction = rel[0] if rel[0].length() > 1e-9 else Vector3(1.0, 0.0, 0.0)
+    for _ in range(12):  # power iteration on the covariance
+        nxt = Vector3(0.0, 0.0, 0.0)
+        for r in rel:
+            d = _dot(r, direction)
+            nxt = Vector3(nxt.x + d * r.x, nxt.y + d * r.y, nxt.z + d * r.z)
+        if nxt.length() < 1e-12:
+            break
+        direction = _norm(nxt)
+    residual = 0.0
+    for r in rel:
+        d = _dot(r, direction)
+        residual += r.length() ** 2 - d * d
+    return residual
+
+
+def _collinearity_pick(bases: list[Vector3]) -> int | None:
+    """Index whose exclusion leaves the rest most collinear — if decisive."""
+    residuals = [
+        _line_residual([b for j, b in enumerate(bases) if j != i])
+        for i in range(len(bases))
+    ]
+    order = sorted(range(len(bases)), key=lambda i: residuals[i])
+    best, second = residuals[order[0]], residuals[order[1]]
+    if best < 0.5 * second:
+        return order[0]
+    return None
 
 
 def _planar_outlier(points: list[Vector3]) -> int:
