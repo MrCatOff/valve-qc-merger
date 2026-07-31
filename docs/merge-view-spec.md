@@ -1,6 +1,7 @@
 # Technical specification: `merge-view` (draft for review)
 
-**Status:** draft awaiting author feedback — nothing implemented yet.
+**Status:** approved by the author (2026-07-31) — decisions folded in below;
+implementation proceeds in the milestones of §7.
 **Task:** merge a folder of decompiled view-models (e.g. `tmp/pistols/view`,
 56 weapons) into combined GoldSource model(s), with every hand skeleton renamed
 and re-hierarchised to `storage/hands/reference_hands.smd` conventions, the
@@ -41,8 +42,9 @@ turns N decompiled weapon directories into compile-ready output where:
 ### Non-goals
 
 - No hand-mesh replacement and no grip retargeting (that is `retarget`'s job).
-- No mesh decimation, texture downscaling, skin variants or player-model
-  handling in v1 (the prior art has them; they can be ported later as flags).
+- No mesh decimation, no skin/texturegroup variants, no player-model handling
+  (author decision). Texture downscaling and atlas packing ARE in scope —
+  §3.12/§3.13.
 
 ---
 
@@ -116,9 +118,9 @@ Delete `Bip01 [LR] Finger{N}Nub` everywhere via the generic exact-fold bone
 removal (fold `removed_local · child_local` into children per frame; Nubs are
 leaves, so this is a pure deletion). If a Nub unexpectedly carries vertex
 weight, rebind those vertices to its parent first and warn.
-**Open question Q3:** should the same prune also remove *other* vertex-less,
-QC-unreferenced bones (the prior art does, and it is what makes the bone
-budget work), or only Nubs in v1?
+**Decision (Q3):** the full prune — all vertex-less, QC-unreferenced bones
+are removed (this is what makes the bone budget work); `--no-prune` keeps
+everything except the Nubs, which are always removed.
 
 ### 3.6 Bodygroup collapse
 Per model, collapse switchable bodygroups to their first entry (one weapon
@@ -143,12 +145,10 @@ ancestors).
 - Bone-table conflicts across models resolved by majority-vote parent; losers
   renamed `{model}__{bone}` with cascade (safety net — after 3.4/3.7 hand and
   pooled bones agree by construction).
-- **Open question Q2 — shared root:** prior art injects `Universal_Root` at
-  id 0. Here every model already shares `Bip01` as the canonical root after
-  renaming. Proposal: use `Bip01` as the universal root (no injected bone,
-  one slot saved); weapons whose gun subtree hangs outside the hand tree get
-  their root reparented under `Bip01` (exact). Confirm or keep
-  `Universal_Root`.
+- **Decision (Q2) — shared root = `Bip01`:** no injected `Universal_Root`;
+  every model shares the canonical `Bip01` root after renaming (one slot
+  saved). Weapons whose gun subtree hangs outside the hand tree get their
+  root reparented under `Bip01`, per-frame exact.
 - Sequences concatenated in model order, SMD paths prefixed `{model}/`;
   collisions `{model}__name`; `--index-sequences` renames to
   `{model}_seq_{i}` with originals preserved in `models.ini`; fps/events/loop
@@ -163,9 +163,10 @@ ancestors).
 Merged QC written fresh: `$bodygroup "weapon"` and `$bodygroup "hands"` with
 one entry per model, aligned so index *i* selects weapon *i*'s mesh **and**
 hands together via `pev_body` (mixed-radix encoding; blank-entry sharing so
-absent groups do not explode the product). `models.ini` per model:
-`pev_body = N` and `anim_<name> = merged_index` — same contract as the prior
-art so existing game-side code keeps working. Identical hand meshes across
+absent groups do not explode the product). The per-model manifest
+(`pev_body = N`, `anim_<name> = merged_index`) keeps the prior art's field
+contract; format selectable via `--manifest-format ini|json|toml` (default
+`ini` for drop-in compatibility; the same data structure serialised). Identical hand meshes across
 models (the corpus reuses ~4 CSO hand meshes heavily) are collapsed to shared
 entries by content hash, shrinking both the file and the vertex budget.
 
@@ -177,7 +178,46 @@ first-exceeded budget, deterministically (sorted by name), and `analyze` mode
 (`--dry-run`) prints the plan + budgets without writing. For the 56-pistol
 corpus expect ~2 parts (texture-bound).
 
-### 3.11 Verification gate (this repo's addition)
+### 3.11 Texture downscale (ported from prior art)
+
+`--max-texture-size N`: any staged texture larger than N on either axis is
+resampled down (aspect preserved, 8-bit palette re-quantised); UVs are
+untouched because GoldSource UVs are normalised per texture. Applied before
+atlas packing so the atlas inputs are already bounded.
+
+### 3.12 Texture atlas packing (`--pack-textures`)
+
+Author requirement: GoldSource caps textures per model (and studiomdl
+degrades far earlier in practice), so textures can be packed four-to-a-file:
+
+- Every participating texture is resampled to **256×256**; four of them are
+  composited into one **512×512** BMP (2×2 grid). One atlas file replaces four
+  texture slots.
+- **Shared palette:** a GoldSource BMP carries one 256-colour palette, so the
+  four members are re-quantised together (median-cut over the union of their
+  pixels). This is the quality cost of packing; the report records per-atlas
+  colour counts before/after.
+- **UV rewrite:** every mesh vertex whose material moved into an atlas gets
+  `u' = (clamp01(u) + col) / 2`, `v' = (clamp01(v) + row) / 2`, with a
+  half-texel inset toward each tile centre so bilinear filtering cannot bleed
+  a neighbour tile across the seam. UVs outside [0,1] (tiling) disqualify that
+  texture from packing (detected per mesh; reported).
+- **Compatibility grouping — never mixed in one atlas:**
+  - `$texrendermode ... masked` textures (transparency lives at palette index
+    255; masked pack only with masked, and index 255 is reserved in the shared
+    palette),
+  - `chrome` / `additive` render-mode textures are **excluded** from packing
+    entirely (chrome UVs are generated by the engine, not the mesh),
+  - textures referenced with tiling UVs (above).
+- Packing groups are chosen per output part after model→part assignment, so a
+  packed atlas never spans parts. Greedy fill, deterministic order; leftover
+  groups of 2–3 still pack (remaining tiles duplicated black).
+- `$texrendermode` lines are rewritten to the atlas names; `models.ini`
+  records the original→atlas mapping.
+- Escape hatches: `--no-pack-texture NAME` (glob) keeps a texture standalone;
+  without `--pack-textures` nothing is packed.
+
+### 3.13 Verification gate (this repo's addition)
 Text-level, before declaring success — the prior art trusts its passes; here
 every claim is re-proven from the emitted files:
 
@@ -190,6 +230,7 @@ every claim is re-proven from the emitted files:
 | budgets | studiomdl-surviving bones ≤127, verts/submodel ≤2048, bodyparts ≤32, textures ≤ threshold, per-sequence RLE estimate ≤64 KB, paths ≤60 chars |
 | pev_body | recomputed indices match `models.ini`; every model selectable |
 | textures_valid | existing gate (ASCII, no spaces, 8-bit BMP, staged) |
+| atlas_valid | when packing: every atlas is 512×512 8-bit, every rewritten UV lands inside its tile inset, masked textures kept index-255 transparency, chrome/additive textures untouched |
 
 Exit codes follow `retarget`'s contract (0/2/3/4). Per-part `report.json`
 records matches, renames, pool plan, budgets.
@@ -205,6 +246,8 @@ merge-view <models-dir> --out DIR [--name v_pistols]
   [--keep-group MODEL:GROUP]... [--keep-hitbox-bones]
   [--rename FIND=REPLACE]... [--index-sequences] [--max-sequences N]
   [--no-pool-bones] [--no-prune] [--dry-run]
+  [--max-texture-size N] [--pack-textures] [--no-pack-texture GLOB]...
+  [--manifest-format ini|json|toml]
   [--config TOML]
 ```
 
@@ -225,23 +268,31 @@ Config mirrors the flags plus per-model overrides; documented in
 
 ---
 
-## 6. Open questions for the author
+## 6. Author decisions (2026-07-31)
 
-- **Q1 — naming style confirmed?** Rename onto the *space* style of
-  `reference_hands.smd` (`Bip01 L Hand`). The prior art's reference uses
-  underscores; space style matches this repo's canon and the retarget outputs.
-- **Q2 — shared root:** injected `Universal_Root` (prior art) vs using the
-  canonical `Bip01` as the merged root (saves a bone slot, cleaner table).
-  Proposal: `Bip01`.
-- **Q3 — prune scope:** only Nubs, or all vertex-less unreferenced bones (the
-  prior art's full prune, which the bone budget effectively requires)?
-  Proposal: full prune, with `--no-prune` escape.
-- **Q4 — hands bodygroup content:** confirmed each weapon keeps its *own*
-  hand meshes (with content-hash sharing of identical ones)? The male/female
-  variant machinery from `retarget` is intentionally *not* applied here.
-- **Q5 — splitting policy:** automatic parts by budget with `--max-sequences`
-  as an additional cap — acceptable, or do you want explicit part manifests?
-- **Q6 — `models.ini` contract:** keep the prior art's exact format
-  (`pev_body`, `anim_<name> = index`) so downstream code is drop-in?
-- **Q7 — scope of v1:** decimation, texture downscale, skin/texturegroup
-  variants, player models excluded above — confirm they stay out until needed.
+1. **Naming:** space-style reference names (`Bip01 L Hand`) — approved.
+2. **Shared root:** `Bip01` (no `Universal_Root`).
+3. **Prune:** full vertex-less prune, `--no-prune` escape (Nubs always go).
+4. **Hands:** each weapon keeps its own hand meshes; identical meshes shared
+   by content hash — approved. No male/female variant machinery here.
+5. **Splitting:** automatic parts by budget — approved.
+6. **Manifest:** field contract kept; format `ini` (default) | `json` | `toml`
+   via `--manifest-format`.
+7. **Scope:** decimation/skins/player-models out. Texture downscale IN
+   (§3.11). Texture atlas packing IN (§3.12, `--pack-textures`).
+
+## 7. Implementation milestones
+
+- **M1** — package scaffold (`merge_view/`), discovery + sanitise + model
+  loading on the typed QC/SMD layer; `--dry-run` inventory report. Unit tests.
+- **M2** — hand rig detection + canonical rename + re-hierarchy + Nub removal
+  + full prune, with the FK pose-preservation check as the development
+  harness. Corpus target: all 56 pistols matched or explicitly diagnosed.
+- **M3** — bodygroup collapse, bone pooling, merge (bones/sequences/
+  attachments), QC + manifest generation, `Bip01` root unification.
+- **M4** — texture stage: dedupe, downscale, atlas packing, UV rewrite.
+- **M5** — splitting planner, full verification gate, docs
+  (`docs/merge-view.md`) + `configs/example_merge_view.toml`, corpus run.
+
+Each milestone lands with tests green and is exercised against
+`tmp/pistols/view` before the next begins.
