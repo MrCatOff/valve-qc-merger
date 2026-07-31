@@ -139,3 +139,9 @@ replaces `weapon_offset = [0, -0.6, 0]` — same relative seating, but:
 Verified: 71 pytest (new anchor-offset test), ruff + mypy --strict clean, full
 run PASS (11/11) exit 0, idle tip error mean 0.216 u; final renders in
 `tmp/verify/model/zoom_{R,L}.png`.
+
+**Calibration update (author feedback "move the hand further back"):**
+`hand_offset` Y raised 0.6 → **1.2** after rendering candidates 0.6/0.9/1.2/1.5
+side by side — 1.2 lands the wrist where the original's sits while the fingers
+still hook the grip's front face (1.5 loses the wrap). Full run PASS (11/11),
+exit 0; idle tip error mean 0.233 u, max 0.698 u (max improved from 0.99).

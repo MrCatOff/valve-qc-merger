@@ -12,6 +12,8 @@
 # longer than the original hand's, and the posed palm-forward axis at idle is
 # world -Y; anchoring the wrist exactly on the source wrist therefore overshoots
 # the knuckles past the grip. Moving the hands +0.6 u back along +Y reseats the
-# grip at the reference knuckles (visual calibration per §8.4; see
-# stages/fixes3.md).
-hand_offset = [0.0, 0.6, 0.0]
+# grip at the reference knuckles. Raised 0.6 -> 1.2 on author feedback ("move
+# the hand further back"): candidates 0.6/0.9/1.2/1.5 rendered side by side;
+# 1.2 lands the wrist where the original's sits while the fingers still hook
+# the grip's front face (visual calibration per §8.4; see stages/fixes3.md).
+hand_offset = [0.0, 1.2, 0.0]
