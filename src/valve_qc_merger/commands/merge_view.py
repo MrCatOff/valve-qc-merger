@@ -57,8 +57,9 @@ class MergeViewCommand(Command):
                             help="canonical hand skeleton SMD")
         parser.add_argument("--skip-unmatched", action="store_true",
                             help="continue past models whose rig cannot be matched")
-        parser.add_argument("--no-prune", action="store_true",
-                            help="keep vertex-less bones (Nubs are always removed)")
+        parser.add_argument("--prune", action="store_true",
+                            help="also fold away vertex-less unreferenced bones "
+                                 "(default keeps everything except Finger*Nub)")
         parser.add_argument("--no-pool-bones", action="store_true",
                             help="skip bone pooling (merged table may exceed 127)")
         parser.add_argument("--manifest-format", choices=("ini", "json", "toml"),
@@ -111,7 +112,7 @@ class MergeViewCommand(Command):
             if not args.dry_run:
                 reference_nodes = parse_smd_file(args.reference).nodes
                 result = canonicalize_model(
-                    model, match, reference_nodes, prune=not args.no_prune
+                    model, match, reference_nodes, prune=args.prune
                 )
                 if result.max_pose_deviation > 1e-4:
                     message = (f"model {model.name!r}: pose NOT preserved "

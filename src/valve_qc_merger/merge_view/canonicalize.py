@@ -9,8 +9,10 @@ skeleton onto the reference structure:
 3. enforce the reference parentage for the canonical subtree, top-down — this
    is what puts reversed-hierarchy rigs (forearm as a child of the hand) right,
 4. delete every ``*Nub`` bone (vertices rebound to the parent first, warned),
-5. full prune: every vertex-less bone not in the keep-set is folded away
-   (canonical hand bones and QC-referenced bones are always kept).
+5. optionally (--prune, OFF by default) fold away vertex-less unreferenced
+   bones. Field lesson: studiomdl's RLE animation handling chokes on folded
+   animated pivots (the anaconda's speedloader vanished), so only the Nubs
+   are removed unless pruning is explicitly requested.
 
 Every structural edit is FK-exact; :func:`verify_pose_preserved` proves it per
 model by comparing world positions of surviving bones across all frames of all
@@ -88,7 +90,7 @@ def canonicalize_model(
     match: HandMatch,
     reference_nodes: list[Node],
     *,
-    prune: bool = True,
+    prune: bool = False,
 ) -> CanonicalReport:
     """Apply the hand match to every SMD and the QC, in place."""
     report = CanonicalReport()
