@@ -25,6 +25,14 @@ from typing import Any
 AnchorPolicy = str  # "wrist" | "root"
 FrustumPolicy = str  # "warn" | "fail" | "trim"
 
+# Delivery defaults: the canonical reference hands and the default $bodygroup
+# hand variants, used unless the config (or CLI) says otherwise.
+DEFAULT_REFERENCE = "storage/hands/reference_hands.smd"
+DEFAULT_HAND_VARIANTS = {
+    "female": "storage/hands/female.smd",
+    "male": "storage/hands/male.smd",
+}
+
 
 @dataclass(frozen=True)
 class SolverConfig:
@@ -85,11 +93,16 @@ class RetargetConfig:
     # centres the two hands (the surplus splits evenly behind and ahead of the
     # grip); 0.0 reproduces plain wrist anchoring, 1.0 aligns the fingertips.
     hand_center_fraction: float = 0.5
+    # Reference hands SMD (immutable retarget target). The CLI --reference flag
+    # overrides; otherwise this default applies.
+    reference: str = DEFAULT_REFERENCE
     # Hand mesh variants for $bodygroup output: name -> SMD path. Every variant
-    # must share the reference skeleton exactly (asserted). When set, the export
-    # becomes weapon-only + one hands_<name> SMD per variant and the QC gains
-    # $bodygroup blocks; when None, hands+weapon merge into one SMD as before.
-    hand_variants: dict[str, str] | None = None
+    # must share the reference skeleton exactly (asserted). None => the default
+    # male+female pair from storage/hands; "blank" => no hand bodygroups (the
+    # reference hands merge with the weapon into one SMD as before); a table
+    # replaces the defaults entirely. The export becomes weapon-only + one
+    # hands_<name> SMD per variant, and the QC gains $bodygroup blocks.
+    hand_variants: dict[str, str] | str | None = None
     allow_rerig: bool = False  # §11.3
     frustum_policy: FrustumPolicy = "warn"  # §11.4
     finger_priority: tuple[str, ...] = ("pinky", "ring", "middle", "index", "thumb")  # §11.5
@@ -104,6 +117,18 @@ class RetargetConfig:
 
     # Environment / pinning (§6). Recorded in the report.
     blender: str | None = None  # explicit Blender executable; None => autodiscover
+
+    def resolved_hand_variants(self) -> dict[str, str]:
+        """The effective bodygroup variants: defaults, none ("blank"), or as set."""
+        if self.hand_variants is None:
+            return dict(DEFAULT_HAND_VARIANTS)
+        if isinstance(self.hand_variants, str):
+            if self.hand_variants.lower() == "blank":
+                return {}
+            raise ValueError(
+                f"hand_variants must be a table or 'blank', got {self.hand_variants!r}"
+            )
+        return dict(self.hand_variants)
 
     def to_job_dict(self) -> dict[str, Any]:
         """Serialise for embedding in a worker job (plain JSON types)."""

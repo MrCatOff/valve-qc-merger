@@ -40,8 +40,9 @@ class RetargetCommand(Command):
     help = "retarget a weapon's animations onto the reference hands (Blender pipeline)"
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--reference", type=Path, required=True,
-                            help="reference hands SMD (immutable)")
+        parser.add_argument("--reference", type=Path,
+                            help="reference hands SMD (immutable); default "
+                                 "storage/hands/reference_hands.smd or config")
         parser.add_argument("--weapon-dir", type=Path, required=True,
                             help="weapon directory (holds *-PV.smd, hand mesh, anims)")
         parser.add_argument("--anims", default="v_elite_anims/*.smd",
@@ -64,11 +65,14 @@ class RetargetCommand(Command):
     def run(self, args: argparse.Namespace) -> int:
         try:
             config = _load_config(args)
+            reference = args.reference or Path(config.reference)
+            if not reference.exists():
+                raise DriverError(f"reference hands SMD not found: {reference}")
             inputs = resolve_inputs(
-                args.reference, args.weapon_dir, args.anims,
+                reference, args.weapon_dir, args.anims,
                 weapon_pv=args.weapon_pv, original_hands=args.original_hands,
                 only=_selected(args.sequences),
-                hand_variants=config.hand_variants,
+                hand_variants=config.resolved_hand_variants(),
             )
         except DriverError as exc:
             print(f"error: {exc}")
@@ -112,11 +116,14 @@ def _load_config(args: argparse.Namespace) -> RetargetConfig:
     if args.blender:
         config = dataclasses.replace(config, blender=args.blender)
     if args.hands:
-        variants: dict[str, str] = dict(config.hand_variants or {})
+        variants = config.resolved_hand_variants()
         for spec in args.hands:
+            if spec == "blank":
+                variants = {}
+                continue
             name, sep, path = spec.partition("=")
             if not sep or not name or not path:
-                raise DriverError(f"--hands expects NAME=PATH, got {spec!r}")
+                raise DriverError(f"--hands expects NAME=PATH (or 'blank'), got {spec!r}")
             variants[name] = path
         config = dataclasses.replace(config, hand_variants=variants)
     return config

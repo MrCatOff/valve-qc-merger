@@ -22,6 +22,7 @@ from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget.config import RetargetConfig
 from valve_qc_merger.retarget.euler_unwrap import unwrap_smd
 from valve_qc_merger.retarget.qc_build import build_qc
+from valve_qc_merger.retarget.textures import finalize_textures
 from valve_qc_merger.retarget.verify_smd import VerifyResult, verify_export
 from valve_qc_merger.writers.smd import write_smd_file
 
@@ -322,6 +323,16 @@ def finalize_export(
         unwrapped, _changed = unwrap_smd(parse_smd_file(path))
         write_smd_file(unwrapped, path)
 
+    # Delivery contract: normalise material names in the exported meshes (ASCII,
+    # no spaces, .bmp extension — studiomdl may refuse otherwise) and stage each
+    # referenced 8-bit BMP next to the QC.
+    search_dirs: list[Path] = []
+    for candidate in (inputs.weapon_pv.parent, inputs.reference.parent,
+                      *(p.parent for p in inputs.hand_variants.values())):
+        if candidate not in search_dirs:
+            search_dirs.append(candidate)
+    textures = finalize_textures(out_dir, mesh_smds, search_dirs)
+
     verify = verify_export(
         mesh_smds, anim_smds, inputs.reference,
         hand_bones=reference_bones, anchor_bones=anchor_bones,
@@ -333,6 +344,11 @@ def finalize_export(
         euler_jump_threshold_degrees=config.euler_jump_threshold_degrees,
         geom_tolerance=config.geom_tolerance,
     )
+    for error in textures.errors:
+        verify.fail("textures_valid", error)
+    if not textures.errors:
+        verify.passed("textures_valid")
+    verify.warnings.extend(textures.warnings)
 
     qc_out: Path | None = None
     qc_src = qc_path or _find_qc(inputs.weapon_pv.parent)
