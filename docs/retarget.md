@@ -29,6 +29,8 @@ python -m valve_qc_merger retarget \
 | `anims/<sequence>.smd` | Every retargeted sequence |
 | `*.bmp` | Every referenced texture, staged next to the QC, validated 8-bit |
 | `report.json` | Full run record: per-sequence worker reports, derived hand offset, verify outcome |
+| `report/<sequence>.json` | Per-sequence worker report (bone map, counts, metrics) |
+| `report/<sequence>.blend` | The final Blender scene for that sequence — open it and scrub the timeline to inspect the grip (unified skeleton, keyed animation, both hand variants, weapon mesh). Disable with `save_blend = false`. |
 
 All emitted SMDs use the classic exporter indentation (two-space node/vertex
 lines, `  time N`, four-space pose lines) — the layout GoldSource `studiomdl`

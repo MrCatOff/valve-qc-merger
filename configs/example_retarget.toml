@@ -31,6 +31,11 @@ w_min = 0.05
 # Deterministic seed recorded in the report (reserved for stochastic stages).
 seed = 0
 
+# Save a .blend per sequence into <out>/report/ — the final scene (unified
+# skeleton, keyed animation, hand variants, weapon mesh), openable in Blender
+# to scrub the timeline and inspect the grip.
+save_blend = true
+
 # Blender executable. Omit to autodiscover: $VQM_BLENDER, then PATH, then the
 # macOS default install location. The --blender CLI flag overrides.
 # blender = "/Applications/Blender.app/Contents/MacOS/Blender"

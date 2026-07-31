@@ -845,6 +845,22 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
     if do_export:
         export = unify_and_export(scene, corr, classes, job)
 
+    blend_path: str | None = None
+    if bool(cfg.get("save_blend", True)) and not dry_run:
+        # Save the final scene next to the JSON report so it opens in Blender
+        # for timeline scrubbing — after export this is the unified skeleton
+        # with the keyed animation, hand variants and weapon mesh.
+        if do_export:
+            # BST's exporter leaves an orphan duplicate armature behind when
+            # debug_value=2 disables its undo cleanup; drop everything but the
+            # unified reference rig so the blend is tidy.
+            for ob in list(bpy.data.objects):
+                if ob.type == "ARMATURE" and ob is not scene.reference:
+                    bpy.data.objects.remove(ob, do_unlink=True)
+        blend_path = os.path.splitext(job["report"])[0] + ".blend"
+        bpy.context.scene.frame_set(bpy.context.scene.frame_start)
+        bpy.ops.wm.save_as_mainfile(filepath=blend_path, compress=True)
+
     status = "MAPPED" if dry_run else ("EXPORTED" if do_export else "RETARGETED")
     return {
         "sequence": job["sequence"]["name"],
@@ -852,6 +868,7 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
         "weapon_offset": cfg.get("weapon_offset"),
         "hand_offset": cfg.get("hand_offset"),
         "hand_offset_auto": solved.get("hand_offset_auto"),
+        "blend": blend_path,
         "frames": solved["frames"],
         "grip": solved["grip"],
         "blender": bpy.app.version_string,

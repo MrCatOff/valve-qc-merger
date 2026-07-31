@@ -111,6 +111,10 @@ class RetargetConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
 
     seed: int = 0
+    # Save a .blend per sequence into <out>/report/ — the final unified scene
+    # (skeleton + keyed animation + meshes), openable in Blender to scrub the
+    # timeline and inspect the grip.
+    save_blend: bool = True
     epsilon: float = 1e-5  # format-level equality tolerance (Phase 6)
     euler_jump_threshold_degrees: float = 120.0  # §7.8 continuity
     geom_tolerance: float = 1e-3  # Phase 6 mesh-preservation tolerance (model units)
