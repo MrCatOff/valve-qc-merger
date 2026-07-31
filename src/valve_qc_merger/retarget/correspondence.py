@@ -209,7 +209,15 @@ def _identify_thumb(rig: Rig, arm: Arm, warnings: list[str] | None = None) -> in
     decisive by a clear margin, in which case the fragile cross-check is
     overruled with a warning instead.
     """
-    dirs = [_norm(rig.bones[chain[0]].direction()) for chain in arm.fingers]
+    # Base-segment direction = head-to-child-head, never bone.direction(): SMD
+    # stores no bone tails, so Blender/BST invents them on import — on the
+    # anaconda the fake tails made abduction pick the index as the left thumb
+    # (and the knuckle ordering then reversed the whole hand). The >=2-joint
+    # chain filter guarantees a real child head exists.
+    dirs = [
+        _norm(_sub(rig.bones[chain[1]].head, rig.bones[chain[0]].head))
+        for chain in arm.fingers
+    ]
     abduction: list[float] = []
     for i, di in enumerate(dirs):
         others = [d for j, d in enumerate(dirs) if j != i]

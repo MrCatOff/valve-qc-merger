@@ -238,3 +238,21 @@ def test_side_names_override_geometric_pairing() -> None:
     mapping = build_correspondence(src, {b.name for b in src}, tgt).as_dict()
     assert mapping[tgt_roles["L_wrist"]] == renamed[src_roles["L_wrist"]]
     assert mapping[tgt_roles["R_wrist"]] == renamed[src_roles["R_wrist"]]
+
+
+def test_thumb_identification_survives_synthetic_bone_tails() -> None:
+    # SMD stores no bone tails; Blender/BST invents them on import. Thumb
+    # identification must rely on real joint positions (head-to-child-head),
+    # not the fabricated tails (anaconda left-hand swap).
+    def garble(bones: list[RigBone]) -> list[RigBone]:
+        return [RigBone(b.name, b.parent, b.head,
+                        Vector3(b.head.x, b.head.y, b.head.z + 0.05))
+                for b in bones]
+
+    src, src_roles = _hand("S", _xform(), joints=3)
+    tgt, tgt_roles = _hand("Bip01 R", _xform(trans=Vector3(8, 0, 0)), joints=3)
+    mapping = build_correspondence(
+        garble(src), {b.name for b in src}, garble(tgt)
+    ).as_dict()
+    for role in ("thumb", "index", "middle", "ring", "pinky"):
+        assert mapping[tgt_roles[role]] == src_roles[role], role
