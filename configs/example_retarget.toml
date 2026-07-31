@@ -1,0 +1,143 @@
+# Full example config for the `retarget` command — every attribute, with its
+# default value. Every key is optional: omit a key and the default applies, so
+# a real config usually contains only the handful of lines being changed.
+# Usage: python -m valve_qc_merger retarget --config configs/example_retarget.toml ...
+# Reference: docs/retarget.md
+#
+# TOML note: every top-level key must appear BEFORE the [hand_variants]/
+# [solver]/[camera] tables — keys after a table header belong to that table.
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+
+# Reference hands SMD — the immutable retarget target. Never renamed,
+# reparented, rescaled or reshaped by the pipeline (verified per run).
+# The --reference CLI flag overrides this.
+reference = "storage/hands/reference_hands.smd"
+
+# ---------------------------------------------------------------------------
+# Scene / process
+# ---------------------------------------------------------------------------
+
+# Worker scene FPS. Playback speed comes from each $sequence's own fps in the
+# regenerated QC; this only sets the Blender scene rate.
+fps = 30.0
+
+# Minimum vertex weight for a bone to count as "carrying" a mesh when
+# classifying hand vs weapon bones (spec §5).
+w_min = 0.05
+
+# Deterministic seed recorded in the report (reserved for stochastic stages).
+seed = 0
+
+# Blender executable. Omit to autodiscover: $VQM_BLENDER, then PATH, then the
+# macOS default install location. The --blender CLI flag overrides.
+# blender = "/Applications/Blender.app/Contents/MacOS/Blender"
+
+# ---------------------------------------------------------------------------
+# Hand placement (spec §7.4/§7.5 + the half-length centering rule)
+# ---------------------------------------------------------------------------
+
+# Anchor policy (§11.1): "wrist" solves each arm's single translation so the
+# reference wrist lands on the source wrist ("root" is reserved).
+anchor_policy = "wrist"
+
+# Manual override for automatic left/right arm pairing on rigs whose arms are
+# not spatially separated AND carry no L/R bone names.
+swap_arms = false
+
+# Fraction of the measured hand-length surplus (reference minus original) the
+# hands shift back along the source grip's palm-forward axis.
+#   0.0 = wrist-anchored (hands at the source wrists exactly)
+#   0.5 = centres of the two hands aligned (default; the surplus splits evenly
+#         behind and ahead of the grip)
+#   1.0 = fingertip-aligned
+hand_center_fraction = 0.5
+
+# Explicit constant world translation for the hands; bypasses the automatic
+# half-length rule entirely. The derived automatic vector is recorded per run
+# in the report as hand_offset_auto.
+# hand_offset = [0.0, 1.2, 0.0]
+
+# Constant world translation for the WEAPON (§11.2). Default: unset = zero
+# offset — the weapon stays exactly where its own animation puts it, which
+# preserves attachments, dual-gun sync and screen framing. Prefer hand_offset;
+# a weapon offset also shifts the grip-contact targets with the gun.
+# weapon_offset = [0.0, -0.6, 0.0]
+
+# ---------------------------------------------------------------------------
+# Author decisions (spec §11) — recorded, some reserved
+# ---------------------------------------------------------------------------
+
+# §11.3 escape hatch: allow re-binding the reference mesh to the original
+# skeleton instead of retargeting (reserved; the pipeline never re-rigs).
+allow_rerig = false
+
+# §11.4: what to do if the (longer) reference forearm's cut end enters the
+# viewmodel frustum: "warn" | "fail" | "trim" (only "warn" is implemented).
+frustum_policy = "warn"
+
+# §11.5: relaxation order if finger targets are ever unreachable (recorded;
+# the direction-transfer finger pose has no solver to relax).
+finger_priority = ["pinky", "ring", "middle", "index", "thumb"]
+
+# ---------------------------------------------------------------------------
+# Verification gate (spec §7.8)
+# ---------------------------------------------------------------------------
+
+# Format-level equality tolerance: exported hand-bone local translations must
+# equal their rest values within this, every frame (proof the hands were not
+# reshaped).
+epsilon = 1e-5
+
+# A bone rotating more than this between adjacent frames fails the continuity
+# check — unless the source animation itself jumps there (an authored cut,
+# which is excused with a warning).
+euler_jump_threshold_degrees = 120.0
+
+# Every input hand vertex must survive into the exported mesh within this many
+# model units (position-level mesh preservation).
+geom_tolerance = 1e-3
+
+# ---------------------------------------------------------------------------
+# Hand bodygroup variants: name -> SMD path. Every variant must share the
+# reference skeleton EXACTLY (asserted before any worker runs). Three forms:
+#   (omit the table)          -> the default female+male pair below
+#   hand_variants = "blank"   -> no hand bodygroups: reference hands merge with
+#                                the weapon into one SMD (single $body model)
+#   [hand_variants] table     -> replaces the defaults entirely
+# ---------------------------------------------------------------------------
+[hand_variants]
+female = "storage/hands/female.smd"
+male = "storage/hands/male.smd"
+
+# ---------------------------------------------------------------------------
+# Solver block (spec §7.6/§8). The current finger pose is a direct direction
+# transfer from the source grip, so most of these are calibration values
+# recorded for the optional validators rather than live solver inputs.
+# ---------------------------------------------------------------------------
+[solver]
+w_pos = 1.0                    # tip-position weight (§7.6 objective)
+w_dir = 0.3                    # distal-direction weight (§7.6 objective)
+lambda_temporal = 0.05         # temporal regularisation weight
+lambda_base = 0.02             # stay-near-base-pose weight
+damping = 0.1                  # damped-least-squares damping
+max_iterations = 40            # per-finger iteration cap
+tau_pos = 0.15                 # tip error tolerance / distal phalanx length
+tau_depth = 0.05               # over-penetration slack vs the original hand
+contact_band = [0.5, 2.0]      # accepted overlap_ref / overlap_src ratio
+hinge_mcp = [-25.0, 100.0]     # scalar flexion limits (degrees) per joint depth
+hinge_pip = [0.0, 110.0]       #   (used by the optional hinge-IK solver in
+hinge_dip = [0.0, 90.0]        #    retarget/grip_ik.py; the default direction-
+hinge_thumb = [-60.0, 90.0]    #    transfer pose does not consult them)
+max_step_degrees = 35.0        # max per-frame joint travel (hinge-IK temporal guard)
+
+# ---------------------------------------------------------------------------
+# Viewmodel camera (spec §7.4 frustum guard)
+# ---------------------------------------------------------------------------
+[camera]
+fov_y_degrees = 90.0
+aspect = 1.3333333333333333    # 4:3
+near = 0.1
+far = 128.0
