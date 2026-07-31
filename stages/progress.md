@@ -15,14 +15,16 @@ Status of the Blender-driven retargeting pipeline against
 | §6 | process model | 🟡 partial |
 | §9 | CLI | 🟡 partial |
 | §10 | testing | 🟡 partial |
-| §7.5 | Phase 3 — weapon placement | ⬜ not started |
-| §7.6 | Phase 4 — grip solve (finger curl) | ⬜ not started |
+| §7.5 | Phase 3 — weapon placement | ✅ done (zero-offset) |
+| §7.6 | Phase 4 — grip solve (finger curl) | 🟡 core done |
 | §7.7 | Phase 5 — unify skeleton + export | ⬜ not started |
 | §7.8 | Phase 6 — post-export text verify | ⬜ not started |
 | §8 | full per-frame metrics/report | 🟡 partial |
 
-Working end-to-end and rendered in headless Blender: **Phases 0, 1, 2a, 2b**.
-Remaining: **Phases 3, 4, 5, 6** (Phase 4 finger curl is the substantive next step).
+Working end-to-end and rendered in headless Blender: **Phases 0, 1, 2a, 2b, 3, 4
+(core)** — the reference hands follow the animation and their fingers curl around
+the grips. Remaining: **Phase 4 numeric validators, Phases 5, 6**. See
+`stages/phase34.md`.
 
 ## Done
 
@@ -96,14 +98,24 @@ Remaining: **Phases 3, 4, 5, 6** (Phase 4 finger curl is the substantive next st
    off the held root; if no such bone exists (a hierarchy deeper than
    forearm-off-root) it falls back to anchoring the wrist directly.
 
-## Not started
-- Phase 3 — weapon placement (default zero offset; hands come to the weapon).
-- Phase 4 — grip solve: curl each longer finger onto the weapon surface to match
-  the original hand's contact (not zero-overlap). **Next.**
+## Done — Phase 3 & 4 (see stages/phase34.md)
+- **Phase 3 (§7.5)** — zero weapon offset (default): the weapon stays where its
+  own animation puts it and the hands come to it. A non-zero offset is explicitly
+  rejected (not implemented) rather than silently ignored.
+- **Phase 4 core (§7.6)** — per-finger CCD (`grip_ik.py`, pure Python) curls each
+  reference finger so its tip lands on the *original* finger's tip, absorbing the
+  extra reference length as wrap. Joint-limited, warm-started from the previous
+  frame. Tip error ~0.0005u across all v_elite sequences; fingers wrap the grips
+  (verify renders regenerated).
+
+## Not started / remaining
+- **Phase 4 validators** — the §7.6/§8 numeric accept/reject (BVH overlap band
+  vs the original, `d_max` over-penetration guard) and the extra objective terms
+  (distal-direction, temporal/base regularisation, priority relaxation). Only
+  tip-error is measured today.
 - Phase 5 — append weapon subtree to the reference armature, rebind, transfer
   weapon animation, delete originals, export SMDs via BST.
 - Phase 6 — parse emitted SMDs and prove the §2 constraints at text level.
-- §8 full per-frame/per-finger metrics in `report.json`.
 
 ## Commits
 - Remove obsolete pure-Python mechanisms

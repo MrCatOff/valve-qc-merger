@@ -47,10 +47,13 @@ class SolverConfig:
     tau_pos: float = 0.15  # tip error / distal phalanx length (§7.6)
     tau_depth: float = 0.05  # over-penetration slack vs the original hand (§7.6)
     contact_band: tuple[float, float] = (0.5, 2.0)  # overlap_ref / overlap_src (§7.6)
-    # Flexion-dominant defaults; MCP allows small abduction (§7.6).
-    limit_mcp: JointLimit = JointLimit((-20.0, -10.0, -10.0), (90.0, 10.0, 10.0))
-    limit_pip: JointLimit = JointLimit((0.0, 0.0, 0.0), (100.0, 0.0, 0.0))
-    limit_dip: JointLimit = JointLimit((0.0, 0.0, 0.0), (100.0, 0.0, 0.0))
+    # Joint limits (degrees). Generous by default: the tip target is the *original*
+    # finger's contact point, so the natural curl to reach it is already plausible.
+    # Tight flexion-dominant limits assume a known local flexion axis, which varies
+    # per rig; that is a §8.4 calibration, not a safe default.
+    limit_mcp: JointLimit = JointLimit((-150.0, -150.0, -150.0), (150.0, 150.0, 150.0))
+    limit_pip: JointLimit = JointLimit((-150.0, -150.0, -150.0), (150.0, 150.0, 150.0))
+    limit_dip: JointLimit = JointLimit((-150.0, -150.0, -150.0), (150.0, 150.0, 150.0))
 
 
 @dataclass(frozen=True)

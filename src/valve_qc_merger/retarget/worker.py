@@ -16,6 +16,7 @@ Exit codes match the CLI contract (§9):
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import traceback
@@ -37,13 +38,18 @@ if _PKG_ROOT and _PKG_ROOT not in sys.path:
     sys.path.insert(0, _PKG_ROOT)
 
 from valve_qc_merger.models.geometry import Vector3  # noqa: E402
+from valve_qc_merger.retarget import grip_ik  # noqa: E402
 from valve_qc_merger.retarget.correspondence import (  # noqa: E402
     Correspondence,
     CorrespondenceError,
     RigBone,
     build_correspondence,
 )
-from valve_qc_merger.retarget.pose_retarget import Anchor, compute_bases  # noqa: E402
+from valve_qc_merger.retarget.pose_retarget import (  # noqa: E402
+    Anchor,
+    compute_bases,
+    world_from_bases,
+)
 from valve_qc_merger.transform import Transform  # noqa: E402
 
 EXIT_OK = 0
@@ -308,8 +314,49 @@ def _anchors(corr: Correspondence, tgt_parent: dict[str, str | None]) -> list[An
     return anchors
 
 
-def retarget(scene: Scene, corr: Correspondence) -> int:
-    """Key the reference skeleton from the source animation, frame by frame (§7.4)."""
+def _children_map(tgt_parent: dict[str, str | None]) -> dict[str, list[str]]:
+    children: dict[str, list[str]] = {name: [] for name in tgt_parent}
+    for bone, parent in tgt_parent.items():
+        if parent is not None:
+            children[parent].append(bone)
+    for kids in children.values():
+        kids.sort()
+    return children
+
+
+def _finger_chains(
+    mapping: dict[str, str | None], tgt_parent: dict[str, str | None], corr: Correspondence
+) -> list[tuple[str, list[str], list[str]]]:
+    """Each finger as (wrist, chain base..tip, curlable DOF bones) (§7.6)."""
+    children = _children_map(tgt_parent)
+    chains: list[tuple[str, list[str], list[str]]] = []
+    for wrist in (m.target for m in corr.maps if m.role == "wrist"):
+        for base in children.get(wrist, []):
+            chain, cursor = [base], base
+            while len(children.get(cursor, [])) == 1:
+                cursor = children[cursor][0]
+                chain.append(cursor)
+            dof = [b for b in chain if mapping.get(b) is not None]
+            if dof:
+                chains.append((wrist, chain, dof))
+    return chains
+
+
+def _finger_limits(cfg: dict[str, Any]) -> list[grip_ik.Limit]:
+    """MCP/PIP/DIP joint limits (deg -> rad) by chain depth (§7.6)."""
+    solver = cfg["solver"]
+
+    def lim(d: dict[str, Any]) -> grip_ik.Limit:
+        return grip_ik.Limit(
+            tuple(math.radians(x) for x in d["min"]),  # type: ignore[arg-type]
+            tuple(math.radians(x) for x in d["max"]),  # type: ignore[arg-type]
+        )
+
+    return [lim(solver["limit_mcp"]), lim(solver["limit_pip"]), lim(solver["limit_dip"])]
+
+
+def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Key the reference skeleton: rotation retarget (§7.4) + grip solve (§7.6)."""
     _assert_identity_world(scene.src, scene.reference)
     tgt_rest = _rest_transforms(scene.reference)
     tgt_parent = _parent_map(scene.reference)
@@ -317,6 +364,16 @@ def retarget(scene: Scene, corr: Correspondence) -> int:
     mapping = corr.as_dict()
     anchors = _anchors(corr, tgt_parent)
     src_names = {b.name for b in scene.src.data.bones}
+
+    chains = _finger_chains(mapping, tgt_parent, corr)
+    depth_limits = _finger_limits(cfg)
+    chain_rl: dict[str, dict[str, Transform]] = {}
+    chain_lim: dict[str, dict[str, grip_ik.Limit]] = {}
+    for wrist, chain, dof in chains:
+        key = wrist + "|" + chain[0]
+        chain_rl[key] = grip_ik.rest_locals(chain, tgt_parent, tgt_rest)
+        chain_lim[key] = {b: depth_limits[min(k, len(depth_limits) - 1)] for k, b in enumerate(dof)}
+    iters = int(cfg["solver"]["max_iterations"])
 
     reference = scene.reference
     for pose_bone in reference.pose.bones:
@@ -327,18 +384,43 @@ def retarget(scene: Scene, corr: Correspondence) -> int:
     scene_ctx = bpy.context.scene
     scene_ctx.frame_start, scene_ctx.frame_end = start, end
 
+    warm: dict[str, dict[str, Transform]] = {}
+    tip_errors: list[float] = []
     for frame in range(start, end + 1):
         scene_ctx.frame_set(frame)
         src_pose = {name: _xf(scene.src.pose.bones[name].matrix) for name in src_names}
         bases = compute_bases(
             tgt_rest, tgt_parent, mapping, src_rest, src_pose, anchors, orient=corr.frames
         )
+        posed = world_from_bases(tgt_rest, tgt_parent, bases)  # open-hand world (wrist fixed)
+        for wrist, chain, dof in chains:
+            key = wrist + "|" + chain[0]
+            base_parent_world = posed[wrist]
+            target_tip = _v3(scene.src.pose.bones[mapping[dof[-1]]].tail)
+            finger = grip_ik.solve_finger(
+                chain, dof, base_parent_world, chain_rl[key], target_tip,
+                chain_lim[key], warm_start=warm.get(key), iterations=iters,
+            )
+            warm[key] = finger
+            bases.update(finger)
+            tip_errors.append(
+                grip_ik.tip_error(chain, base_parent_world, chain_rl[key], finger, target_tip)
+            )
         for name, basis in bases.items():
             pose_bone = reference.pose.bones[name]
             pose_bone.matrix_basis = _bmatrix(basis)
             pose_bone.keyframe_insert("location", frame=frame)
             pose_bone.keyframe_insert("rotation_euler", frame=frame)
-    return end - start + 1
+
+    n = len(tip_errors) or 1
+    return {
+        "frames": end - start + 1,
+        "grip": {
+            "fingers_per_frame": len(chains),
+            "tip_error_mean": sum(tip_errors) / n,
+            "tip_error_max": max(tip_errors, default=0.0),
+        },
+    }
 
 
 def assert_no_mirrors(*armatures: Any) -> None:
@@ -364,17 +446,23 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
     clean_scene(float(cfg["fps"]))
     scene = import_scene(job)
     assert_no_mirrors(scene.reference, scene.src)
+    # Phase 3 (§7.5): default is a zero weapon offset -- the weapon stays where its
+    # own animation puts it and the hands come to it. A non-zero offset is not yet
+    # implemented (see progress.md), so reject it rather than silently ignore it.
+    if cfg.get("weapon_offset") is not None:
+        raise AssertionFailure("non-zero weapon_offset (Phase 3) is not implemented")
     classes = classify(scene, float(cfg["w_min"]))
     corr = correspond(scene, classes, bool(cfg.get("swap_arms", False)))
     dry_run = bool(job.get("dry_run", False))
-    frames = 0 if dry_run else retarget(scene, corr)
+    solved = {"frames": 0, "grip": {}} if dry_run else retarget(scene, corr, cfg)
 
     action = scene.src.animation_data.action
     frame_range = [int(action.frame_range[0]), int(action.frame_range[1])]
     return {
         "sequence": job["sequence"]["name"],
         "status": "MAPPED" if dry_run else "RETARGETED",
-        "frames": frames,
+        "frames": solved["frames"],
+        "grip": solved["grip"],
         "blender": bpy.app.version_string,
         "frame_range": frame_range,
         "counts": {
