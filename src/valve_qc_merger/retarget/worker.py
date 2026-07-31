@@ -136,12 +136,14 @@ class Scene:
     """Handles onto the imported, consolidated scene (§7.2)."""
 
     def __init__(self, src: Any, reference: Any, weapon_mesh: Any, original_mesh: Any,
-                 reference_mesh: Any) -> None:
+                 reference_mesh: Any,
+                 variant_meshes: dict[str, Any] | None = None) -> None:
         self.src = src  # animated BoneNN rig (source)
         self.reference = reference  # Bip01 rig (target)
         self.weapon_mesh = weapon_mesh  # bound to src
         self.original_mesh = original_mesh  # rebound to src (ground truth)
         self.reference_mesh = reference_mesh  # bound to reference
+        self.variant_meshes = variant_meshes or {}  # bodygroup name -> mesh on reference
 
 
 def import_scene(job: dict[str, Any]) -> Scene:
@@ -175,7 +177,21 @@ def import_scene(job: dict[str, Any]) -> Scene:
     reference = _only_new_armature(arms2)
     reference_mesh = _only_new_mesh(meshes2)
 
-    return Scene(src, reference, weapon_mesh, original_mesh, reference_mesh)
+    # Hand variants for $bodygroup output: each shares the reference skeleton
+    # (asserted at driver level), so rebind the mesh to the reference rig and
+    # drop the freshly imported duplicate rig.
+    variant_meshes: dict[str, Any] = {}
+    for variant_name, path in sorted(job.get("hand_variants", {}).items()):
+        arms_v, meshes_v = {a.name for a in _armatures()}, _mesh_names()
+        _import_smd(path, "NEW_ARMATURE")
+        variant_rig = _only_new_armature(arms_v)
+        variant_mesh = _only_new_mesh(meshes_v)
+        _rebind(variant_mesh, reference)
+        bpy.data.objects.remove(variant_rig, do_unlink=True)
+        variant_meshes[variant_name] = variant_mesh
+
+    return Scene(src, reference, weapon_mesh, original_mesh, reference_mesh,
+                 variant_meshes)
 
 
 def _rebind(mesh: Any, armature: Any) -> None:
@@ -672,35 +688,55 @@ def _prepare_export(out_dir: str) -> None:
     bpy.app.debug_value = 2
 
 
-def export_mesh_smd(scene: Scene, out_dir: str, weapon_stem: str) -> str:
-    """Export reference hands + weapon merged into one rest-pose mesh SMD (§7.7).
+def export_mesh_smds(scene: Scene, out_dir: str, weapon_stem: str) -> dict[str, str]:
+    """Export the rest-pose mesh SMDs (§7.7): merged, or per-bodygroup.
+
+    Without hand variants: one merged reference-hands+weapon SMD, as before.
+    With variants: a weapon-only SMD plus one ``hands_<name>`` SMD per variant —
+    each in its own collection (BST names the SMD after the collection), all on
+    the same unified skeleton so their node tables are identical.
 
     The armature is switched to REST so the emitted bind pose and single skeleton
     frame carry each bone's rest local transform.
     """
     ref = scene.reference
-    coll = bpy.data.collections.new(weapon_stem)
-    bpy.context.scene.collection.children.link(coll)
-    for ob in (scene.reference_mesh, scene.weapon_mesh):
-        for existing in list(ob.users_collection):
-            existing.objects.unlink(ob)
-        coll.objects.link(ob)
-        ob.vs.export = True
-    coll.vs.subdir = ""
-    coll.vs.export = True
+    if scene.variant_meshes:
+        groups: dict[str, list[Any]] = {weapon_stem: [scene.weapon_mesh]}
+        for name, mesh in scene.variant_meshes.items():
+            groups[f"hands_{name}"] = [mesh]
+        scene.reference_mesh.vs.export = False  # superseded by the variants
+    else:
+        groups = {weapon_stem: [scene.reference_mesh, scene.weapon_mesh]}
+
+    collections = {}
+    for coll_name, objects in groups.items():
+        coll = bpy.data.collections.new(coll_name)
+        bpy.context.scene.collection.children.link(coll)
+        for ob in objects:
+            for existing in list(ob.users_collection):
+                existing.objects.unlink(ob)
+            coll.objects.link(ob)
+            ob.vs.export = True
+        coll.vs.subdir = ""
+        coll.vs.export = True
+        collections[coll_name] = coll
 
     prev_pos = ref.data.pose_position
     ref.data.pose_position = "REST"
     bpy.context.view_layer.update()
     _prepare_export(out_dir)
-    bpy.ops.export_scene.smd(collection=coll.name)
+    for coll in collections.values():
+        bpy.ops.export_scene.smd(collection=coll.name)
     ref.data.pose_position = prev_pos
     bpy.context.view_layer.update()
-    # BST names the file after the collection.
-    path = os.path.join(out_dir, weapon_stem + ".smd")
-    if not os.path.exists(path):
-        raise AssertionFailure(f"BST wrote no mesh SMD at {path}")
-    return path
+
+    paths: dict[str, str] = {}
+    for coll_name in collections:
+        path = os.path.join(out_dir, coll_name + ".smd")
+        if not os.path.exists(path):
+            raise AssertionFailure(f"BST wrote no mesh SMD at {path}")
+        paths[coll_name] = path
+    return paths
 
 
 def export_anim_smd(scene: Scene, out_dir: str, sequence: str) -> str:
@@ -749,9 +785,9 @@ def unify_and_export(
 
     out_dir = job["out_dir"]
     weapon_stem = job["weapon_stem"]
-    result: dict[str, Any] = {"gun_bones": gun_names, "anim_smd": None, "mesh_smd": None}
+    result: dict[str, Any] = {"gun_bones": gun_names, "anim_smd": None, "mesh_smds": None}
     if job.get("export_mesh", False):
-        result["mesh_smd"] = export_mesh_smd(scene, out_dir, weapon_stem)
+        result["mesh_smds"] = export_mesh_smds(scene, out_dir, weapon_stem)
     result["anim_smd"] = export_anim_smd(scene, out_dir, job["sequence"]["name"])
     return result
 

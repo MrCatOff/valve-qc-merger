@@ -85,6 +85,11 @@ class RetargetConfig:
     # centres the two hands (the surplus splits evenly behind and ahead of the
     # grip); 0.0 reproduces plain wrist anchoring, 1.0 aligns the fingertips.
     hand_center_fraction: float = 0.5
+    # Hand mesh variants for $bodygroup output: name -> SMD path. Every variant
+    # must share the reference skeleton exactly (asserted). When set, the export
+    # becomes weapon-only + one hands_<name> SMD per variant and the QC gains
+    # $bodygroup blocks; when None, hands+weapon merge into one SMD as before.
+    hand_variants: dict[str, str] | None = None
     allow_rerig: bool = False  # §11.3
     frustum_policy: FrustumPolicy = "warn"  # §11.4
     finger_priority: tuple[str, ...] = ("pinky", "ring", "middle", "index", "thumb")  # §11.5

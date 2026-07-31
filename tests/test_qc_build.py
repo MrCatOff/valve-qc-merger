@@ -55,3 +55,17 @@ def test_build_qc_points_at_merged_mesh_and_anims() -> None:
     assert '$attachment 0 "Bone63"' in qc
     assert "Bone01" not in qc  # deleted arm bone must not survive in the QC
     assert "$hbox" not in qc  # hitboxes referenced deleted bones; dropped
+
+
+def test_bodygroup_render_lists_weapon_and_hand_variants() -> None:
+    qc = build_qc(
+        _QC, mesh_stem="v_elite-PV", anims_subdir="anims",
+        surviving_bones={"Bone63"}, model_name="v_elite.mdl",
+        hand_bodies=["hands_female", "hands_male"],
+    )
+    assert '$bodygroup "weapon"' in qc
+    assert '\tstudio "v_elite-PV"' in qc
+    assert '$bodygroup "hands"' in qc
+    assert '\tstudio "hands_female"' in qc
+    assert '\tstudio "hands_male"' in qc
+    assert '$body "studio"' not in qc  # bodygroups replace the single body

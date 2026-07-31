@@ -155,3 +155,27 @@ def test_cli_registers_retarget_command() -> None:
     )
     assert args.command == "retarget"
     assert args.dry_run is False
+
+
+def test_variant_skeleton_mismatch_is_rejected(tmp_path: Path) -> None:
+    from valve_qc_merger.retarget.driver import assert_variant_skeletons
+
+    ref = tmp_path / "reference_hands.smd"
+    _write_smd(ref, _BIP, mesh=True)
+    good = tmp_path / "male.smd"
+    _write_smd(good, _BIP, mesh=True)
+    bad = tmp_path / "female.smd"
+    _write_smd(bad, [(0, "Bip01", -1), (1, "Bip01 L Hand", 0)], mesh=True)  # renamed bone
+
+    inputs = resolve_inputs(
+        ref, _weapon_dir(tmp_path), "v_elite_anims/*.smd",
+        hand_variants={"male": str(good)},
+    )
+    assert_variant_skeletons(inputs)  # matching variant passes
+
+    inputs = resolve_inputs(
+        ref, _weapon_dir(tmp_path / "w2"), "v_elite_anims/*.smd",
+        hand_variants={"female": str(bad)},
+    )
+    with pytest.raises(DriverError, match="different node table"):
+        assert_variant_skeletons(inputs)

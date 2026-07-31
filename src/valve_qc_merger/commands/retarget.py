@@ -18,6 +18,7 @@ from valve_qc_merger.retarget.driver import (
     DriverError,
     SequenceResult,
     assert_identical_node_tables,
+    assert_variant_skeletons,
     finalize_export,
     find_blender,
     resolve_inputs,
@@ -56,6 +57,9 @@ class RetargetCommand(Command):
                             help="import + discovery + correspondence only; no solve/export")
         parser.add_argument("--no-export", action="store_true",
                             help="retarget only; do not unify the skeleton or write SMDs")
+        parser.add_argument("--hands", action="append", metavar="NAME=PATH",
+                            help="hand mesh variant for $bodygroup output (repeatable); "
+                                 "each must share the reference skeleton")
 
     def run(self, args: argparse.Namespace) -> int:
         try:
@@ -64,12 +68,14 @@ class RetargetCommand(Command):
                 args.reference, args.weapon_dir, args.anims,
                 weapon_pv=args.weapon_pv, original_hands=args.original_hands,
                 only=_selected(args.sequences),
+                hand_variants=config.hand_variants,
             )
         except DriverError as exc:
             print(f"error: {exc}")
             return EXIT_DISCOVERY  # bad/missing inputs
         try:
             assert_identical_node_tables(inputs)  # §5 gate
+            assert_variant_skeletons(inputs)  # hand variants share the reference rig
             blender = find_blender(config)  # environment
         except DriverError as exc:
             print(f"error: {exc}")
@@ -105,6 +111,14 @@ def _load_config(args: argparse.Namespace) -> RetargetConfig:
     config = RetargetConfig.from_toml(args.config) if args.config else RetargetConfig()
     if args.blender:
         config = dataclasses.replace(config, blender=args.blender)
+    if args.hands:
+        variants: dict[str, str] = dict(config.hand_variants or {})
+        for spec in args.hands:
+            name, sep, path = spec.partition("=")
+            if not sep or not name or not path:
+                raise DriverError(f"--hands expects NAME=PATH, got {spec!r}")
+            variants[name] = path
+        config = dataclasses.replace(config, hand_variants=variants)
     return config
 
 

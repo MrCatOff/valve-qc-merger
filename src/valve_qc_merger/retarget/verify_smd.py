@@ -50,12 +50,13 @@ def _is_finite(*values: float) -> bool:
 
 
 def verify_export(
-    mesh_smd: Path,
+    mesh_smds: Path | dict[str, Path],
     anim_smds: dict[str, Path],
     reference_smd: Path,
     *,
     hand_bones: set[str],
     anchor_bones: set[str],
+    mesh_sources: dict[str, Path] | None = None,
     source_anims: dict[str, Path] | None = None,
     gun_bones: set[str] | None = None,
     weapon_offset: tuple[float, float, float] | None = None,
@@ -67,18 +68,31 @@ def verify_export(
 ) -> VerifyResult:
     """Run every §7.8 check over the emitted model.
 
-    ``hand_bones`` are the reference bone names whose local translation must be
-    frozen at rest in every frame (§2.2/§2.3); ``anchor_bones`` are excused (they
-    carry the retargeted wrist translation). ``source_anims`` maps sequence name
-    to the *input* animation SMD so frame counts/time indices can be cross-checked
-    and — with ``gun_bones`` — so every weapon bone's FK world pose can be proven
-    equal to the source's per frame (§7.5 zero offset, §7.7).
+    ``mesh_smds`` maps exported mesh name to path — one merged hands+weapon SMD,
+    or (bodygroup mode) a weapon SMD plus one per hand variant; all must share
+    one node table with every animation. ``mesh_sources`` maps an exported mesh
+    name to the INPUT mesh whose vertex positions it must preserve (the hand
+    variants; defaults to the reference for a single merged mesh). ``hand_bones``
+    are the reference bone names whose local translation must be frozen at rest
+    in every frame (§2.2/§2.3); ``anchor_bones`` are excused (they carry the
+    retargeted wrist translation). ``source_anims`` maps sequence name to the
+    *input* animation SMD so frame counts/time indices can be cross-checked and —
+    with ``gun_bones`` — so every weapon bone's FK world pose can be proven equal
+    to the source's per frame (§7.5 zero offset, §7.7).
     """
     result = VerifyResult()
-    mesh = parse_smd_file(mesh_smd)
+    if isinstance(mesh_smds, Path):
+        mesh_smds = {"mesh": mesh_smds}
+        mesh_sources = mesh_sources or {"mesh": reference_smd}
+    meshes = {name: parse_smd_file(path) for name, path in sorted(mesh_smds.items())}
+    mesh = next(iter(meshes.values()))  # canonical skeleton carrier
     reference = parse_smd_file(reference_smd)
     mesh_table = _node_table(mesh)
 
+    for name, other in meshes.items():
+        if _node_table(other) != mesh_table:
+            result.fail("node_tables_identical",
+                        f"mesh SMD {name} node table differs from the others")
     _check_node_tables(result, mesh_table, anim_smds)
     _check_reference_bones_preserved(result, reference, mesh)
     _check_reference_rest_preserved(result, reference, mesh, epsilon)
@@ -104,7 +118,12 @@ def verify_export(
                     offset=weapon_offset,
                 )
 
-    _check_reference_geometry_preserved(result, reference, mesh, geom_tolerance)
+    for name, source_path in sorted((mesh_sources or {}).items()):
+        if name in meshes:
+            _check_reference_geometry_preserved(
+                result, parse_smd_file(source_path), meshes[name], geom_tolerance,
+                label=name,
+            )
     return result
 
 
@@ -411,7 +430,8 @@ def _check_frame_count(result: VerifyResult, name: str, anim: Smd, source: Smd) 
 
 
 def _check_reference_geometry_preserved(
-    result: VerifyResult, reference: Smd, mesh: Smd, geom_tolerance: float
+    result: VerifyResult, reference: Smd, mesh: Smd, geom_tolerance: float,
+    label: str = "mesh",
 ) -> None:
     """Every reference hand vertex survives into the merged mesh SMD (§2.1).
 
@@ -437,13 +457,13 @@ def _check_reference_geometry_preserved(
     if missing:
         result.fail(
             "reference_mesh_preserved",
-            f"{missing}/{len(ref_pts)} reference hand vertices moved by more than "
+            f"{label}: {missing}/{len(ref_pts)} hand vertices moved by more than "
             f"{geom_tolerance} model units (hand reshaped)",
         )
         return
     if max_dev > 0:
         result.warnings.append(
-            f"[reference_mesh_preserved] hand vertices preserved within "
+            f"[reference_mesh_preserved] {label}: hand vertices preserved within "
             f"{max_dev:.5f} model units (normals recomputed by the exporter)"
         )
     result.passed("reference_mesh_preserved")

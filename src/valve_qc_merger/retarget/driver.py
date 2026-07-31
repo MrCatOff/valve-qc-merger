@@ -57,6 +57,7 @@ class Inputs:
     weapon_pv: Path
     original_hands: Path
     sequences: dict[str, Path]  # name -> anim SMD
+    hand_variants: dict[str, Path] = field(default_factory=dict)  # bodygroup name -> SMD
 
 
 def _one(matches: list[str], what: str, where: Path) -> Path:
@@ -75,6 +76,7 @@ def resolve_inputs(
     weapon_pv: Path | None = None,
     original_hands: Path | None = None,
     only: set[str] | None = None,
+    hand_variants: dict[str, str] | None = None,
 ) -> Inputs:
     """Discover the weapon mesh, original hands and animation set."""
     weapon_dir = weapon_dir.resolve()
@@ -96,7 +98,13 @@ def resolve_inputs(
         if missing:
             raise DriverError(f"requested sequences not found: {sorted(missing)}")
         sequences = {name: sequences[name] for name in sorted(only)}
-    return Inputs(reference.resolve(), pv, hands, sequences)
+    variants: dict[str, Path] = {}
+    for variant_name, raw in sorted((hand_variants or {}).items()):
+        path = Path(raw)
+        if not path.exists():
+            raise DriverError(f"hand variant {variant_name!r} not found: {path}")
+        variants[variant_name] = path.resolve()
+    return Inputs(reference.resolve(), pv, hands, sequences, variants)
 
 
 def assert_identical_node_tables(inputs: Inputs) -> list[tuple[int, str, int]]:
@@ -116,6 +124,43 @@ def assert_identical_node_tables(inputs: Inputs) -> list[tuple[int, str, int]]:
             )
     assert reference_table is not None
     return reference_table
+
+
+def assert_variant_skeletons(inputs: Inputs) -> None:
+    """Every hand variant must share the reference skeleton EXACTLY.
+
+    Bodygroup variants swap meshes on one skeleton; a variant with different
+    bone names, parents or rest transforms would deform wrongly in-game while
+    compiling fine. Checked at text level before any worker runs.
+    """
+    if not inputs.hand_variants:
+        return
+    reference = parse_smd_file(inputs.reference)
+    ref_table = [(n.index, n.name, n.parent) for n in reference.nodes]
+    ref_rest = [
+        (p.bone, round(p.position.x, 4), round(p.position.y, 4), round(p.position.z, 4),
+         round(p.rotation.x, 4), round(p.rotation.y, 4), round(p.rotation.z, 4))
+        for p in reference.frames[0].poses
+    ]
+    for name, path in inputs.hand_variants.items():
+        variant = parse_smd_file(path)
+        table = [(n.index, n.name, n.parent) for n in variant.nodes]
+        if table != ref_table:
+            raise DriverError(
+                f"hand variant {name!r} ({path.name}) has a different node table "
+                "from the reference hands; bodygroup variants must share one skeleton"
+            )
+        rest = [
+            (p.bone, round(p.position.x, 4), round(p.position.y, 4),
+             round(p.position.z, 4), round(p.rotation.x, 4), round(p.rotation.y, 4),
+             round(p.rotation.z, 4))
+            for p in variant.frames[0].poses
+        ]
+        if rest != ref_rest:
+            raise DriverError(
+                f"hand variant {name!r} ({path.name}) has a different rest skeleton "
+                "from the reference hands; bodygroup variants must share one skeleton"
+            )
 
 
 def _as_text(stream: str | bytes | None) -> str:
@@ -177,6 +222,7 @@ def run_sequence(
         "export": export,
         "export_mesh": export_mesh,
         "weapon_stem": weapon_stem,
+        "hand_variants": {n: str(p) for n, p in inputs.hand_variants.items()},
         "config": config.to_job_dict(),
     }
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
@@ -229,7 +275,17 @@ def finalize_export(
     worker report, since every sequence shares the same unified skeleton.
     """
     weapon_stem = inputs.weapon_pv.stem
-    mesh_smd = out_dir / f"{weapon_stem}.smd"
+    # Expected mesh SMDs: hands+weapon merged when there are no variants;
+    # otherwise a weapon-only SMD plus one hands_<name> SMD per variant.
+    mesh_smds = {weapon_stem: out_dir / f"{weapon_stem}.smd"}
+    mesh_sources: dict[str, Path] = {}
+    if inputs.hand_variants:
+        for variant, source in inputs.hand_variants.items():
+            exported_name = f"hands_{variant}"
+            mesh_smds[exported_name] = out_dir / f"{exported_name}.smd"
+            mesh_sources[exported_name] = source
+    else:
+        mesh_sources[weapon_stem] = inputs.reference
 
     def _has_export(result: SequenceResult) -> bool:
         block = result.report.get("export")
@@ -243,10 +299,11 @@ def finalize_export(
     # verify failure, not a silent exclusion (the QC would still reference it).
     anim_smds = {r.name: out_dir / "anims" / f"{r.name}.smd" for r in results if r.ok}
     missing = sorted(n for n, p in anim_smds.items() if not p.exists())
-    if not mesh_smd.exists() or missing:
+    missing_meshes = sorted(n for n, p in mesh_smds.items() if not p.exists())
+    if missing_meshes or missing:
         failed = VerifyResult()
-        if not mesh_smd.exists():
-            failed.fail("outputs_present", f"mesh SMD missing: {mesh_smd}")
+        if missing_meshes:
+            failed.fail("outputs_present", f"mesh SMDs missing: {missing_meshes}")
         if missing:
             failed.fail("outputs_present",
                         f"anim SMDs missing for ok sequences: {missing}")
@@ -266,8 +323,9 @@ def finalize_export(
         write_smd_file(unwrapped, path)
 
     verify = verify_export(
-        mesh_smd, anim_smds, inputs.reference,
+        mesh_smds, anim_smds, inputs.reference,
         hand_bones=reference_bones, anchor_bones=anchor_bones,
+        mesh_sources=mesh_sources,
         source_anims=dict(inputs.sequences),
         gun_bones=gun_bones,
         weapon_offset=config.weapon_offset,
@@ -285,6 +343,7 @@ def finalize_export(
             anims_subdir="anims",
             surviving_bones=reference_bones | gun_bones,
             model_name=f"{weapon_stem}.mdl",
+            hand_bodies=sorted(f"hands_{v}" for v in inputs.hand_variants) or None,
         )
         qc_out = out_dir / f"{weapon_stem}.qc"
         qc_out.write_text(qc_text)
@@ -310,6 +369,7 @@ __all__ = [
     "find_blender",
     "resolve_inputs",
     "assert_identical_node_tables",
+    "assert_variant_skeletons",
     "run_sequence",
     "finalize_export",
 ]
