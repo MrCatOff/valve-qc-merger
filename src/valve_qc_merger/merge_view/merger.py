@@ -18,10 +18,14 @@ from pathlib import Path
 
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.discovery import ModelInput
-from valve_qc_merger.merge_view.skeleton_ops import conform_to_table, fk_worlds
+from valve_qc_merger.merge_view.skeleton_ops import (
+    _map_vertices,
+    conform_to_table,
+    fk_worlds,
+)
 from valve_qc_merger.models.geometry import Vector3
-from valve_qc_merger.models.smd import Smd, Triangle
-from valve_qc_merger.transform import matrix_to_euler
+from valve_qc_merger.models.smd import BonePose, Frame, Smd, Triangle, Vertex
+from valve_qc_merger.transform import Transform, euler_to_matrix, matrix_to_euler
 from valve_qc_merger.writers.smd import write_smd_text
 
 BONE_LIMIT = 127
@@ -116,6 +120,44 @@ def _unify_skeletons(models: list[ModelInput], skeleton: dict[str, str | None]) 
     for model in models:
         for smd in {**model.meshes, **model.anims}.values():
             conform_to_table(smd, table, bind_locals)
+
+    # GoldSrc studiomdl keeps ONE bind per bone (first reference file wins) and
+    # uses it to bone-localise EVERY reference mesh's vertices. Pooled slots and
+    # per-model hands carry different binds per file, so every non-first model's
+    # mesh would detach from its bones. Repose: move each vertex rigidly with
+    # its bone into the global bind and stamp that bind into every mesh SMD.
+    # Sequences are untouched - they pose bones absolutely.
+    global_world: dict[str, Transform] = {}
+    for name, parent in table:
+        pos, rot = bind_locals[name]
+        local = Transform(euler_to_matrix(rot), pos)
+        global_world[name] = (
+            global_world[parent].compose(local) if parent is not None else local
+        )
+    bind_frame = Frame(0, tuple(
+        BonePose(index, bind_locals[name][0], bind_locals[name][1])
+        for index, (name, _parent) in enumerate(table)
+    ))
+    for model in models:
+        for smd in model.meshes.values():
+            own_world = {
+                next(n.name for n in smd.nodes if n.index == i): t
+                for i, t in fk_worlds(smd, smd.frames[0]).items()
+            }
+            name_of = {n.index: n.name for n in smd.nodes}
+            movers = {
+                index: global_world[name].compose(own_world[name].inverse())
+                for index, name in name_of.items()
+            }
+            def moved(v: Vertex, movers: dict[int, Transform] = movers) -> Vertex:
+                return dataclasses.replace(
+                    v,
+                    position=movers[v.bone].transform_point(v.position),
+                    normal=movers[v.bone].rotate_vector(v.normal),
+                )
+
+            smd.triangles = [_map_vertices(t, moved) for t in smd.triangles]
+            smd.frames = [bind_frame]
 
 
 def _concat_meshes(meshes: list[Smd]) -> Smd:
