@@ -82,23 +82,30 @@ def _signed_angle(a: Vector3, b: Vector3, axis: Vector3) -> float:
 def _bases_from_angles(
     chain: list[str], dof: list[str], base_parent: Transform,
     rest_local: dict[str, Transform], axis: Vector3, angles: dict[str, float],
+    pre_basis: dict[str, Transform] | None = None,
 ) -> dict[str, Transform]:
     """Basis transforms realising hinge ``angles`` about the world ``axis``.
 
     Each joint's local hinge axis is the world axis expressed in that joint's
-    seat frame (parent pose . rest local), so the hinge rides with the chain as
-    proximal joints curl — the anatomical behaviour.
+    seat frame (parent pose . rest local . pre basis), so the hinge rides with
+    the chain as proximal joints curl — the anatomical behaviour. ``pre_basis``
+    is an optional per-bone rotation applied before the hinge (the abduction
+    aim that matches the source's finger spacing); the hinge curls on top.
     """
     basis: dict[str, Transform] = {b: Transform.identity() for b in chain}
     prev = base_parent
     for bone in chain:
+        pre = pre_basis.get(bone) if pre_basis else None
         seat = prev.compose(rest_local[bone])
+        if pre is not None:
+            seat = seat.compose(pre)
         theta = angles.get(bone, 0.0)
+        hinge = Transform.identity()
         if bone in dof and theta:
             local_axis = _norm(_rot(mat3_transpose(seat.rotation), axis))
-            basis[bone] = Transform(axis_angle(local_axis, theta))
-        posed = seat.compose(basis[bone])
-        prev = posed
+            hinge = Transform(axis_angle(local_axis, theta))
+        basis[bone] = pre.compose(hinge) if pre is not None else hinge
+        prev = prev.compose(rest_local[bone]).compose(basis[bone])
     return basis
 
 
@@ -111,6 +118,7 @@ def solve_finger(
     limits: dict[str, tuple[float, float]],
     *,
     axis: Vector3,
+    pre_basis: dict[str, Transform] | None = None,
     warm_start: dict[str, float] | None = None,
     max_step: float | None = None,
     iterations: int = 12,
@@ -138,13 +146,15 @@ def solve_finger(
                 angles[b] = min(hi, max(lo, warm_start[b]))
 
     for _ in range(iterations):
-        basis = _bases_from_angles(chain, dof, base_parent_world, rest_local, axis, angles)
+        basis = _bases_from_angles(
+            chain, dof, base_parent_world, rest_local, axis, angles, pre_basis
+        )
         posed = _fk(chain, base_parent_world, rest_local, basis)
         if posed[chain[-1]].translation.distance_to(target_tip) < tolerance:
             break
         for joint in reversed(dof):
             basis = _bases_from_angles(
-                chain, dof, base_parent_world, rest_local, axis, angles
+                chain, dof, base_parent_world, rest_local, axis, angles, pre_basis
             )
             posed = _fk(chain, base_parent_world, rest_local, basis)
             tip = posed[chain[-1]].translation
@@ -166,7 +176,9 @@ def solve_finger(
             if prev is not None:
                 angles[b] = min(prev + max_step, max(prev - max_step, angles[b]))
 
-    basis = _bases_from_angles(chain, dof, base_parent_world, rest_local, axis, angles)
+    basis = _bases_from_angles(
+        chain, dof, base_parent_world, rest_local, axis, angles, pre_basis
+    )
     return basis, angles
 
 
@@ -178,6 +190,7 @@ def calibrate_axis_sign(
     target_tip: Vector3,
     axis: Vector3,
     *,
+    pre_basis: dict[str, Transform] | None = None,
     probe: float = 0.35,
 ) -> float:
     """+1.0 or -1.0: the hinge orientation whose positive curl approaches the target.
@@ -191,7 +204,7 @@ def calibrate_axis_sign(
         probe_axis = Vector3(axis.x * sign, axis.y * sign, axis.z * sign)
         angles = {b: probe for b in dof}
         basis = _bases_from_angles(
-            chain, dof, base_parent_world, rest_local, probe_axis, angles
+            chain, dof, base_parent_world, rest_local, probe_axis, angles, pre_basis
         )
         posed = _fk(chain, base_parent_world, rest_local, basis)
         err = posed[chain[-1]].translation.distance_to(target_tip)

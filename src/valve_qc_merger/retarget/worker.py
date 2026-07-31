@@ -50,7 +50,12 @@ from valve_qc_merger.retarget.pose_retarget import (  # noqa: E402
     compute_bases,
     world_from_bases,
 )
-from valve_qc_merger.transform import Transform  # noqa: E402
+from valve_qc_merger.transform import (  # noqa: E402
+    Transform,
+    mat3_multiply,
+    mat3_transpose,
+    rotation_between,
+)
 
 EXIT_OK = 0
 EXIT_DISCOVERY = 3
@@ -469,9 +474,36 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
         for wrist, chain, dof in chains:
             key = wrist + "|" + chain[0]
             base_parent_world = posed[wrist]
+            rl = chain_rl[key]
             tip = _v3(scene.src.pose.bones[mapping[dof[-1]]].tail)
             target_tip = Vector3(tip.x + target_shift.x, tip.y + target_shift.y,
                                  tip.z + target_shift.z)
+            # Abduction aim: the solver starts each finger from the reference
+            # REST fan, so without correction the fingers keep the rest splay
+            # instead of the original grip's tight spacing. Aim each finger's
+            # base segment at the source finger's posed direction (the hand
+            # already adopts the source's absolute orientation, so world
+            # directions are directly comparable); the hinge curls on top.
+            pre: dict[str, Transform] | None = None
+            src_base = mapping.get(chain[0])
+            src_next = mapping.get(chain[1]) if len(chain) >= 2 else None
+            seat0 = base_parent_world.compose(rl[chain[0]])
+            if src_base is not None and src_next is not None:
+                p0 = seat0.translation
+                p1 = seat0.compose(rl[chain[1]]).translation
+                d_ours = Vector3(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z)
+                # Segment direction = head-to-child-head; BST-imported bones have
+                # synthetic tails (SMD stores none), so .tail is meaningless.
+                sb = scene.src.pose.bones[src_base].head
+                sn = scene.src.pose.bones[src_next].head
+                d_src = Vector3(sn[0] - sb[0], sn[1] - sb[1], sn[2] - sb[2])
+                if d_ours.length() > 1e-6 and d_src.length() > 1e-6:
+                    aim = rotation_between(_vnorm(d_ours), _vnorm(d_src))
+                    pre_rot = mat3_multiply(
+                        mat3_transpose(seat0.rotation),
+                        mat3_multiply(aim, seat0.rotation),
+                    )
+                    pre = {chain[0]: Transform(pre_rot)}
             if chain[0] == thumb_of[wrist]:
                 # Thumb: hinge in the base-to-target arc plane (planar curl straight
                 # toward its own contact point — cannot fold the wrong way). The
@@ -479,8 +511,13 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
                 # could flip its hemisphere and pop the joint by ~180°: keep the
                 # previous frame's axis when degenerate and hemisphere-align to it
                 # otherwise, so the hinge turns continuously across the sequence.
-                base = posed[chain[0]].translation
-                open_tip = posed[chain[-1]].translation
+                walk = base_parent_world
+                for b in chain:
+                    walk = walk.compose(rl[b])
+                    if pre is not None and b in pre:
+                        walk = walk.compose(pre[b])
+                base = seat0.translation
+                open_tip = walk.translation
                 axis = _vcross(
                     Vector3(open_tip.x - base.x, open_tip.y - base.y, open_tip.z - base.z),
                     Vector3(target_tip.x - base.x, target_tip.y - base.y,
@@ -500,13 +537,14 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
                 axis = knuckle[wrist]
             if key not in curl_sign:
                 curl_sign[key] = grip_ik.calibrate_axis_sign(
-                    chain, dof, base_parent_world, chain_rl[key], target_tip, axis
+                    chain, dof, base_parent_world, chain_rl[key], target_tip, axis,
+                    pre_basis=pre,
                 )
             sign = curl_sign[key]
             axis = Vector3(axis.x * sign, axis.y * sign, axis.z * sign)
             finger, angles = grip_ik.solve_finger(
                 chain, dof, base_parent_world, chain_rl[key], target_tip,
-                chain_lim[key], axis=axis, warm_start=warm.get(key),
+                chain_lim[key], axis=axis, pre_basis=pre, warm_start=warm.get(key),
                 max_step=max_step, iterations=iters,
             )
             warm[key] = angles

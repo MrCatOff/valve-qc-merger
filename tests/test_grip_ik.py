@@ -69,6 +69,19 @@ def test_axis_sign_calibration_picks_the_curl_toward_the_target() -> None:
     assert calibrate_axis_sign(_CHAIN, _DOF, Transform(), _LOCAL, target, flipped) == 1.0
 
 
+def test_pre_basis_re_aims_the_chain_before_the_curl() -> None:
+    # An abduction aim of -90 deg about Z at the base re-points the whole straight
+    # finger from +Y to +X before any hinge curl is applied.
+    from valve_qc_merger.transform import axis_angle
+
+    pre = {"j0": Transform(axis_angle(Vector3(0, 0, 1), -math.pi / 2))}
+    basis, _ = solve_finger(
+        _CHAIN, _DOF, Transform(), _LOCAL, Vector3(3.0, 0.0, 0.0), _WIDE,
+        axis=_AXIS, pre_basis=pre, iterations=0,
+    )
+    assert tip_error(_CHAIN, Transform(), _LOCAL, basis, Vector3(3.0, 0.0, 0.0)) < 1e-6
+
+
 def test_max_step_clamps_per_frame_travel() -> None:
     # The previous frame held the finger straight; the new target demands a big
     # curl. With max_step the joints may travel at most that far in one frame.

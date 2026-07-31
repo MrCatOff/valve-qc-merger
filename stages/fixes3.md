@@ -90,3 +90,26 @@ distal joint popped 149° between draw frames 13→14. Two causes, two guards:
   original) and `compare_idle_f4.png` (full model) — fingers wrap the grip in
   one even plane like the original, index at the trigger guard, thumb crossing
   the grip side (no longer inverted), no backward joints, both hands.
+
+## Fix 4 — finger spacing (user feedback: fingers spread, original pressed tight)
+
+The hinge solver rebuilds each finger from the reference hand's REST pose — a
+relaxed, splayed fan — so the original grip's tight finger adduction never
+transferred and the fingers wrapped the grip with visible gaps
+(reference ideal: `tmp/images/fixed.png`).
+
+Fix: **abduction aim**. Per finger per frame, the base segment is re-aimed at
+the source finger's posed segment direction by a minimal rotation folded into
+the MCP as a `pre_basis` (the hinge then curls on top, its axis riding the
+aimed seat). World directions are directly comparable because the wrist is
+pinned to the source wrist and the hand adopts the source's absolute
+orientation. Pitfall found on the way: BST-imported bones have **synthetic
+tails** (SMD stores none), so the direction must be head-to-child-head, not
+`pose_bone.tail` — the first attempt aimed at garbage and tripled the tip
+error before the corrected version *reduced* it below the no-aim baseline
+(idle mean 0.56 → **0.22 u**, and the fingers sit pressed together like the
+original's).
+
+Verified: 70 pytest (new `pre_basis` re-aim test), ruff + mypy --strict clean,
+full run PASS (11/11) exit 0, grip renders regenerated — both hands now match
+the original's finger spacing (`zoom_R.png` / `zoom_L.png`).
