@@ -221,3 +221,20 @@ def test_thumb_identified_as_abducted_finger() -> None:
     # The thumb slot maps thumb->thumb; a non-thumb never captures it.
     assert mapping[tgt_roles["thumb"]] == src_roles["thumb"]
     assert mapping[tgt_roles["index"]] != src_roles["thumb"]
+
+
+def test_side_names_override_geometric_pairing() -> None:
+    # Both rigs carry L/R names, but the arms separate along DEPTH (same X), where
+    # the geometric side heuristic is blind — names must decide (anaconda bug).
+    src, tgt, src_roles, tgt_roles = _two_arms(
+        tgt_left_chirality=1.0, src_left_chirality=1.0,
+        src_left_trans=Vector3(2, -12, 0), src_right_trans=Vector3(2, -20, 0),
+    )
+    renamed = {b.name: b.name.replace("SL_", "Src_L_").replace("SR_", "Src_R_")
+               for b in src}
+    src = [RigBone(renamed[b.name],
+                   renamed.get(b.parent) if b.parent else None, b.head, b.tail)
+           for b in src]
+    mapping = build_correspondence(src, {b.name for b in src}, tgt).as_dict()
+    assert mapping[tgt_roles["L_wrist"]] == renamed[src_roles["L_wrist"]]
+    assert mapping[tgt_roles["R_wrist"]] == renamed[src_roles["R_wrist"]]

@@ -183,10 +183,10 @@ def _ancestors(rig: Rig, name: str) -> list[str]:
 
 
 def _side_of(name: str) -> str:
-    tokens = name.replace("_", " ").split()
-    if "L" in tokens:
+    tokens = [t.lower() for t in name.replace("_", " ").replace("-", " ").split()]
+    if "l" in tokens or any("left" in t for t in tokens):
         return "L"
-    if "R" in tokens:
+    if "r" in tokens or any("right" in t for t in tokens):
         return "R"
     return "?"
 
@@ -384,7 +384,11 @@ def build_correspondence(
         _hand_frame(tgt, arm, _identify_thumb(tgt, arm, warnings)) for arm in tgt_arms
     ]
 
-    pairing, score, margin = _best_pairing(src_frames, tgt_frames)
+    named = _pairing_by_side_names(src_arms, tgt_arms)
+    if named is not None:
+        pairing, score, margin = named, math.inf, math.inf
+    else:
+        pairing, score, margin = _best_pairing(src_frames, tgt_frames)
     if force_pairing is not None:
         if sorted(force_pairing) != list(range(len(tgt_arms))):
             raise CorrespondenceError(f"force_pairing {force_pairing} is not a valid permutation")
@@ -430,6 +434,24 @@ def _side_offsets(frames: list[HandFrame]) -> list[Vector3]:
     """Each arm's wrist direction from the arms' shared centroid (its 'side')."""
     centroid = _centroid([f.origin for f in frames])
     return [_norm(_sub(f.origin, centroid)) for f in frames]
+
+
+def _pairing_by_side_names(src_arms: list[Arm], tgt_arms: list[Arm]) -> list[int] | None:
+    """Pair by L/R bone names when BOTH rigs carry unambiguous side labels.
+
+    Rigs like the grafted CS templates name their wrists (``Bip01_L_Hand``,
+    ``Bone_Righthand``); names are authoritative where they exist. Geometry
+    remains the fallback — some rigs (v_elite's ``BoneNN``) name nothing, and
+    the geometric side heuristic fails exactly on rigs whose arms separate
+    along depth rather than sideways (the anaconda swapped hands this way).
+    """
+    src_sides = [arm.side for arm in src_arms]
+    tgt_sides = [arm.side for arm in tgt_arms]
+    if "?" in src_sides or "?" in tgt_sides:
+        return None
+    if len(set(src_sides)) != len(src_sides) or sorted(src_sides) != sorted(tgt_sides):
+        return None
+    return [src_sides.index(side) for side in tgt_sides]
 
 
 def _best_pairing(

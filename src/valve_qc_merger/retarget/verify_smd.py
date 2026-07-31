@@ -102,15 +102,17 @@ def verify_export(
     rot_tol = math.radians(weapon_rot_tolerance_degrees)
     for name, path in sorted(anim_smds.items()):
         anim = parse_smd_file(path)
+        source = None
+        if source_anims and name in source_anims:
+            source = parse_smd_file(source_anims[name])
         _check_no_nan(result, name, anim)
         _check_frozen_hand_translation(
             result, name, anim, mesh, hand_bones, anchor_bones, epsilon
         )
-        _check_euler_continuity(result, name, anim, threshold)
+        _check_euler_continuity(result, name, anim, threshold, source=source)
         _check_euler_component_continuity(result, name, anim)
         _check_frame_indices(result, name, anim)
-        if source_anims and name in source_anims:
-            source = parse_smd_file(source_anims[name])
+        if source is not None:
             _check_frame_count(result, name, anim, source)
             if gun_bones:
                 _check_weapon_pose(
@@ -280,8 +282,24 @@ def _check_frozen_hand_translation(
     result.passed("hand_translation_frozen")
 
 
+def _source_cut_frames(source: Smd, threshold: float) -> set[int]:
+    """Frame times where the SOURCE animation itself teleports (authored cuts)."""
+    cuts: set[int] = set()
+    prev: dict[int, Matrix3] = {}
+    for frame in source.frames:
+        for pose in frame.poses:
+            cur = euler_to_matrix(pose.rotation)
+            last = prev.get(pose.bone)
+            if last is not None:
+                if rotation_angle(mat3_multiply(cur, mat3_transpose(last))) > threshold:
+                    cuts.add(frame.time)
+            prev[pose.bone] = cur
+    return cuts
+
+
 def _check_euler_continuity(
-    result: VerifyResult, name: str, anim: Smd, threshold: float
+    result: VerifyResult, name: str, anim: Smd, threshold: float,
+    source: Smd | None = None,
 ) -> None:
     """No bone's *rotation* teleports between adjacent frames (§7.8).
 
@@ -291,7 +309,13 @@ def _check_euler_continuity(
     geodesic rotation between consecutive frames stays within the threshold. That
     catches a genuine pop/teleport while accepting fast-but-smooth motion (e.g. a
     finger snapping during a 30 fps reload).
+
+    Frames where the SOURCE animation itself jumps past the threshold are authored
+    cuts (hands snap between shots of a reload); reproducing them is correct, so
+    those transitions are excused with a warning rather than failed.
     """
+    cuts = _source_cut_frames(source, threshold) if source is not None else set()
+    excused: set[int] = set()
     prev: dict[int, Matrix3] = {}
     for frame in anim.frames:
         for pose in frame.poses:
@@ -300,14 +324,22 @@ def _check_euler_continuity(
             if last is not None:
                 delta = rotation_angle(mat3_multiply(cur, mat3_transpose(last)))
                 if delta > threshold:
-                    result.fail(
-                        "euler_continuity",
-                        f"{name} bone {pose.bone} rotation jumps "
-                        f"{math.degrees(delta):.0f} deg (> {math.degrees(threshold):.0f}) "
-                        f"at frame {frame.time}",
-                    )
-                    return
+                    if frame.time in cuts:
+                        excused.add(frame.time)
+                    else:
+                        result.fail(
+                            "euler_continuity",
+                            f"{name} bone {pose.bone} rotation jumps "
+                            f"{math.degrees(delta):.0f} deg "
+                            f"(> {math.degrees(threshold):.0f}) at frame {frame.time}",
+                        )
+                        return
             prev[pose.bone] = cur
+    if excused:
+        result.warnings.append(
+            f"[euler_continuity] {name}: jumps at frames {sorted(excused)} match "
+            "authored cuts in the source animation"
+        )
     result.passed("euler_continuity")
 
 

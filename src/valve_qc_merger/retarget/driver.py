@@ -21,7 +21,12 @@ from pathlib import Path
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget.config import RetargetConfig
 from valve_qc_merger.retarget.euler_unwrap import unwrap_smd
-from valve_qc_merger.retarget.qc_build import build_qc
+from valve_qc_merger.retarget.qc_build import (
+    QcSequence,
+    build_qc,
+    parse_bodygroups,
+    parse_sequences,
+)
 from valve_qc_merger.retarget.textures import finalize_textures
 from valve_qc_merger.retarget.verify_smd import VerifyResult, verify_export
 from valve_qc_merger.writers.smd import write_smd_file
@@ -69,31 +74,87 @@ def _one(matches: list[str], what: str, where: Path) -> Path:
     return Path(matches[0])
 
 
+def _qc_smd(weapon_dir: Path, stem: str) -> Path:
+    """Resolve a QC-referenced SMD stem/path (backslashes, optional extension)."""
+    relative = stem.replace("\\", "/")
+    if not relative.lower().endswith(".smd"):
+        relative += ".smd"
+    return weapon_dir / relative
+
+
 def resolve_inputs(
     reference: Path,
     weapon_dir: Path,
-    anims_glob: str,
+    anims_glob: str | None = None,
     *,
     weapon_pv: Path | None = None,
     original_hands: Path | None = None,
     only: set[str] | None = None,
     hand_variants: dict[str, str] | None = None,
 ) -> Inputs:
-    """Discover the weapon mesh, original hands and animation set."""
+    """Discover the weapon mesh, original hands and animation set.
+
+    Everything not given explicitly is read from the weapon's QC — the
+    authoritative manifest: ``$bodygroup "weapon"`` names the weapon mesh,
+    ``$bodygroup "hands"`` the original hand meshes (the first entry is the
+    contact ground truth), and every ``$sequence`` block carries its animation
+    SMD path. ``anims_glob`` remains as a filesystem-glob override.
+    """
     weapon_dir = weapon_dir.resolve()
-    pv = weapon_pv or _one(
-        sorted(glob(str(weapon_dir / "*-PV.smd"))), "*-PV.smd weapon mesh", weapon_dir
-    )
-    hands = original_hands or _one(
-        sorted(glob(str(weapon_dir / "f_*_Male_hand_Low.smd")))
-        or sorted(glob(str(weapon_dir / "f_*_hand_Low.smd"))),
-        "original hand mesh (f_*_hand_Low.smd)",
-        weapon_dir,
-    )
-    anim_paths = sorted(glob(str(weapon_dir / anims_glob)))
-    if not anim_paths:
-        raise DriverError(f"no animations matched {anims_glob!r} under {weapon_dir}")
-    sequences = {Path(p).stem: Path(p) for p in anim_paths}
+    qc_src = _find_qc(weapon_dir)
+    bodygroups: dict[str, list[str]] = {}
+    qc_sequences: list[QcSequence] = []
+    if qc_src is not None:
+        qc_text = qc_src.read_text(errors="replace")
+        bodygroups = parse_bodygroups(qc_text)
+        qc_sequences = parse_sequences(qc_text)
+
+    pv = weapon_pv
+    if pv is None:
+        weapon_studios = bodygroups.get("weapon", [])
+        if weapon_studios:
+            pv = _qc_smd(weapon_dir, weapon_studios[0])
+        else:
+            pv = _one(sorted(glob(str(weapon_dir / "*-PV.smd"))),
+                      "*-PV.smd weapon mesh", weapon_dir)
+    if not pv.exists():
+        raise DriverError(f"weapon mesh not found: {pv}")
+
+    hands = original_hands
+    if hands is None:
+        hand_studios = bodygroups.get("hands", [])
+        candidates = [
+            _qc_smd(weapon_dir, stem) for stem in hand_studios
+        ] or [Path(p) for p in sorted(glob(str(weapon_dir / "f_*_hand_Low.smd")))]
+        existing = [c for c in candidates if c.exists()]
+        if not existing:
+            raise DriverError(
+                f"original hand mesh not found in {weapon_dir} "
+                "(no $bodygroup \"hands\" studio resolves; pass --original-hands)"
+            )
+        hands = existing[0]
+
+    if anims_glob is not None:
+        anim_paths = sorted(glob(str(weapon_dir / anims_glob)))
+        if not anim_paths:
+            raise DriverError(f"no animations matched {anims_glob!r} under {weapon_dir}")
+        sequences = {Path(p).stem: Path(p) for p in anim_paths}
+    else:
+        sequences = {}
+        for seq in qc_sequences:
+            if seq.smd is None:
+                continue
+            path = _qc_smd(weapon_dir, seq.smd)
+            if not path.exists():
+                raise DriverError(
+                    f"QC sequence {seq.name!r} references missing SMD: {path}"
+                )
+            sequences[seq.name] = path
+        if not sequences:
+            raise DriverError(
+                f"no $sequence entries found in {qc_src or weapon_dir}; "
+                "pass --anims with a glob"
+            )
     if only is not None:
         missing = only - sequences.keys()
         if missing:
@@ -322,6 +383,10 @@ def finalize_export(
     for path in anim_smds.values():
         unwrapped, _changed = unwrap_smd(parse_smd_file(path))
         write_smd_file(unwrapped, path)
+    # Normalise BST's flat mesh output to the classic indented SMD layout the
+    # GoldSource studiomdl toolchain compiles (the writer emits it).
+    for path in mesh_smds.values():
+        write_smd_file(parse_smd_file(path), path)
 
     # Delivery contract: normalise material names in the exported meshes (ASCII,
     # no spaces, .bmp extension — studiomdl may refuse otherwise) and stage each

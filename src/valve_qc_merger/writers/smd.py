@@ -1,7 +1,9 @@
 """Serializer for :class:`valve_qc_merger.models.smd.Smd` back to SMD text.
 
-Output uses fixed six-decimal formatting, matching the style StudioMdl tools
-(e.g. Crowbar) emit, so a parse/write round-trip is numerically faithful.
+Output uses fixed six-decimal formatting and the classic exporter indentation
+(two spaces on node/vertex lines, ``  time N`` with four-space pose lines) that
+the GoldSource studiomdl toolchain is known to compile — flat, unindented SMDs
+have been rejected by it. A parse/write round-trip is numerically faithful.
 """
 
 from __future__ import annotations
@@ -30,15 +32,15 @@ def write_smd_text(smd: Smd) -> str:
 
     lines.append("nodes")
     for node in smd.nodes:
-        lines.append(f'{node.index} "{node.name}" {node.parent}')
+        lines.append(f'  {node.index} "{node.name}" {node.parent}')
     lines.append("end")
 
     lines.append("skeleton")
     for frame in smd.frames:
-        lines.append(f"time {frame.time}")
+        lines.append(f"  time {frame.time}")
         for pose in frame.poses:
             lines.append(
-                f"{pose.bone} {_fmt_vec3(pose.position)} {_fmt_vec3(pose.rotation)}"
+                f"    {pose.bone} {_fmt_vec3(pose.position)} {_fmt_vec3(pose.rotation)}"
             )
     lines.append("end")
 
@@ -48,7 +50,7 @@ def write_smd_text(smd: Smd) -> str:
             lines.append(triangle.material)
             for vertex in triangle.vertices:
                 lines.append(
-                    f"{vertex.bone} {_fmt_vec3(vertex.position)} "
+                    f"  {vertex.bone} {_fmt_vec3(vertex.position)} "
                     f"{_fmt_vec3(vertex.normal)} {_fmt_vec2(vertex.uv)}"
                 )
         lines.append("end")

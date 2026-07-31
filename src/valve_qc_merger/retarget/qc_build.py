@@ -23,6 +23,7 @@ _ATTACH_RE = re.compile(
     r"(?P<x>\S+)\s+(?P<y>\S+)\s+(?P<z>\S+)"
 )
 _MODELNAME_RE = re.compile(r'\$modelname\s+"(?P<name>[^"]+)"')
+_SEQ_SMD_RE = re.compile(r'"(?P<path>[^"{}]+)"')  # first quoted token outside events
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class QcSequence:
     name: str
     fps: float | None
     events: tuple[str, ...]
+    smd: str | None = None  # animation SMD path as written in the QC (backslashes)
 
 
 def _matching_brace(text: str, open_index: int) -> int:
@@ -59,7 +61,24 @@ def parse_sequences(qc_text: str) -> list[QcSequence]:
         fps_m = _FPS_RE.search(body)
         fps = float(fps_m.group("fps")) if fps_m else None
         events = tuple(e.strip() for e in _EVENT_RE.findall(body))
-        out.append(QcSequence(m.group("name"), fps, events))
+        smd_m = _SEQ_SMD_RE.search(_EVENT_RE.sub("", body))
+        smd = smd_m.group("path") if smd_m else None
+        out.append(QcSequence(m.group("name"), fps, events, smd))
+    return out
+
+
+_BODYGROUP_RE = re.compile(r'\$bodygroup\s+"(?P<name>[^"]+)"\s*\{')
+_STUDIO_RE = re.compile(r'studio\s+"(?P<stem>[^"]+)"')
+
+
+def parse_bodygroups(qc_text: str) -> dict[str, list[str]]:
+    """Every ``$bodygroup`` block's studio stems, in file order (QC discovery)."""
+    out: dict[str, list[str]] = {}
+    for m in _BODYGROUP_RE.finditer(qc_text):
+        open_index = m.end() - 1
+        close_index = _matching_brace(qc_text, open_index)
+        body = qc_text[open_index + 1:close_index]
+        out[m.group("name")] = [s.group("stem") for s in _STUDIO_RE.finditer(body)]
     return out
 
 
@@ -148,4 +167,5 @@ def build_qc(
     return "\n".join(lines)
 
 
-__all__ = ["QcSequence", "build_qc", "parse_sequences", "parse_attachments", "modelname"]
+__all__ = ["QcSequence", "build_qc", "parse_sequences", "parse_attachments",
+           "parse_bodygroups", "modelname"]

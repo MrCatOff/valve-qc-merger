@@ -45,8 +45,9 @@ class RetargetCommand(Command):
                                  "storage/hands/reference_hands.smd or config")
         parser.add_argument("--weapon-dir", type=Path, required=True,
                             help="weapon directory (holds *-PV.smd, hand mesh, anims)")
-        parser.add_argument("--anims", default="v_elite_anims/*.smd",
-                            help="glob (relative to weapon-dir) selecting animation SMDs")
+        parser.add_argument("--anims",
+                            help="glob (relative to weapon-dir) selecting animation SMDs; "
+                                 "default: the paths listed by the weapon's QC")
         parser.add_argument("--out", type=Path, required=True, help="output directory")
         parser.add_argument("--config", type=Path, help="TOML config; omitted keys take defaults")
         parser.add_argument("--weapon-pv", type=Path, help="override the *-PV.smd weapon mesh")

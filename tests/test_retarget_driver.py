@@ -179,3 +179,29 @@ def test_variant_skeleton_mismatch_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(DriverError, match="different node table"):
         assert_variant_skeletons(inputs)
+
+
+def test_inputs_resolve_from_the_qc_manifest(tmp_path: Path) -> None:
+    # No --anims, no --weapon-pv, no --original-hands: everything comes from the
+    # QC's $bodygroup and $sequence blocks (backslash paths, no extensions).
+    d = tmp_path / "weapon"
+    (d / "anims").mkdir(parents=True)
+    _write_smd(d / "gun_mesh.smd", _RIG, mesh=True)
+    _write_smd(d / "hands_mesh.smd", _RIG, mesh=True)
+    _write_smd(d / "anims" / "idle.smd", _RIG, mesh=False)
+    _write_smd(d / "anims" / "fire.smd", _RIG, mesh=False)
+    (d / "v_gun.qc").write_text(
+        '$modelname "v_gun.mdl"\n'
+        '$bodygroup "weapon"\n{\n\tstudio "gun_mesh"\n}\n'
+        '$bodygroup "hands"\n{\n\tstudio "hands_mesh"\n}\n'
+        '$sequence "idle" {\n\t"anims\\idle"\n\tfps 16\n}\n'
+        '$sequence "fire" {\n\t"anims\\fire"\n\t{ event 5001 0 "11" }\n\tfps 30\n}\n'
+    )
+    ref = tmp_path / "reference_hands.smd"
+    _write_smd(ref, _BIP, mesh=True)
+
+    inputs = resolve_inputs(ref, d)
+    assert inputs.weapon_pv.name == "gun_mesh.smd"
+    assert inputs.original_hands.name == "hands_mesh.smd"
+    assert set(inputs.sequences) == {"idle", "fire"}
+    assert inputs.sequences["fire"].name == "fire.smd"
