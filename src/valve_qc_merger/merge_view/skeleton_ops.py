@@ -191,6 +191,29 @@ def renumber(smd: Smd) -> None:
     ]
 
 
+def ensure_root(smd: Smd, name: str = "Bip01") -> None:
+    """Guarantee a single parentless root ``name``; reparent other roots under it.
+
+    A missing root is inserted with an identity transform in every frame, so
+    reparenting old roots under it is exact (their locals equal their worlds).
+    A pre-existing bone of that name must already be a root.
+    """
+    existing = next((n for n in smd.nodes if n.name == name), None)
+    if existing is not None and existing.parent != -1:
+        raise ValueError(f"bone {name!r} exists but is not a root")
+    if existing is None:
+        index = max((n.index for n in smd.nodes), default=-1) + 1
+        smd.nodes = [*smd.nodes, Node(index, name, -1)]
+        zero = Vector3(0.0, 0.0, 0.0)
+        smd.frames = [
+            Frame(f.time, (*f.poses, BonePose(index, zero, zero)))
+            for f in smd.frames
+        ]
+    for root_name in [n.name for n in smd.nodes if n.parent == -1 and n.name != name]:
+        reparent_bone(smd, root_name, name)
+    renumber(smd)
+
+
 def rebind_vertices(smd: Smd, from_bone: str, to_bone: str) -> int:
     """Move every vertex bound to ``from_bone`` onto ``to_bone``; returns count."""
     src = next(n.index for n in smd.nodes if n.name == from_bone)
@@ -213,6 +236,7 @@ def world_positions(smd: Smd, frame: Frame) -> dict[str, Vector3]:
 
 
 __all__ = [
+    "ensure_root",
     "fk_worlds",
     "rename_bones",
     "remove_bones",

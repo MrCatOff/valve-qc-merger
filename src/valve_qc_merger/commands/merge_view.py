@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
+from valve_qc_merger.merge_view.canonicalize import canonicalize_model
 from valve_qc_merger.merge_view.discovery import (
     MergeViewError,
     discover_models,
@@ -25,8 +26,10 @@ from valve_qc_merger.merge_view.hands import (
     load_reference_rig,
     match_hands,
 )
+from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget.config import DEFAULT_REFERENCE
 from valve_qc_merger.retarget.correspondence import CorrespondenceError
+from valve_qc_merger.writers.smd import write_smd_file
 
 EXIT_OK = 0
 EXIT_FAIL = 2
@@ -50,6 +53,8 @@ class MergeViewCommand(Command):
                             help="canonical hand skeleton SMD")
         parser.add_argument("--skip-unmatched", action="store_true",
                             help="continue past models whose rig cannot be matched")
+        parser.add_argument("--no-prune", action="store_true",
+                            help="keep vertex-less bones (Nubs are always removed)")
         parser.add_argument("--dry-run", action="store_true",
                             help="discover, sanitise and load only; print the inventory")
 
@@ -93,6 +98,35 @@ class MergeViewCommand(Command):
                     continue
                 continue
             already = sum(1 for old, new in match.renames.items() if old == new)
+            canonical: dict[str, object] = {}
+            if not args.dry_run:
+                reference_nodes = parse_smd_file(args.reference).nodes
+                result = canonicalize_model(
+                    model, match, reference_nodes, prune=not args.no_prune
+                )
+                if result.max_pose_deviation > 1e-4:
+                    message = (f"model {model.name!r}: pose NOT preserved "
+                               f"(deviation {result.max_pose_deviation:.6f}u)")
+                    failures.append(message)
+                    print(f"  {model.name:<20} POSE-FAIL  {message}")
+                    continue
+                out_model = args.out / "canonical" / model.name
+                (out_model / "anims").mkdir(parents=True, exist_ok=True)
+                for stem, mesh_smd in model.meshes.items():
+                    target = out_model / (Path(stem.replace("\\", "/")).name + ".smd")
+                    write_smd_file(mesh_smd, target)
+                for seq_name, anim_smd in model.anims.items():
+                    write_smd_file(anim_smd, out_model / "anims" / f"{seq_name}.smd")
+                (out_model / model.qc_path.name).write_text(model.qc_text,
+                                                            encoding="latin-1")
+                canonical = {
+                    "renamed": result.renamed,
+                    "reparented": result.reparented,
+                    "nubs_removed": result.nubs_removed,
+                    "pruned": len(result.pruned),
+                    "max_pose_deviation": result.max_pose_deviation,
+                    "canonical_warnings": result.warnings,
+                }
             entry = {
                 "name": model.name,
                 "bones": len(model.bone_names),
@@ -104,6 +138,7 @@ class MergeViewCommand(Command):
                 "match_warnings": match.warnings,
                 "sanitised": sanitised,
                 "warnings": model.warnings,
+                **canonical,
             }
             inventory.append(entry)
             warn = f"  ({len(model.warnings)} warnings)" if model.warnings else ""
@@ -119,8 +154,8 @@ class MergeViewCommand(Command):
             json.dumps({"models": inventory, "failures": failures}, indent=1)
         )
         if not args.dry_run:
-            print("note: merge stages beyond inventory are not implemented yet "
-                  "(spec milestones M2-M5); run with --dry-run to silence this")
+            print("note: canonicalised models written under out/canonical/; "
+                  "merge stages M3-M5 (pooling, merge, textures) still pending")
         return EXIT_FAIL if failures else EXIT_OK
 
 

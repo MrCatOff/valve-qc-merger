@@ -160,7 +160,11 @@ def matrix_to_euler(m: Matrix3) -> Vector3:
     sy = -m[2][0]
     sy = max(-1.0, min(1.0, sy))
     y = math.asin(sy)
-    if abs(m[2][0]) < 0.9999999:
+    if abs(m[2][0]) < 1.0 - 1e-12:
+        # atan2 stays numerically fine arbitrarily close to the pole; a wide
+        # gimbal fallback (1e-7) silently discarded roll, and long folded bone
+        # chains amplified that into visible drift (prior-art lesson: only the
+        # truly degenerate |sin y| = 1 case may take the lossy branch).
         x = math.atan2(m[2][1], m[2][2])
         z = math.atan2(m[1][0], m[0][0])
     else:
