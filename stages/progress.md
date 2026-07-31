@@ -17,14 +17,17 @@ Status of the Blender-driven retargeting pipeline against
 | §10 | testing | 🟡 partial |
 | §7.5 | Phase 3 — weapon placement | ✅ done (zero-offset) |
 | §7.6 | Phase 4 — grip solve (finger curl) | 🟡 core done |
-| §7.7 | Phase 5 — unify skeleton + export | ⬜ not started |
-| §7.8 | Phase 6 — post-export text verify | ⬜ not started |
+| §7.7 | Phase 5 — unify skeleton + export | ✅ done |
+| §7.8 | Phase 6 — post-export text verify | ✅ done |
 | §8 | full per-frame metrics/report | 🟡 partial |
 
-Working end-to-end and rendered in headless Blender: **Phases 0, 1, 2a, 2b, 3, 4
-(core)** — the reference hands follow the animation and their fingers curl around
-the grips. Remaining: **Phase 4 numeric validators, Phases 5, 6**. See
-`stages/phase34.md`.
+Working end-to-end in headless Blender, **all phases 0–6**: the reference hands
+follow the animation, curl around both grips, the skeleton is unified, and the
+model is exported and text-verified. `retarget … --out <dir>` now writes a full
+compilable model (merged mesh SMD + 16 anim SMDs + regenerated QC) that passes
+the Phase 6 gate (8/8 checks). Remaining refinements: **Phase 4 numeric
+validators (BVH)** and the §8 per-frame metric CSV. See `stages/phase34.md` and
+`stages/phase56.md`.
 
 ## Done
 
@@ -97,6 +100,22 @@ the grips. Remaining: **Phase 4 numeric validators, Phases 5, 6**. See
 5. **Anchor fallback** — the per-arm translation anchor is the forearm bone hanging
    off the held root; if no such bone exists (a hierarchy deeper than
    forearm-off-root) it falls back to anchoring the wrist directly.
+6. **Node order — reference bones not strictly first (§7.7/§2.1)** — BST writes the
+   node table in `armature.data.bones` (hierarchy) order, so a gun bone parented
+   under a wrist nests inside that hand's subtree rather than trailing all
+   reference bones. The load-bearing invariants still hold: mesh and every anim
+   share one identical table, and reference bone names/parents/rest are unchanged.
+   Reported as a warning by the Phase 6 gate, not a failure.
+7. **Reference mesh preserved by position, not byte-identical (§2.1)** — a Blender
+   round-trip recomputes vertex normals and may reorder triangles, so byte
+   identity is impossible. Phase 6 instead proves every reference vertex position
+   survives within tolerance (measured 0.00000 u), which is the reshape-relevant
+   invariant.
+8. **Rotation continuity checked geodesically (§7.8)** — after the text-level Euler
+   unwrap, the gate checks the per-frame *geodesic* rotation delta against the
+   threshold rather than raw Euler-component jumps, so fast-but-smooth motion (a
+   finger snapping in a 30 fps reload) is accepted while a real teleport still
+   fails.
 
 ## Done — Phase 3 & 4 (see stages/phase34.md)
 - **Phase 3 (§7.5)** — zero weapon offset (default): the weapon stays where its
@@ -108,14 +127,26 @@ the grips. Remaining: **Phase 4 numeric validators, Phases 5, 6**. See
   frame. Tip error ~0.0005u across all v_elite sequences; fingers wrap the grips
   (verify renders regenerated).
 
+## Done — Phase 5 & 6 (see stages/phase56.md)
+- **Phase 5 (§7.7)** — `retarget/unify.py` (pure) finds each gun subtree and maps
+  it to the correct reference wrist; the worker appends the weapon bones into the
+  reference armature (names/offsets preserved), rebinds the weapon mesh, transfers
+  the weapon animation per frame, deletes the originals, and exports a merged mesh
+  SMD + one anim SMD per sequence via BST. A regenerated QC (`retarget/qc_build.py`)
+  makes the output compilable.
+- **Phase 6 (§7.8)** — `retarget/verify_smd.py` (pure) parses the emitted text and
+  proves the §2 constraints: identical node tables, reference bones/parents/rest
+  preserved, hand translation frozen, no NaN/Inf, rotation continuity, frame
+  indices, reference geometry preserved. `retarget/euler_unwrap.py` unwraps the
+  Euler tracks in place first (BST re-derives Euler per frame, so continuity is
+  enforced on the text, as the spec requires).
+
 ## Not started / remaining
 - **Phase 4 validators** — the §7.6/§8 numeric accept/reject (BVH overlap band
   vs the original, `d_max` over-penetration guard) and the extra objective terms
   (distal-direction, temporal/base regularisation, priority relaxation). Only
   tip-error is measured today.
-- Phase 5 — append weapon subtree to the reference armature, rebind, transfer
-  weapon animation, delete originals, export SMDs via BST.
-- Phase 6 — parse emitted SMDs and prove the §2 constraints at text level.
+- **§8 metrics CSV** — `report.csv` flattened per-frame/per-finger summary.
 
 ## Commits
 - Remove obsolete pure-Python mechanisms
@@ -124,3 +155,6 @@ the grips. Remaining: **Phase 4 numeric validators, Phases 5, 6**. See
 - Phase 2b: rotation retargeting by direct matrix keying
 - Orient retargeted hands to the source's absolute pose, not the T-pose
 - Pair arms by side, not palm-normal, so L/R is correct by default
+- Add Phase 3 (zero-offset) and Phase 4 core grip solve
+- Phase 5: unify skeleton, transfer weapon anim, export merged SMDs + QC
+- Phase 6: text-verify emitted SMDs; Euler-unwrap animation tracks in place

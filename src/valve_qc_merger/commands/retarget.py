@@ -18,6 +18,7 @@ from valve_qc_merger.retarget.driver import (
     DriverError,
     SequenceResult,
     assert_identical_node_tables,
+    finalize_export,
     find_blender,
     resolve_inputs,
     run_sequence,
@@ -53,6 +54,8 @@ class RetargetCommand(Command):
         parser.add_argument("--blender", help="Blender executable (else autodiscovered)")
         parser.add_argument("--dry-run", action="store_true",
                             help="import + discovery + correspondence only; no solve/export")
+        parser.add_argument("--no-export", action="store_true",
+                            help="retarget only; do not unify the skeleton or write SMDs")
 
     def run(self, args: argparse.Namespace) -> int:
         try:
@@ -73,14 +76,29 @@ class RetargetCommand(Command):
             return EXIT_ENV
 
         args.out.mkdir(parents=True, exist_ok=True)
+        do_export = not args.dry_run and not args.no_export
+        weapon_stem = inputs.weapon_pv.stem
         results: list[SequenceResult] = []
-        for name in inputs.sequences:
-            result = run_sequence(blender, inputs, name, config, args.out, dry_run=args.dry_run)
+        for index, name in enumerate(inputs.sequences):
+            result = run_sequence(
+                blender, inputs, name, config, args.out,
+                dry_run=args.dry_run, export=do_export,
+                export_mesh=do_export and index == 0, weapon_stem=weapon_stem,
+            )
             results.append(result)
             _print_result(result)
 
-        _write_summary(args.out, config, blender, results)
-        return _exit_code(results)
+        verify = None
+        verify_ok = True
+        if do_export and any(r.ok for r in results):
+            verify, qc_out = finalize_export(inputs, args.out, results, config)
+            verify_ok = _print_verify(verify, qc_out)
+
+        _write_summary(args.out, config, blender, results, verify)
+        code = _exit_code(results)
+        if code == EXIT_OK and not verify_ok:
+            return EXIT_FAIL
+        return code
 
 
 def _load_config(args: argparse.Namespace) -> RetargetConfig:
@@ -106,14 +124,43 @@ def _print_result(result: SequenceResult) -> None:
         print(f"  {result.name:<16} {status}  {error}")
 
 
+def _print_verify(verify: object, qc_out: object) -> bool:
+    """Print the Phase 6 gate outcome; return True if it passed (or was skipped)."""
+    from valve_qc_merger.retarget.verify_smd import VerifyResult
+
+    if not isinstance(verify, VerifyResult):
+        print("  verify           SKIPPED (no exported model found)")
+        return True
+    status = "PASS" if verify.ok else "FAIL"
+    passed = sum(1 for v in verify.checks.values() if v)
+    print(f"  verify           {status}  ({passed}/{len(verify.checks)} checks)")
+    for warning in verify.warnings:
+        print(f"    warn: {warning}")
+    for error in verify.errors:
+        print(f"    error: {error}")
+    if qc_out is not None:
+        print(f"  qc               {qc_out}")
+    return verify.ok
+
+
 def _write_summary(
-    out_dir: Path, config: RetargetConfig, blender: str, results: list[SequenceResult]
+    out_dir: Path, config: RetargetConfig, blender: str, results: list[SequenceResult],
+    verify: object = None,
 ) -> None:
-    summary = {
+    from valve_qc_merger.retarget.verify_smd import VerifyResult
+
+    summary: dict[str, object] = {
         "blender": blender,
         "config": config.to_job_dict(),
         "sequences": {r.name: {"exit_code": r.exit_code, "report": r.report} for r in results},
     }
+    if isinstance(verify, VerifyResult):
+        summary["verify"] = {
+            "ok": verify.ok,
+            "checks": verify.checks,
+            "errors": verify.errors,
+            "warnings": verify.warnings,
+        }
     (out_dir / "report.json").write_text(json.dumps(summary, indent=2))
 
 

@@ -38,7 +38,7 @@ if _PKG_ROOT and _PKG_ROOT not in sys.path:
     sys.path.insert(0, _PKG_ROOT)
 
 from valve_qc_merger.models.geometry import Vector3  # noqa: E402
-from valve_qc_merger.retarget import grip_ik  # noqa: E402
+from valve_qc_merger.retarget import grip_ik, unify  # noqa: E402
 from valve_qc_merger.retarget.correspondence import (  # noqa: E402
     Correspondence,
     CorrespondenceError,
@@ -423,6 +423,177 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
     }
 
 
+# --------------------------------------------------------------------------- #
+# Phase 5 — skeleton unification and export (§7.7)
+# --------------------------------------------------------------------------- #
+def build_unified(scene: Scene, corr: Correspondence, classes: dict[str, list[str]]) -> list[str]:
+    """Append each gun subtree into the reference armature under its wrist (§7.7).
+
+    Returns the appended gun bone names in parent-before-child order. Weapon bone
+    names, hierarchy and rest offsets are preserved; only each gun root is
+    re-parented onto the assigned reference wrist. The weapon mesh is re-bound to
+    the reference armature (its ``BoneNN`` vertex groups match by name unchanged).
+    """
+    src_bones = rig_bones(scene.src)
+    hand = hand_closure(scene.src, set(classes["hand"]), set(classes["weapon"]))
+    guns = unify.discover_guns(src_bones, hand, set(classes["weapon"]))
+    if not guns:
+        raise DiscoveryFailure("no gun subtree found to unify (§7.7)")
+    wrist_of = unify.assign_wrists(guns, src_bones, corr)
+
+    ref = scene.reference
+    src = scene.src
+    ref_inv = ref.matrix_world.inverted()
+    ordered: list[str] = []
+    bpy.context.view_layer.objects.active = ref
+    bpy.ops.object.mode_set(mode="EDIT")
+    try:
+        ebs = ref.data.edit_bones
+        for gun in guns:
+            for name in gun.bones:  # parents before children within the subtree
+                src_bone = src.data.bones[name]
+                world = src.matrix_world @ src_bone.matrix_local
+                head = src.matrix_world @ src_bone.head_local
+                tail = src.matrix_world @ src_bone.tail_local
+                length = max((tail - head).length, 1e-4)
+                eb = ebs.new(name)
+                eb.head = (0.0, 0.0, 0.0)
+                eb.tail = (0.0, 0.0, length)  # set length; matrix sets orientation
+                eb.matrix = ref_inv @ world
+                eb.use_deform = True
+                if name == gun.root:
+                    eb.parent = ebs[wrist_of[gun.root]]
+                else:
+                    eb.parent = ebs[src_bone.parent.name]
+                ordered.append(name)
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    # Every bone must deform so the mesh (deform-only) and anim (all-bones) node
+    # tables are byte-identical (§2.1, §7.8).
+    for bone in ref.data.bones:
+        bone.use_deform = True
+    _rebind(scene.weapon_mesh, ref)
+    return ordered
+
+
+def key_guns(scene: Scene, gun_names: list[str], start: int, end: int) -> None:
+    """Key the appended gun bones to the source weapon animation, per frame (§7.7).
+
+    The gun root's armature-space matrix is copied from the source (its parent
+    changed, so Blender back-solves the basis); every deeper gun bone copies the
+    source ``matrix_basis`` directly, since its rest offset and parent within the
+    subtree are unchanged. The result reproduces the source weapon world pose.
+    """
+    ref = scene.reference
+    src = scene.src
+    roots = {name for name in gun_names if src.data.bones[name].parent is not None
+             and src.data.bones[name].parent.name not in gun_names}
+    scene_ctx = bpy.context.scene
+    for frame in range(start, end + 1):
+        scene_ctx.frame_set(frame)
+        bpy.context.view_layer.update()
+        for name in gun_names:  # parent-before-child order
+            pose_bone = ref.pose.bones[name]
+            if name in roots:
+                pose_bone.matrix = src.pose.bones[name].matrix
+                bpy.context.view_layer.update()
+            else:
+                pose_bone.matrix_basis = src.pose.bones[name].matrix_basis.copy()
+        for name in gun_names:
+            pose_bone = ref.pose.bones[name]
+            pose_bone.keyframe_insert("location", frame=frame)
+            pose_bone.keyframe_insert("rotation_euler", frame=frame)
+
+
+def _prepare_export(out_dir: str) -> None:
+    scene = bpy.context.scene
+    scene.vs.export_path = out_dir
+    scene.vs.export_format = "SMD"
+    scene.vs.smd_format = "GOLDSOURCE"  # CS 1.6 / GoldSrc weight format
+    # BST's exporter runs ops.ed.undo() in its finally block when debug_value <= 1,
+    # which invalidates every Python object reference we still hold. Raise it so the
+    # exporter leaves the scene (and our handles) intact between the two exports.
+    bpy.app.debug_value = 2
+
+
+def export_mesh_smd(scene: Scene, out_dir: str, weapon_stem: str) -> str:
+    """Export reference hands + weapon merged into one rest-pose mesh SMD (§7.7).
+
+    The armature is switched to REST so the emitted bind pose and single skeleton
+    frame carry each bone's rest local transform.
+    """
+    ref = scene.reference
+    coll = bpy.data.collections.new(weapon_stem)
+    bpy.context.scene.collection.children.link(coll)
+    for ob in (scene.reference_mesh, scene.weapon_mesh):
+        for existing in list(ob.users_collection):
+            existing.objects.unlink(ob)
+        coll.objects.link(ob)
+        ob.vs.export = True
+    coll.vs.subdir = ""
+    coll.vs.export = True
+
+    prev_pos = ref.data.pose_position
+    ref.data.pose_position = "REST"
+    bpy.context.view_layer.update()
+    _prepare_export(out_dir)
+    bpy.ops.export_scene.smd(collection=coll.name)
+    ref.data.pose_position = prev_pos
+    bpy.context.view_layer.update()
+    # BST names the file after the collection.
+    return os.path.join(out_dir, weapon_stem + ".smd")
+
+
+def export_anim_smd(scene: Scene, out_dir: str, sequence: str) -> str:
+    """Export the unified armature's animation as one sequence SMD (§7.7)."""
+    ref = scene.reference
+    ad = ref.animation_data
+    ad.action.name = sequence  # BST names the SMD after the action (pre-5.2 path)
+    # Blender 5.2 slotted actions: BST derives the SMD name from the slot's display
+    # name, so set that too.
+    if getattr(ad, "action_slot", None) is not None:
+        try:
+            ad.action_slot.name_display = sequence
+        except (AttributeError, TypeError):
+            pass
+    ref.data.vs.action_selection = "CURRENT"
+    ref.vs.subdir = "anims"
+    ref.vs.export = True
+    anim_dir = os.path.join(out_dir, "anims")
+    os.makedirs(anim_dir, exist_ok=True)
+
+    for ob in bpy.data.objects:
+        ob.select_set(False)
+    ref.select_set(True)
+    bpy.context.view_layer.objects.active = ref
+    _prepare_export(out_dir)
+    bpy.ops.export_scene.smd()
+    return os.path.join(anim_dir, sequence + ".smd")
+
+
+def unify_and_export(
+    scene: Scene, corr: Correspondence, classes: dict[str, list[str]], job: dict[str, Any]
+) -> dict[str, Any]:
+    """Phase 5: unify the skeleton, transfer the weapon animation, export SMDs."""
+    action = scene.src.animation_data.action
+    start, end = int(action.frame_range[0]), int(action.frame_range[1])
+    gun_names = build_unified(scene, corr, classes)
+    key_guns(scene, gun_names, start, end)
+
+    # Delete the source rig + original hand mesh only after the weapon anim is keyed.
+    bpy.data.objects.remove(scene.original_mesh, do_unlink=True)
+    bpy.data.objects.remove(scene.src, do_unlink=True)
+
+    out_dir = job["out_dir"]
+    weapon_stem = job["weapon_stem"]
+    result: dict[str, Any] = {"gun_bones": gun_names, "anim_smd": None, "mesh_smd": None}
+    if job.get("export_mesh", False):
+        result["mesh_smd"] = export_mesh_smd(scene, out_dir, weapon_stem)
+    result["anim_smd"] = export_anim_smd(scene, out_dir, job["sequence"]["name"])
+    return result
+
+
 def assert_no_mirrors(*armatures: Any) -> None:
     """Abort if any bone rest matrix is mirrored (negative determinant, §7.3).
 
@@ -458,21 +629,36 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
 
     action = scene.src.animation_data.action
     frame_range = [int(action.frame_range[0]), int(action.frame_range[1])]
+    # Snapshot everything that reads scene.src *before* Phase 5 deletes it.
+    tgt_parent = _parent_map(scene.reference)
+    anchor_bones = sorted({a.bone for a in _anchors(corr, tgt_parent)})
+    reference_bones = [b.name for b in scene.reference.data.bones]
+    counts = {
+        "src_bones": len(scene.src.data.bones),
+        "reference_bones": len(scene.reference.data.bones),
+        "hand_bones": len(classes["hand"]),
+        "weapon_bones": len(classes["weapon"]),
+        "mapped_bones": sum(1 for m in corr.maps if m.source is not None),
+        "held_tips": sum(1 for m in corr.maps if m.source is None),
+    }
+
+    export: dict[str, Any] = {}
+    do_export = bool(job.get("export", False)) and not dry_run
+    if do_export:
+        export = unify_and_export(scene, corr, classes, job)
+
+    status = "MAPPED" if dry_run else ("EXPORTED" if do_export else "RETARGETED")
     return {
         "sequence": job["sequence"]["name"],
-        "status": "MAPPED" if dry_run else "RETARGETED",
+        "status": status,
         "frames": solved["frames"],
         "grip": solved["grip"],
         "blender": bpy.app.version_string,
         "frame_range": frame_range,
-        "counts": {
-            "src_bones": len(scene.src.data.bones),
-            "reference_bones": len(scene.reference.data.bones),
-            "hand_bones": len(classes["hand"]),
-            "weapon_bones": len(classes["weapon"]),
-            "mapped_bones": sum(1 for m in corr.maps if m.source is not None),
-            "held_tips": sum(1 for m in corr.maps if m.source is None),
-        },
+        "counts": counts,
+        "export": export,
+        "anchor_bones": anchor_bones,
+        "reference_bones": reference_bones,
         "classification": classes,
         "correspondence": {
             "score": corr.score,

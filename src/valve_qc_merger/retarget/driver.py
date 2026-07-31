@@ -20,6 +20,10 @@ from pathlib import Path
 
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget.config import RetargetConfig
+from valve_qc_merger.retarget.euler_unwrap import unwrap_smd
+from valve_qc_merger.retarget.qc_build import build_qc
+from valve_qc_merger.retarget.verify_smd import VerifyResult, verify_export
+from valve_qc_merger.writers.smd import write_smd_file
 
 WORKER = Path(__file__).with_name("worker.py")
 
@@ -143,6 +147,9 @@ def run_sequence(
     out_dir: Path,
     *,
     dry_run: bool = False,
+    export: bool = False,
+    export_mesh: bool = False,
+    weapon_stem: str = "model",
     timeout: float = 600.0,
 ) -> SequenceResult:
     """Launch one headless worker for a single sequence and read its report.
@@ -167,6 +174,9 @@ def run_sequence(
         "out_dir": str(out_dir),
         "report": str(report_path),
         "dry_run": dry_run,
+        "export": export,
+        "export_mesh": export_mesh,
+        "weapon_stem": weapon_stem,
         "config": config.to_job_dict(),
     }
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
@@ -203,6 +213,83 @@ def run_sequence(
     return SequenceResult(name, proc.returncode, report, proc.stdout, proc.stderr)
 
 
+def finalize_export(
+    inputs: Inputs,
+    out_dir: Path,
+    results: list[SequenceResult],
+    config: RetargetConfig,
+    *,
+    qc_path: Path | None = None,
+) -> tuple[VerifyResult | None, Path | None]:
+    """Phase 6 gate + QC generation over the emitted model.
+
+    Parses the written SMDs, proves the §2 constraints (:func:`verify_export`),
+    and rewrites the input QC to compile the merged mesh + retargeted anims. The
+    node-bookkeeping (reference bones, anchors, gun bones) comes from any exported
+    worker report, since every sequence shares the same unified skeleton.
+    """
+    weapon_stem = inputs.weapon_pv.stem
+    mesh_smd = out_dir / f"{weapon_stem}.smd"
+    anim_smds = {
+        r.name: out_dir / "anims" / f"{r.name}.smd"
+        for r in results
+        if r.ok and (out_dir / "anims" / f"{r.name}.smd").exists()
+    }
+    def _has_export(result: SequenceResult) -> bool:
+        block = result.report.get("export")
+        return result.ok and isinstance(block, dict) and bool(block.get("gun_bones"))
+
+    exported = next((r for r in results if _has_export(r)), None)
+    if not mesh_smd.exists() or not anim_smds or exported is None:
+        return None, None
+
+    report = exported.report
+    export_block = report["export"]
+    assert isinstance(export_block, dict)
+    reference_bones = _str_set(report.get("reference_bones"))
+    anchor_bones = _str_set(report.get("anchor_bones"))
+    gun_bones = _str_set(export_block.get("gun_bones"))
+
+    # §7.8: BST writes each frame's Euler from the pose matrix independently, so
+    # unwrap the emitted tracks in place before the continuity check can pass.
+    for path in anim_smds.values():
+        unwrapped, _changed = unwrap_smd(parse_smd_file(path))
+        write_smd_file(unwrapped, path)
+
+    verify = verify_export(
+        mesh_smd, anim_smds, inputs.reference,
+        hand_bones=reference_bones, anchor_bones=anchor_bones,
+        source_anims=dict(inputs.sequences),
+        euler_jump_threshold_degrees=config.euler_jump_threshold_degrees,
+    )
+
+    qc_out: Path | None = None
+    qc_src = qc_path or _find_qc(inputs.weapon_pv.parent)
+    if qc_src is not None and qc_src.exists():
+        qc_text = build_qc(
+            qc_src.read_text(),
+            mesh_stem=weapon_stem,
+            anims_subdir="anims",
+            surviving_bones=reference_bones | gun_bones,
+            model_name=f"{weapon_stem}.mdl",
+        )
+        qc_out = out_dir / f"{weapon_stem}.qc"
+        qc_out.write_text(qc_text)
+    return verify, qc_out
+
+
+def _str_set(value: object) -> set[str]:
+    """Coerce a report field (JSON list of strings) into a set of names."""
+    if isinstance(value, (list, tuple, set)):
+        return {str(item) for item in value}
+    return set()
+
+
+def _find_qc(weapon_dir: Path) -> Path | None:
+    matches = sorted(glob(str(weapon_dir / "*.qc")))
+    return Path(matches[0]) if matches else None
+
+
 __all__ = [
     "DriverError",
     "Inputs",
@@ -211,4 +298,5 @@ __all__ = [
     "resolve_inputs",
     "assert_identical_node_tables",
     "run_sequence",
+    "finalize_export",
 ]
