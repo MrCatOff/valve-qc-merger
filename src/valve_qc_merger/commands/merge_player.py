@@ -200,6 +200,8 @@ class MergePlayerCommand(Command):
                     "model": f"{part_name}.mdl",
                     **report.manifest[model.name],
                 }
+            if report.atlas:
+                aggregate[f"textures_{part_name}"] = dict(report.atlas)
             if not args.no_verify:
                 bone_maps = {
                     model.name: plan.bone_map for model, plan in part_pairs

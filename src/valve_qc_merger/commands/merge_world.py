@@ -174,6 +174,8 @@ class MergeWorldCommand(Command):
                     "model": f"{part_name}.mdl",
                     **report.manifest[model.name],
                 }
+            if report.atlas:
+                aggregate[f"textures_{part_name}"] = dict(report.atlas)
             if not args.no_verify:
                 gate = verify_world_part(
                     part_out, f"{part_name}.qc", args.models_dir,
