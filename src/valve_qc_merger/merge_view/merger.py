@@ -19,6 +19,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
+from valve_qc_merger.merge_view.atlas import (
+    TextureOptions,
+    downscale_textures,
+    pack_textures,
+)
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.skeleton_ops import (
@@ -53,6 +58,7 @@ class MergeReport:
     sequences_deduped: int = 0
     textures: int = 0
     pev_body: dict[str, int] = field(default_factory=dict)
+    atlas: dict[str, str] = field(default_factory=dict)
     manifest: dict[str, dict[str, int]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
@@ -188,11 +194,11 @@ def _find_texture(directory: Path, material: str) -> Path | None:
 def _stage_textures(
     out_dir: Path, models: list[ModelInput],
     written: dict[str, list[Smd]], report: MergeReport,
-) -> dict[str, dict[str, str]]:
+) -> tuple[dict[str, dict[str, str]], list[str]]:
     """Copy every referenced texture next to the QC, deduped by content.
 
-    Returns each model's material renames (original -> staged name) so QC
-    references like ``$texrendermode`` can follow the staged names.
+    Returns each model's material renames (original -> staged name) and
+    the ordered list of staged file names.
     """
     staged: dict[str, bytes] = {}
     all_renames: dict[str, dict[str, str]] = {}
@@ -225,7 +231,7 @@ def _stage_textures(
                     for t in smd.triangles
                 ]
     report.textures = len(staged)
-    return all_renames
+    return all_renames, list(staged)
 
 
 _TEXRENDERMODE_RE = re.compile(
@@ -233,12 +239,13 @@ _TEXRENDERMODE_RE = re.compile(
 )
 
 
-def _texrendermode_lines(
+def _collect_render_modes(
     models: list[ModelInput],
     written: dict[str, list[Smd]],
     staged_renames: dict[str, dict[str, str]],
+    staged_names: list[str],
     report: MergeReport,
-) -> list[str]:
+) -> dict[str, str]:
     """Carry ``$texrendermode`` (additive/masked/...) into the merged QC.
 
     Names are rewritten to the staged texture names; entries whose texture is
@@ -246,6 +253,7 @@ def _texrendermode_lines(
     to a collapsed bodygroup variant). Conflicting modes for one staged file
     keep the first and warn.
     """
+    canonical = {name.lower(): name for name in staged_names}
     modes: dict[str, str] = {}
     for model in models:
         used = {t.material.lower()
@@ -255,6 +263,7 @@ def _texrendermode_lines(
             final = renames.get(original.lower(), original)
             if final.lower() not in used:
                 continue
+            final = canonical.get(final.lower(), final)
             existing = modes.get(final)
             if existing is not None and existing != mode:
                 report.warnings.append(
@@ -264,8 +273,7 @@ def _texrendermode_lines(
                 )
                 continue
             modes[final] = mode
-    return [f'$texrendermode "{name}" {mode}'
-            for name, mode in sorted(modes.items())]
+    return modes
 
 
 SEQ_NAME_LIMIT = 31  # studiomdl strcpy's labels into char[32] unchecked
@@ -296,6 +304,7 @@ def merge_models(
     *,
     manifest_format: str = "ini",
     write_manifest: bool = True,
+    textures: TextureOptions | None = None,
 ) -> MergeReport:
     """Write the merged model directory; returns the budget report."""
     report = MergeReport()
@@ -320,7 +329,27 @@ def merge_models(
         if parts.hands_stem is not None:
             stems.append(parts.hands_stem)
         kept[model.name] = [model.meshes[stem] for stem in stems]
-    staged_renames = _stage_textures(out_dir, models, kept, report)
+    staged_renames, staged_names = _stage_textures(out_dir, models, kept, report)
+    render_modes = _collect_render_modes(
+        models, kept, staged_renames, staged_names, report,
+    )
+    if textures is not None and textures.max_size is not None:
+        downscale_textures(out_dir, staged_names, textures.max_size,
+                           report.warnings)
+    if textures is not None and textures.pack:
+        flat_kept = [smd for smds in kept.values() for smd in smds]
+        report.atlas = pack_textures(
+            out_dir, flat_kept, staged_names, render_modes, textures,
+            report.warnings,
+        )
+        atlas_files = {target.split(":")[0] for target in report.atlas.values()}
+        for packed in report.atlas:
+            render_modes.pop(packed, None)
+        for atlas_file in sorted(atlas_files):
+            if atlas_file.startswith("atlasm"):
+                render_modes[atlas_file] = "masked"
+        report.textures = (len(staged_names) - len(report.atlas)
+                           + len(atlas_files))
 
     # --- meshes -----------------------------------------------------------
     written: dict[str, list[Smd]] = {}
@@ -470,7 +499,8 @@ def merge_models(
         "$scale 1.0",
         "",
     ]
-    render_lines = _texrendermode_lines(models, kept, staged_renames, report)
+    render_lines = [f'$texrendermode "{name}" {mode}'
+                    for name, mode in sorted(render_modes.items())]
     if render_lines:
         lines.extend(render_lines)
         lines.append("")
@@ -540,7 +570,12 @@ def merge_models(
         for model in models
     }
     if write_manifest:
-        write_manifest_data(out_dir, report.manifest, manifest_format)
+        data: dict[str, dict[str, object]] = {
+            key: dict(value) for key, value in report.manifest.items()
+        }
+        if report.atlas:
+            data["textures"] = dict(report.atlas)
+        write_manifest_data(out_dir, data, manifest_format)
     return report
 
 

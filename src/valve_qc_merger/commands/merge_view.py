@@ -14,6 +14,7 @@ from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
 from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT
+from valve_qc_merger.merge_view.atlas import TextureOptions
 from valve_qc_merger.merge_view.bodygroups import ModelParts, collapse_bodygroups
 from valve_qc_merger.merge_view.bonepool import (
     PoolPlan,
@@ -87,6 +88,17 @@ class MergeViewCommand(Command):
         parser.add_argument("--sequence-budget", type=int, default=SEQUENCE_BUDGET,
                             help="max sequences per compiled part after "
                                  f"dedupe (default {SEQUENCE_BUDGET})")
+        parser.add_argument("--max-texture-size", type=int, metavar="N",
+                            help="downscale staged textures larger than N on "
+                                 "either axis (8-bit re-quantised)")
+        parser.add_argument("--pack-textures", action="store_true",
+                            help="pack eligible textures four-to-a-file into "
+                                 "512x512 atlases (shared palette, UVs "
+                                 "rewritten; chrome/additive/tiling excluded)")
+        parser.add_argument("--no-pack-texture", action="append", default=[],
+                            metavar="GLOB",
+                            help="keep matching textures out of atlases "
+                                 "(repeatable)")
         parser.add_argument("--dry-run", action="store_true",
                             help="discover, sanitise and load only; print the inventory")
 
@@ -260,6 +272,11 @@ class MergeViewCommand(Command):
                         part_pairs, part_out, part_name,
                         manifest_format=args.manifest_format,
                         write_manifest=not multi,
+                        textures=TextureOptions(
+                            max_size=args.max_texture_size,
+                            pack=args.pack_textures,
+                            no_pack=args.no_pack_texture,
+                        ),
                     )
                 except MergeError as exc:
                     print(f"error: merge failed ({part_name}): {exc}")
@@ -277,6 +294,8 @@ class MergeViewCommand(Command):
                         "model": f"{part_name}.mdl",
                         **report.manifest[model.name],
                     }
+                if report.atlas:
+                    aggregate[f"textures_{part_name}"] = dict(report.atlas)
             if multi:
                 write_manifest_data(args.out, aggregate, args.manifest_format)
         return EXIT_FAIL if failures else EXIT_OK
