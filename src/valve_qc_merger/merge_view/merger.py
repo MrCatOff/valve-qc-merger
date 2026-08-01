@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -187,11 +188,16 @@ def _find_texture(directory: Path, material: str) -> Path | None:
 def _stage_textures(
     out_dir: Path, models: list[ModelInput],
     written: dict[str, list[Smd]], report: MergeReport,
-) -> None:
-    """Copy every referenced texture next to the QC, deduped by content."""
+) -> dict[str, dict[str, str]]:
+    """Copy every referenced texture next to the QC, deduped by content.
+
+    Returns each model's material renames (original -> staged name) so QC
+    references like ``$texrendermode`` can follow the staged names.
+    """
     staged: dict[str, bytes] = {}
+    all_renames: dict[str, dict[str, str]] = {}
     for model in models:
-        renames: dict[str, str] = {}
+        renames: dict[str, str] = all_renames.setdefault(model.name, {})
         for smd in written[model.name]:
             for material in sorted({t.material for t in smd.triangles}):
                 source = _find_texture(model.directory, material)
@@ -219,6 +225,47 @@ def _stage_textures(
                     for t in smd.triangles
                 ]
     report.textures = len(staged)
+    return all_renames
+
+
+_TEXRENDERMODE_RE = re.compile(
+    r'^\s*\$texrendermode\s+"?([^"\r\n]+?)"?\s+(\w+)\s*$', re.MULTILINE,
+)
+
+
+def _texrendermode_lines(
+    models: list[ModelInput],
+    written: dict[str, list[Smd]],
+    staged_renames: dict[str, dict[str, str]],
+    report: MergeReport,
+) -> list[str]:
+    """Carry ``$texrendermode`` (additive/masked/...) into the merged QC.
+
+    Names are rewritten to the staged texture names; entries whose texture is
+    not used by any kept mesh of this part are dropped silently (they belonged
+    to a collapsed bodygroup variant). Conflicting modes for one staged file
+    keep the first and warn.
+    """
+    modes: dict[str, str] = {}
+    for model in models:
+        used = {t.material.lower()
+                for smd in written[model.name] for t in smd.triangles}
+        renames = {k.lower(): v for k, v in staged_renames.get(model.name, {}).items()}
+        for original, mode in _TEXRENDERMODE_RE.findall(model.qc_text):
+            final = renames.get(original.lower(), original)
+            if final.lower() not in used:
+                continue
+            existing = modes.get(final)
+            if existing is not None and existing != mode:
+                report.warnings.append(
+                    f"{model.name}: texture {final!r} has conflicting "
+                    f"$texrendermode ({existing!r} vs {mode!r}); keeping "
+                    f"{existing!r}"
+                )
+                continue
+            modes[final] = mode
+    return [f'$texrendermode "{name}" {mode}'
+            for name, mode in sorted(modes.items())]
 
 
 SEQ_NAME_LIMIT = 31  # studiomdl strcpy's labels into char[32] unchecked
@@ -273,7 +320,7 @@ def merge_models(
         if parts.hands_stem is not None:
             stems.append(parts.hands_stem)
         kept[model.name] = [model.meshes[stem] for stem in stems]
-    _stage_textures(out_dir, models, kept, report)
+    staged_renames = _stage_textures(out_dir, models, kept, report)
 
     # --- meshes -----------------------------------------------------------
     written: dict[str, list[Smd]] = {}
@@ -423,6 +470,10 @@ def merge_models(
         "$scale 1.0",
         "",
     ]
+    render_lines = _texrendermode_lines(models, kept, staged_renames, report)
+    if render_lines:
+        lines.extend(render_lines)
+        lines.append("")
     for group_name, entries in groups:
         lines.append(f'$bodygroup "{group_name}"')
         lines.append("{")
