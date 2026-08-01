@@ -38,15 +38,13 @@ def _model(name: str, tmp_path: Path, material: str, hands: bool = True,
     return model, parts
 
 
-def test_split_respects_submodel_budget_and_shares_identical_hands(
+def test_split_respects_submodel_budget_with_per_model_hands(
     tmp_path: Path,
 ) -> None:
-    # 40 weapons with identical hands: submodels per part = weapons + 1.
+    # 40 weapons, each bringing its own hands: 2 submodels per model.
     pairs = [_model(f"m{i:02d}", tmp_path, "tex.bmp") for i in range(40)]
     parts = split_parts(pairs, PartBudget(submodels=32, textures=80))
-    assert len(parts) == 2
-    assert len(parts[0]) == 31  # 31 weapons + 1 shared hands = 32 submodels
-    assert len(parts[1]) == 9
+    assert [len(p) for p in parts] == [16, 16, 8]
     assert [m.name for m, _ in parts[0]][:2] == ["m00", "m01"]
 
 

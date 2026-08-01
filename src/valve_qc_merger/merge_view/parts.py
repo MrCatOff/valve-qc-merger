@@ -20,8 +20,6 @@ from dataclasses import dataclass
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.bonepool import plan_pool
 from valve_qc_merger.merge_view.discovery import ModelInput
-from valve_qc_merger.models.smd import Smd
-from valve_qc_merger.writers.smd import write_smd_text
 
 # Hard studiomdl array size; exceeding it is memory corruption, not an error.
 SUBMODEL_LIMIT = 32
@@ -38,10 +36,6 @@ class PartBudget:
     submodels: int = SUBMODEL_LIMIT
     textures: int = TEXTURE_BUDGET
     bones: int = BONE_BUDGET
-
-
-def _mesh_hash(smd: Smd) -> str:
-    return hashlib.md5(write_smd_text(smd).encode("latin-1")).hexdigest()[:10]
 
 
 def _texture_keys(model: ModelInput, parts: ModelParts) -> set[tuple[str, str]]:
@@ -64,18 +58,20 @@ def _texture_keys(model: ModelInput, parts: ModelParts) -> set[tuple[str, str]]:
 
 def _part_counts(
     part: list[Pair],
-    hand_hashes: dict[str, str | None],
     textures: dict[str, set[tuple[str, str]]],
 ) -> tuple[int, int]:
-    """(submodels, textures) a part would compile to."""
+    """(submodels, textures) a part would compile to.
+
+    Hands are one submodel per model (kept per-model so every hands SMD pairs
+    with its own weapon's bind; models without hands get a "blank" entry, and
+    a blank still occupies one of studiomdl's model slots).
+    """
     groups = [len(parts.weapon_stems) for _, parts in part]
     max_groups = max(groups)
     blanks = max_groups - 1 if max_groups > 1 else 0
-    hands = {
-        hand_hashes[model.name] for model, _ in part
-        if hand_hashes[model.name] is not None
-    }
-    submodels = sum(groups) + blanks + len(hands)
+    any_hands = any(parts.hands_stem is not None for _, parts in part)
+    hands = len(part) if any_hands else 0
+    submodels = sum(groups) + blanks + hands
     materials: set[tuple[str, str]] = set()
     for model, _ in part:
         materials |= textures[model.name]
@@ -101,13 +97,8 @@ def split_parts(
     """
     if budget is None:
         budget = PartBudget()
-    hand_hashes: dict[str, str | None] = {}
     textures: dict[str, set[tuple[str, str]]] = {}
     for model, parts in pairs:
-        hand_hashes[model.name] = (
-            _mesh_hash(model.meshes[parts.hands_stem])
-            if parts.hands_stem is not None else None
-        )
         textures[model.name] = _texture_keys(model, parts)
 
     def bones_fit(part: list[Pair]) -> bool:
@@ -123,7 +114,7 @@ def split_parts(
     current: list[Pair] = []
     for pair in pairs:
         trial = current + [pair]
-        submodels, texcount = _part_counts(trial, hand_hashes, textures)
+        submodels, texcount = _part_counts(trial, textures)
         if current and (submodels > budget.submodels
                         or texcount > budget.textures
                         or not bones_fit(trial)):

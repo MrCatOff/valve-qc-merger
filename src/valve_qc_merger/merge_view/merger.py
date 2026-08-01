@@ -11,7 +11,6 @@ manifest (ini/json/toml) with ``pev_body`` and merged sequence indices.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import shlex
 from dataclasses import dataclass, field
@@ -33,6 +32,7 @@ BONE_LIMIT = 127
 BODYPART_LIMIT = 32
 SUBMODEL_LIMIT = 32  # hard studiomdl array size; exceeding = memory corruption
 STOCK_VERT_LIMIT = 2048  # stock MAXSTUDIOVERTS per submodel (verts and normals)
+SUBMODEL_TRI_WARN = 4080  # old GoldSrc renderers degrade past this per submodel
 TEXTURE_WARN = 80
 
 
@@ -162,10 +162,6 @@ def _concat_meshes(meshes: list[Smd]) -> Smd:
                triangles=triangles)
 
 
-def _content_hash(smd: Smd) -> str:
-    return hashlib.md5(write_smd_text(smd).encode("latin-1")).hexdigest()[:10]
-
-
 def _sanitize_material(material: str) -> str:
     """Delivery contract: printable ASCII, no spaces, .bmp extension.
 
@@ -266,11 +262,10 @@ def merge_models(
         )
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "_shared").mkdir(exist_ok=True)
 
     # --- textures ---------------------------------------------------------
     # Sanitise material names and stage files FIRST, so the renames land in
-    # every mesh written below (including content-hash-shared hands).
+    # every mesh written below.
     kept: dict[str, list[Smd]] = {}
     for model, parts in pairs:
         stems = [stem for group in parts.weapon_stems for stem in group]
@@ -283,7 +278,6 @@ def merge_models(
     written: dict[str, list[Smd]] = {}
     weapon_paths: dict[str, list[str]] = {}  # model -> qc studio paths
     hands_paths: dict[str, str] = {}
-    shared_hands: dict[str, str] = {}  # content hash -> qc path
     max_weapon_groups = 0
     for model, parts in pairs:
         model_dir = out_dir / model.name
@@ -301,14 +295,15 @@ def merge_models(
         weapon_paths[model.name] = paths
         max_weapon_groups = max(max_weapon_groups, len(paths))
         if parts.hands_stem is not None:
+            # Hands live IN the model's folder (prior-art layout): every mesh
+            # SMD keeps its model's own bind, so a hands file only pairs with
+            # its own weapon's armature — a shared folder invites importing a
+            # foreign-bind hands mesh, which shreds in Blender.
             hands = model.meshes[parts.hands_stem]
-            digest = _content_hash(hands)
-            if digest not in shared_hands:
-                shared_hands[digest] = f"_shared\\hands_{digest}"
-                (out_dir / "_shared" / f"hands_{digest}.smd").write_text(
-                    write_smd_text(hands), encoding="latin-1"
-                )
-            hands_paths[model.name] = shared_hands[digest]
+            (model_dir / "hands.smd").write_text(
+                write_smd_text(hands), encoding="latin-1"
+            )
+            hands_paths[model.name] = f"{model.name}\\hands"
             written[model.name].append(hands)
 
     # --- animations -------------------------------------------------------
@@ -324,11 +319,6 @@ def merge_models(
     report.sequences = len(sequence_order)
 
     # --- bodygroups + pev_body -------------------------------------------
-    hands_unique: list[str] = []
-    for path in hands_paths.values():
-        if path not in hands_unique:
-            hands_unique.append(path)
-
     groups: list[tuple[str, list[str]]] = []
     groups.append(("weapon", [weapon_paths[m.name][0] for m in models]))
     for extra in range(1, max_weapon_groups):
@@ -337,8 +327,12 @@ def merge_models(
             if len(weapon_paths[m.name]) > extra
         ]
         groups.append((f"weapon_{extra + 1}", entries))
-    if hands_unique:
-        groups.append(("hands", hands_unique))
+    if hands_paths:
+        # One entry per model, aligned with the weapon group, so one pev_body
+        # index pairs each weapon with its own hands (prior-art layout).
+        groups.append(("hands", [
+            hands_paths.get(m.name, "blank") for m in models
+        ]))
     report.bodyparts = len(groups)
     if report.bodyparts > BODYPART_LIMIT:
         report.warnings.append(
@@ -367,6 +361,12 @@ def merge_models(
                     f"{len(norms)} normals (stock studiomdl caps both at "
                     f"{STOCK_VERT_LIMIT}; needs a raised-limit compiler)"
                 )
+            if len(smd.triangles) > SUBMODEL_TRI_WARN:
+                overruns.add(
+                    f"{model_name}: submodel has {len(smd.triangles)} tris "
+                    f"(GoldSrc renderers degrade past ~{SUBMODEL_TRI_WARN} "
+                    "per submodel)"
+                )
     report.warnings.extend(sorted(overruns))
 
     for position, model in enumerate(models):
@@ -379,11 +379,8 @@ def merge_models(
                 extra = int(group_name.split("_")[1]) - 1
                 paths = weapon_paths[model.name]
                 index = entries.index(paths[extra]) if len(paths) > extra else 0
-            else:  # hands
-                index = (
-                    entries.index(hands_paths[model.name])
-                    if model.name in hands_paths else 0
-                )
+            else:  # hands - aligned with the weapon group by construction
+                index = position
             value += index * stride
             stride *= len(entries)
         report.pev_body[model.name] = value
