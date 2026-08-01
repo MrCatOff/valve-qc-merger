@@ -72,13 +72,23 @@ _STUDIO_RE = re.compile(r'studio\s+"(?P<stem>[^"]+)"')
 
 
 def parse_bodygroups(qc_text: str) -> dict[str, list[str]]:
-    """Every ``$bodygroup`` block's studio stems, in file order (QC discovery)."""
+    """Every ``$bodygroup`` block's studio stems, in file order (QC discovery).
+
+    Decompilers emit DUPLICATE group names (e.g. two ``weapon`` groups for a
+    submodel split); those are kept as ``name``, ``name_2``, ``name_3``, ... —
+    a dict keyed by raw name would silently drop all but the last block.
+    """
     out: dict[str, list[str]] = {}
     for m in _BODYGROUP_RE.finditer(qc_text):
         open_index = m.end() - 1
         close_index = _matching_brace(qc_text, open_index)
         body = qc_text[open_index + 1:close_index]
-        out[m.group("name")] = [s.group("stem") for s in _STUDIO_RE.finditer(body)]
+        name = m.group("name")
+        counter = 2
+        while name in out:
+            name = f"{m.group('name')}_{counter}"
+            counter += 1
+        out[name] = [s.group("stem") for s in _STUDIO_RE.finditer(body)]
     return out
 
 

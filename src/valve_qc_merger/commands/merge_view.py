@@ -29,7 +29,17 @@ from valve_qc_merger.merge_view.hands import (
     load_reference_rig,
     match_hands,
 )
-from valve_qc_merger.merge_view.merger import MergeError, merge_models
+from valve_qc_merger.merge_view.merger import (
+    BONE_LIMIT,
+    MergeError,
+    merge_models,
+    write_manifest_data,
+)
+from valve_qc_merger.merge_view.parts import (
+    TEXTURE_BUDGET,
+    PartBudget,
+    split_parts,
+)
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget.config import DEFAULT_REFERENCE
 from valve_qc_merger.retarget.correspondence import CorrespondenceError
@@ -64,6 +74,9 @@ class MergeViewCommand(Command):
                             help="skip bone pooling (merged table may exceed 127)")
         parser.add_argument("--manifest-format", choices=("ini", "json", "toml"),
                             default="ini", help="per-model manifest format")
+        parser.add_argument("--texture-budget", type=int, default=TEXTURE_BUDGET,
+                            help="max textures per compiled part (default "
+                                 f"{TEXTURE_BUDGET}; hard engine cap is 100)")
         parser.add_argument("--dry-run", action="store_true",
                             help="discover, sanitise and load only; print the inventory")
 
@@ -169,34 +182,68 @@ class MergeViewCommand(Command):
             reference_smd = parse_smd_file(args.reference)
             shared = {n.name for n in reference_smd.nodes
                       if not n.name.endswith("Nub")}
-            if not args.no_pool_bones:
-                model_bones = {}
-                for model, _parts in merged_pairs:
-                    fullest = max(model.meshes.values(), key=lambda m: len(m.nodes))
-                    name_of = {n.index: n.name for n in fullest.nodes}
-                    model_bones[model.name] = {
-                        n.name: (name_of.get(n.parent) if n.parent >= 0 else None)
-                        for n in fullest.nodes
+            all_bones: dict[str, dict[str, str | None]] = {}
+            for model, _parts in merged_pairs:
+                fullest = max(model.meshes.values(), key=lambda m: len(m.nodes))
+                name_of = {n.index: n.name for n in fullest.nodes}
+                all_bones[model.name] = {
+                    n.name: (name_of.get(n.parent) if n.parent >= 0 else None)
+                    for n in fullest.nodes
+                }
+            part_split = split_parts(
+                merged_pairs, PartBudget(textures=args.texture_budget),
+                model_bones=all_bones, shared=shared,
+            )
+            multi = len(part_split) > 1
+            if multi:
+                print(f"  split: {len(part_split)} parts "
+                      f"(studiomdl caps one model at 32 submodels)")
+            aggregate: dict[str, dict[str, object]] = {}
+            for number, part_pairs in enumerate(part_split, start=1):
+                part_name = f"{args.name}_p{number}" if multi else args.name
+                part_out = args.out / f"p{number}" if multi else args.out
+                if not args.no_pool_bones:
+                    model_bones = {
+                        model.name: all_bones[model.name]
+                        for model, _parts in part_pairs
                     }
-                plan = plan_pool(model_bones, shared)
-                pooled = 0
-                for model, _parts in merged_pairs:
-                    pooled += len(apply_pool(
-                        model, plan.assignments[model.name], plan.slot_parent
-                    ))
-                print(f"  pool: {plan.size} slots, {pooled} reparents applied")
-            try:
-                report = merge_models(
-                    merged_pairs, args.out, args.name,
-                    manifest_format=args.manifest_format,
-                )
-            except MergeError as exc:
-                print(f"error: merge failed: {exc}")
-                return EXIT_FAIL
-            print(f"  merged: bones={report.bones} bodyparts={report.bodyparts} "
-                  f"sequences={report.sequences} textures={report.textures}")
-            for warning in report.warnings:
-                print(f"    warn: {warning}")
+                    # Reparent-free first: reparented bones defeat studiomdl's
+                    # constant-channel compression and can blow the 64K-per-
+                    # sequence cap. Parts are split to fit this mode; the
+                    # fallback only fires for a lone oversized model.
+                    plan = plan_pool(model_bones, shared, allow_reparent=False)
+                    mode = "rename-only"
+                    if len(shared) + plan.size > BONE_LIMIT:
+                        plan = plan_pool(model_bones, shared)
+                        mode = "with-reparents"
+                    pooled = 0
+                    for model, _parts in part_pairs:
+                        pooled += len(apply_pool(
+                            model, plan.assignments[model.name], plan.slot_parent
+                        ))
+                    print(f"  {part_name}: pool {plan.size} slots "
+                          f"({mode}), {pooled} reparents")
+                try:
+                    report = merge_models(
+                        part_pairs, part_out, part_name,
+                        manifest_format=args.manifest_format,
+                        write_manifest=not multi,
+                    )
+                except MergeError as exc:
+                    print(f"error: merge failed ({part_name}): {exc}")
+                    return EXIT_FAIL
+                print(f"  {part_name}: bones={report.bones} "
+                      f"bodyparts={report.bodyparts} "
+                      f"sequences={report.sequences} textures={report.textures}")
+                for warning in report.warnings:
+                    print(f"    warn: {warning}")
+                for model, _parts in part_pairs:
+                    aggregate[model.name] = {
+                        "model": f"{part_name}.mdl",
+                        **report.manifest[model.name],
+                    }
+            if multi:
+                write_manifest_data(args.out, aggregate, args.manifest_format)
         return EXIT_FAIL if failures else EXIT_OK
 
 

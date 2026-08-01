@@ -66,8 +66,18 @@ def _slot_number(slot: str) -> int:
 def plan_pool(
     model_bones: dict[str, dict[str, str | None]],
     shared: set[str],
+    *,
+    allow_reparent: bool = True,
 ) -> PoolPlan:
-    """Assign every non-shared bone of every model to a pooled slot."""
+    """Assign every non-shared bone of every model to a pooled slot.
+
+    With ``allow_reparent=False`` only exact parent-key slots are reused
+    (rule 1) and the pool otherwise grows: more slots, but zero reparents —
+    which keeps each sequence's animation stream at its original size
+    (studiomdl's per-sequence anim data is capped at 64K by the u16 channel
+    offsets, and a reparented bone's per-frame-varying locals defeat the
+    constant-channel compression).
+    """
     plan = PoolPlan()
     counter = 0
 
@@ -104,7 +114,7 @@ def plan_pool(
             slot = next(
                 (s for s in free if plan.slot_parent[s] == natural_key), None
             )
-            if slot is None:
+            if slot is None and allow_reparent:
                 # 2. any free slot whose parent key this model can satisfy.
                 claimed = set(assignment.values())
                 available = claimed | model_shared | {_ROOT_KEY}

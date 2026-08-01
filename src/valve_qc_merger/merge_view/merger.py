@@ -13,9 +13,11 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.skeleton_ops import (
@@ -30,6 +32,8 @@ from valve_qc_merger.writers.smd import write_smd_text
 
 BONE_LIMIT = 127
 BODYPART_LIMIT = 32
+SUBMODEL_LIMIT = 32  # hard studiomdl array size; exceeding = memory corruption
+STOCK_VERT_LIMIT = 2048  # stock MAXSTUDIOVERTS per submodel (verts and normals)
 TEXTURE_WARN = 80
 
 
@@ -46,6 +50,7 @@ class MergeReport:
     sequences: int = 0
     textures: int = 0
     pev_body: dict[str, int] = field(default_factory=dict)
+    manifest: dict[str, dict[str, int]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -160,6 +165,22 @@ def _unify_skeletons(models: list[ModelInput], skeleton: dict[str, str | None]) 
             smd.frames = [bind_frame]
 
 
+def _sequence_size_warnings(models: list[ModelInput], report: MergeReport) -> None:
+    """Check every sequence against studiomdl's 64K anim-stream cap.
+
+    Uses the byte-exact quantization+RLE replica (animsize module); with
+    reparent-free pooling an overflow here means the SOURCE model's sequence
+    is too big to recompile with stock studiomdl at all.
+    """
+    for (model_name, seq_name), size in sequence_sizes(models).items():
+        if size > SEQ_DATA_LIMIT:
+            report.warnings.append(
+                f"{model_name}: sequence {seq_name!r} anim data is {size} "
+                f"bytes (studiomdl caps one sequence's stream at 64K); "
+                "studiomdl will refuse to compile this part"
+            )
+
+
 def _concat_meshes(meshes: list[Smd]) -> Smd:
     """One submodel SMD from several meshes sharing a node table."""
     first = meshes[0]
@@ -175,6 +196,19 @@ def _concat_meshes(meshes: list[Smd]) -> Smd:
 
 def _content_hash(smd: Smd) -> str:
     return hashlib.md5(write_smd_text(smd).encode("latin-1")).hexdigest()[:10]
+
+
+def _sanitize_material(material: str) -> str:
+    """Delivery contract: printable ASCII, no spaces, .bmp extension.
+
+    Spaces are outright fatal: studiomdl tokenizes SMD triangle headers on
+    whitespace, so a material like ``king cobra scope.bmp`` crashes the
+    compile mid-parse.
+    """
+    cleaned = "".join(ch if "!" <= ch <= "~" else "_" for ch in material)
+    if not cleaned.lower().endswith(".bmp"):
+        cleaned += ".bmp"
+    return cleaned
 
 
 def _find_texture(directory: Path, material: str) -> Path | None:
@@ -200,11 +234,15 @@ def _stage_textures(
                     report.warnings.append(
                         f"{model.name}: texture for material {material!r} not found"
                     )
+                    sanitized = _sanitize_material(material)
+                    if sanitized != material:
+                        renames[material] = sanitized
                     continue
                 data = source.read_bytes()
-                final = renames.get(material, material)
+                final = renames.get(material, _sanitize_material(material))
                 if final in staged and staged[final] != data:
-                    final = f"{model.name}__{material}"
+                    final = _sanitize_material(f"{model.name}__{material}")
+                if final != material:
                     renames[material] = final
                 if final not in staged:
                     staged[final] = data
@@ -218,15 +256,21 @@ def _stage_textures(
     report.textures = len(staged)
 
 
+SEQ_NAME_LIMIT = 31  # studiomdl strcpy's labels into char[32] unchecked
+
+
 def _unique_sequence_names(models: list[ModelInput]) -> dict[tuple[str, str], str]:
     taken: set[str] = set()
     out: dict[tuple[str, str], str] = {}
     for model in models:
         for seq_name in model.anims:
             final = seq_name if seq_name not in taken else f"{model.name}__{seq_name}"
+            final = final[:SEQ_NAME_LIMIT]
             counter = 2
             while final in taken:
-                final = f"{model.name}__{seq_name}_{counter}"
+                suffix = f"_{counter}"
+                final = (f"{model.name}__{seq_name}"[:SEQ_NAME_LIMIT - len(suffix)]
+                         + suffix)
                 counter += 1
             taken.add(final)
             out[(model.name, seq_name)] = final
@@ -239,6 +283,7 @@ def merge_models(
     name: str,
     *,
     manifest_format: str = "ini",
+    write_manifest: bool = True,
 ) -> MergeReport:
     """Write the merged model directory; returns the budget report."""
     report = MergeReport()
@@ -246,6 +291,7 @@ def merge_models(
     skeleton = _check_skeleton_consistency(models)
     report.bones = len(skeleton)
     _unify_skeletons(models, skeleton)
+    _sequence_size_warnings(models, report)
     if report.bones > BONE_LIMIT:
         report.warnings.append(
             f"merged skeleton has {report.bones} bones (limit {BONE_LIMIT})"
@@ -253,6 +299,17 @@ def merge_models(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "_shared").mkdir(exist_ok=True)
+
+    # --- textures ---------------------------------------------------------
+    # Sanitise material names and stage files FIRST, so the renames land in
+    # every mesh written below (including content-hash-shared hands).
+    kept: dict[str, list[Smd]] = {}
+    for model, parts in pairs:
+        stems = [stem for group in parts.weapon_stems for stem in group]
+        if parts.hands_stem is not None:
+            stems.append(parts.hands_stem)
+        kept[model.name] = [model.meshes[stem] for stem in stems]
+    _stage_textures(out_dir, models, kept, report)
 
     # --- meshes -----------------------------------------------------------
     written: dict[str, list[Smd]] = {}
@@ -285,16 +342,6 @@ def merge_models(
                 )
             hands_paths[model.name] = shared_hands[digest]
             written[model.name].append(hands)
-
-    _stage_textures(out_dir, models, written, report)
-    # Re-write meshes whose materials were renamed by texture conflicts.
-    for model, parts in pairs:
-        model_dir = out_dir / model.name
-        for index, _group in enumerate(parts.weapon_stems):
-            stem = "weapon" if index == 0 else f"weapon_{index + 1}"
-            (model_dir / f"{stem}.smd").write_text(
-                write_smd_text(written[model.name][index]), encoding="latin-1"
-            )
 
     # --- animations -------------------------------------------------------
     seq_names = _unique_sequence_names(models)
@@ -329,11 +376,30 @@ def merge_models(
         report.warnings.append(
             f"{report.bodyparts} bodyparts (limit {BODYPART_LIMIT})"
         )
+    submodels = sum(len(entries) for _name, entries in groups)
+    if submodels > SUBMODEL_LIMIT:
+        raise MergeError(
+            f"{submodels} submodels in one model exceed studiomdl's hard "
+            f"{SUBMODEL_LIMIT}-entry arrays (silent memory corruption: "
+            "compiled meshes detach from bones); split into more parts"
+        )
     if report.textures > TEXTURE_WARN:
         report.warnings.append(
             f"{report.textures} textures staged (studiomdl degrades past "
-            f"~{TEXTURE_WARN}; part splitting arrives in M5)"
+            f"~{TEXTURE_WARN}; lower the texture budget to split further)"
         )
+    overruns: set[str] = set()
+    for model_name, smds in written.items():
+        for smd in smds:
+            verts = {(v.position, v.bone) for t in smd.triangles for v in t.vertices}
+            norms = {(v.normal, v.bone) for t in smd.triangles for v in t.vertices}
+            if len(verts) > STOCK_VERT_LIMIT or len(norms) > STOCK_VERT_LIMIT:
+                overruns.add(
+                    f"{model_name}: submodel has {len(verts)} verts / "
+                    f"{len(norms)} normals (stock studiomdl caps both at "
+                    f"{STOCK_VERT_LIMIT}; needs a raised-limit compiler)"
+                )
+    report.warnings.extend(sorted(overruns))
 
     for position, model in enumerate(models):
         value = 0
@@ -376,6 +442,19 @@ def merge_models(
     lines.append("$flags 0")
     lines.append("")
 
+    # studiomdl's compiled bone table keeps only vertex-used bones and their
+    # ancestors; an attachment naming any other bone is a hard compile error.
+    surviving: set[str] = set()
+    for smds in written.values():
+        for smd in smds:
+            names = {n.index: n.name for n in smd.nodes}
+            parents = {n.name: names.get(n.parent) for n in smd.nodes}
+            for triangle in smd.triangles:
+                for vertex in triangle.vertices:
+                    bone: str | None = names[vertex.bone]
+                    while bone is not None and bone not in surviving:
+                        surviving.add(bone)
+                        bone = parents.get(bone)
     used_attachment_ids: set[int] = set()
     for model in models:
         for raw in model.qc_text.splitlines():
@@ -383,11 +462,20 @@ def merge_models(
             if stripped.startswith("$attachment"):
                 try:
                     attachment_id = int(stripped.split()[1])
+                    attachment_bone = shlex.split(stripped)[2]
                 except (IndexError, ValueError):
                     continue
-                if attachment_id not in used_attachment_ids and attachment_id <= 3:
-                    used_attachment_ids.add(attachment_id)
-                    lines.append(stripped)
+                if attachment_id in used_attachment_ids or attachment_id > 3:
+                    continue
+                if attachment_bone not in surviving:
+                    report.warnings.append(
+                        f"{model.name}: attachment {attachment_id} dropped - "
+                        f"bone {attachment_bone!r} carries no vertices and is "
+                        "not in the compiled bone table"
+                    )
+                    continue
+                used_attachment_ids.add(attachment_id)
+                lines.append(stripped)
     lines.append("")
 
     manifest_anim: dict[str, dict[str, int]] = {m.name: {} for m in models}
@@ -410,28 +498,33 @@ def merge_models(
         manifest_anim[model_name][original] = index
     (out_dir / f"{name}.qc").write_text("\n".join(lines) + "\n", encoding="latin-1")
 
-    _write_manifest(out_dir, name, models, report, manifest_anim, manifest_format)
-    return report
-
-
-def _write_manifest(
-    out_dir: Path, name: str, models: list[ModelInput], report: MergeReport,
-    anim: dict[str, dict[str, int]], manifest_format: str,
-) -> None:
-    data = {
+    report.manifest = {
         model.name: {
             "pev_body": report.pev_body.get(model.name, 0),
-            **{f"anim_{k}": v for k, v in anim[model.name].items()},
+            **{f"anim_{k}": v for k, v in manifest_anim[model.name].items()},
         }
         for model in models
     }
+    if write_manifest:
+        write_manifest_data(out_dir, report.manifest, manifest_format)
+    return report
+
+
+def write_manifest_data(
+    out_dir: Path, data: dict[str, dict[str, object]] | dict[str, dict[str, int]],
+    manifest_format: str,
+) -> None:
+    """Write the models manifest in the chosen format."""
     if manifest_format == "json":
         (out_dir / "models.json").write_text(json.dumps(data, indent=1))
     elif manifest_format == "toml":
         chunks = []
         for section, values in data.items():
             chunks.append(f'["{section}"]')
-            chunks.extend(f"{k} = {v}" for k, v in values.items())
+            chunks.extend(
+                f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}"
+                for k, v in values.items()
+            )
             chunks.append("")
         (out_dir / "models.toml").write_text("\n".join(chunks))
     else:
@@ -443,4 +536,4 @@ def _write_manifest(
         (out_dir / "models.ini").write_text("\n".join(chunks))
 
 
-__all__ = ["MergeError", "MergeReport", "merge_models"]
+__all__ = ["MergeError", "MergeReport", "merge_models", "write_manifest_data"]
