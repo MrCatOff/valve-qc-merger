@@ -182,6 +182,67 @@ def solve_finger(
     return basis, angles
 
 
+def solve_finger_joints(
+    chain: list[str],
+    dof: list[str],
+    base_parent_world: Transform,
+    rest_local: dict[str, Transform],
+    targets: dict[str, Vector3],
+    limits: dict[str, tuple[float, float]],
+    *,
+    axis: Vector3,
+    pre_basis: dict[str, Transform] | None = None,
+    warm_start: dict[str, float] | None = None,
+    max_step: float | None = None,
+) -> tuple[dict[str, Transform], dict[str, float]]:
+    """Per-joint hinge solve: every DOF joint places its CHILD on target.
+
+    Tip-only CCD is redundant — many (MCP, PIP) combinations reach one tip
+    point, and warm-started CCD keeps whatever knuckle bend it inherited.
+    Targeting each joint's child position (the ORIGINAL hand's joint
+    positions — its contact line on the weapon) removes the redundancy: the
+    proximal joint rotates so the middle joint lands on the original middle
+    joint, the middle so the distal lands on the original distal, root to
+    tip, each about the shared hinge axis (projected into the hinge plane and
+    clamped to anatomy). This reproduces the authored big-hand articulation:
+    flatter knuckle, deeper curl.
+    """
+    axis = _norm(axis)
+    angles: dict[str, float] = {}
+    for joint in dof:
+        j = chain.index(joint)
+        child = chain[j + 1] if j + 1 < len(chain) else None
+        target = targets.get(child) if child is not None else None
+        if child is None or target is None:
+            continue
+        basis = _bases_from_angles(
+            chain, dof, base_parent_world, rest_local, axis, angles, pre_basis
+        )
+        posed = _fk(chain, base_parent_world, rest_local, basis)
+        pivot = posed[joint].translation
+        cur = posed[child].translation
+        to_cur = _project_off_axis(Vector3(
+            cur.x - pivot.x, cur.y - pivot.y, cur.z - pivot.z), axis)
+        to_tgt = _project_off_axis(Vector3(
+            target.x - pivot.x, target.y - pivot.y, target.z - pivot.z), axis)
+        if to_cur.length() < 1e-6 or to_tgt.length() < 1e-6:
+            continue
+        delta = _signed_angle(_norm(to_cur), _norm(to_tgt), axis)
+        lo, hi = limits.get(joint, (-math.pi, math.pi))
+        angles[joint] = min(hi, max(lo, delta))
+
+    if warm_start is not None and max_step is not None:
+        for b in dof:
+            prev = warm_start.get(b)
+            if prev is not None and b in angles:
+                angles[b] = min(prev + max_step, max(prev - max_step, angles[b]))
+
+    basis = _bases_from_angles(
+        chain, dof, base_parent_world, rest_local, axis, angles, pre_basis
+    )
+    return basis, angles
+
+
 def calibrate_axis_sign(
     chain: list[str],
     dof: list[str],
@@ -222,4 +283,4 @@ def tip_error(
     return posed[chain[-1]].translation.distance_to(target_tip)
 
 
-__all__ = ["rest_locals", "solve_finger", "calibrate_axis_sign", "tip_error"]
+__all__ = ["rest_locals", "solve_finger", "solve_finger_joints", "calibrate_axis_sign", "tip_error"]

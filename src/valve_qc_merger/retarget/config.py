@@ -107,6 +107,14 @@ class RetargetConfig:
     # replaces the defaults entirely. The export becomes weapon-only + one
     # hands_<name> SMD per variant, and the QC gains $bodygroup blocks.
     hand_variants: dict[str, str] | str | None = None
+    # Curl fingers onto the weapon with the hinge-IK (§7.6): after direction
+    # transfer, each finger is curled until its deepest mapped joint reaches
+    # the ORIGINAL finger's joint position — the small source hand's contact
+    # on the gun. Longer reference fingers then wrap further around the grip
+    # instead of poking through it (the gold-pair articulation: flatter
+    # knuckle, deeper curl). None => auto: solve only for fingers that
+    # overshoot their source joint by > 0.3u (size-matched hands are no-ops).
+    grip_tip_solve: bool | None = None
     allow_rerig: bool = False  # §11.3
     frustum_policy: FrustumPolicy = "warn"  # §11.4
     finger_priority: tuple[str, ...] = ("pinky", "ring", "middle", "index", "thumb")  # §11.5

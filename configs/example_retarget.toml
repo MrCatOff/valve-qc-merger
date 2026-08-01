@@ -148,3 +148,8 @@ fov_y_degrees = 90.0
 aspect = 1.3333333333333333    # 4:3
 near = 0.1
 far = 128.0
+
+# Curl fingers onto the weapon with the hinge-IK after direction transfer
+# (per-joint contact targeting). None/absent = auto: engages per finger when
+# direction transfer overshoots the source joint by > 0.3u.
+# grip_tip_solve = true

@@ -502,6 +502,29 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
     scene_ctx = bpy.context.scene
     scene_ctx.frame_start, scene_ctx.frame_end = start, end
 
+    # Tip-solve setup (§7.6): after direction transfer, curl each non-thumb
+    # finger about the hand's knuckle axis until its deepest mapped joint
+    # reaches the SOURCE joint's position — the original hand's contact on
+    # the gun. Longer reference fingers then wrap further around the grip
+    # instead of poking through it (the gold pair's articulation: flatter
+    # knuckle, deeper curl). Auto mode engages per finger only when direction
+    # transfer overshoots the source joint by > 0.3u, so size-matched hands
+    # are untouched.
+    solver_cfg: dict[str, Any] = cfg.get("solver") or {}
+    tip_solve_cfg = cfg.get("grip_tip_solve")  # None => auto per finger
+    hinge_max_step = math.radians(float(solver_cfg.get("max_step_degrees", 35.0)))
+
+    def _hinge_limits(depth: int) -> tuple[float, float]:
+        key = ("hinge_mcp", "hinge_pip", "hinge_dip")[min(depth, 2)]
+        lo, hi = solver_cfg.get(key, ((-25.0, 100.0), (0.0, 110.0), (0.0, 90.0))[min(depth, 2)])
+        return math.radians(float(lo)), math.radians(float(hi))
+
+    solve_enabled: dict[str, bool] = {}  # chain key -> decided on first frame
+    solve_sign: dict[str, float] = {}
+    warm_angles: dict[str, dict[str, float]] = {}
+    tip_errors: list[float] = []
+    solved_chains: set[str] = set()
+
     aim_errors: list[float] = []
     for frame in range(start, end + 1):
         scene_ctx.frame_set(frame)
@@ -511,17 +534,18 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
             orient=corr.frames, hand_offset=hand_offset,
         )
         posed = world_from_bases(tgt_rest, tgt_parent, bases)  # open-hand world (wrist fixed)
-        # Finger direction transfer: no solver. Each finger joint is aimed so its
-        # segment (head -> child head) points exactly where the source finger's
-        # corresponding segment points — the fingers copy the original grip pose
-        # verbatim; the longer reference fingers simply extend a little further
-        # along the same directions. Joints deeper than the source chain (the
-        # *Nub tips and the distal joint whose source has no deeper child) keep
-        # an identity basis and follow their parent straight.
+        # Finger direction transfer first: each joint is aimed so its segment
+        # (head -> child head) points where the source finger's corresponding
+        # segment points — the fingers copy the original grip's shape and
+        # spacing. Joints deeper than the source chain (the *Nub tips and the
+        # distal joint whose source has no deeper child) keep an identity
+        # basis and follow their parent straight.
         for wrist, chain, _dof in chains:
-            rl = chain_rl[wrist + "|" + chain[0]]
+            key = wrist + "|" + chain[0]
+            rl = chain_rl[key]
             walk = posed[wrist]
             pos_of: dict[str, Vector3] = {}
+            dt_basis: dict[str, Transform] = {}
             for i, bone in enumerate(chain):
                 seat = walk.compose(rl[bone])
                 pos_of[bone] = seat.translation
@@ -543,15 +567,68 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
                             mat3_transpose(seat.rotation),
                             mat3_multiply(aim, seat.rotation),
                         ))
+                dt_basis[bone] = basis
                 bases[bone] = basis
                 walk = seat.compose(basis)
-            deepest = next((b for b in reversed(chain) if mapping.get(b) is not None), None)
-            if deepest is not None:
-                ours_p = pos_of[deepest]
-                sp = scene.src.pose.bones[mapping[deepest]].head
-                aim_errors.append(math.dist(
-                    (ours_p.x, ours_p.y, ours_p.z), (sp[0], sp[1], sp[2])
-                ))
+            dof_bones = [b for b in chain if mapping.get(b) is not None]
+            deepest = dof_bones[-1] if dof_bones else None
+            if deepest is None:
+                continue
+            sp = scene.src.pose.bones[mapping[deepest]].head
+            target = Vector3(sp[0], sp[1], sp[2])
+            ours_p = pos_of[deepest]
+            drift = math.dist((ours_p.x, ours_p.y, ours_p.z), (sp[0], sp[1], sp[2]))
+            aim_errors.append(drift)
+            if key not in solve_enabled:
+                is_thumb = chain[0] == thumb_of[wrist]
+                wanted = (bool(tip_solve_cfg) if tip_solve_cfg is not None
+                          else drift > 0.3)
+                solve_enabled[key] = wanted and not is_thumb and len(dof_bones) >= 2
+            if not solve_enabled[key]:
+                continue
+            # Hinge axis: across this wrist's non-thumb knuckles (pre-curl
+            # world positions); the probe calibrates the sign per finger.
+            base_positions = [
+                posed[wrist].compose(chain_rl[wrist + "|" + c[0]][c[0]]).translation
+                for c, _d in by_wrist[wrist] if c[0] != thumb_of[wrist]
+            ]
+            if len(base_positions) < 2:
+                continue
+            first, last = base_positions[0], base_positions[-1]
+            axis = Vector3(last.x - first.x, last.y - first.y, last.z - first.z)
+            if axis.length() < 1e-6:
+                continue
+            sub = chain[: chain.index(deepest) + 1]
+            limits = {b: _hinge_limits(i) for i, b in enumerate(dof_bones)}
+            # Target every joint at its SOURCE joint position: the original
+            # hand's contact line on the weapon (removes MCP/PIP redundancy).
+            joint_targets: dict[str, Vector3] = {}
+            for bone in sub[1:]:
+                src_of = mapping.get(bone)
+                if src_of is not None:
+                    hp = scene.src.pose.bones[src_of].head
+                    joint_targets[bone] = Vector3(hp[0], hp[1], hp[2])
+            if key not in solve_sign:
+                solve_sign[key] = grip_ik.calibrate_axis_sign(
+                    sub, dof_bones, posed[wrist], rl, target, _vnorm(axis),
+                    pre_basis=dt_basis,
+                )
+            signed_axis = Vector3(axis.x * solve_sign[key],
+                                  axis.y * solve_sign[key],
+                                  axis.z * solve_sign[key])
+            solved_basis, angles = grip_ik.solve_finger_joints(
+                sub, dof_bones, posed[wrist], rl, joint_targets, limits,
+                axis=signed_axis, pre_basis=dt_basis,
+                warm_start=warm_angles.get(key),
+                max_step=hinge_max_step if key in warm_angles else None,
+            )
+            warm_angles[key] = angles
+            for bone in sub:
+                bases[bone] = solved_basis[bone]
+            solved_chains.add(key)
+            tip_errors.append(grip_ik.tip_error(
+                sub, posed[wrist], rl, solved_basis, target
+            ))
         for name, basis in bases.items():
             pose_bone = reference.pose.bones[name]
             pose_bone.matrix_basis = _bmatrix(basis)
@@ -565,12 +642,16 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
             [auto_offset.x, auto_offset.y, auto_offset.z] if auto_offset else None
         ),
         "grip": {
-            "mode": "direction-transfer",
+            "mode": ("tip-solve" if solved_chains else "direction-transfer"),
             "fingers_per_frame": len(chains),
-            # Distance of our deepest mapped finger joint from the source's — the
-            # expected finger-length surplus, not a solve error.
+            "solved_fingers": len(solved_chains),
+            # Distance of our deepest mapped finger joint from the source's
+            # BEFORE the solve — the finger-length overshoot.
             "joint_drift_mean": sum(aim_errors) / n,
             "joint_drift_max": max(aim_errors, default=0.0),
+            "tip_error_mean": (sum(tip_errors) / len(tip_errors)
+                               if tip_errors else 0.0),
+            "tip_error_max": max(tip_errors, default=0.0),
         },
     }
 
