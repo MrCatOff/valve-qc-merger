@@ -31,7 +31,7 @@ def test_grafted_rig_maps_onto_reference_names() -> None:
     # The anaconda's grafted rig: underscore Bip01 names, reversed forearms,
     # bullet/helper stubs, 3-joint fingers (no Nubs).
     reference = load_reference_rig(_REFERENCE)
-    model = load_model(Path("tmp/anaconda"))
+    model = load_model(Path("tests/examples/v_anaconda"))
     mesh = max(model.meshes.values(), key=lambda m: len(m.nodes))
     include = hand_bone_names(model.meshes, model.bodygroups)
     assert include is not None and "Bip01_L_Hand" in include

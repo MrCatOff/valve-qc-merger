@@ -1,7 +1,9 @@
 # Technical specification: `merge-view` (draft for review)
 
-**Status:** approved by the author (2026-07-31) — decisions folded in below;
-implementation proceeds in the milestones of §7.
+**Status:** IMPLEMENTED (M1–M5 complete, 2026-08-01; field-confirmed on
+Windows). This document is the design record; the user-facing reference is
+`docs/merge-view.md`. Field corrections to the original draft are marked
+*(revised)* below.
 **Task:** merge a folder of decompiled view-models (e.g. `tmp/pistols/view`,
 56 weapons) into combined GoldSource model(s), with every hand skeleton renamed
 and re-hierarchised to `storage/hands/reference_hands.smd` conventions, the
@@ -166,17 +168,25 @@ hands together via `pev_body` (mixed-radix encoding; blank-entry sharing so
 absent groups do not explode the product). The per-model manifest
 (`pev_body = N`, `anim_<name> = merged_index`) keeps the prior art's field
 contract; format selectable via `--manifest-format ini|json|toml` (default
-`ini` for drop-in compatibility; the same data structure serialised). Identical hand meshes across
-models (the corpus reuses ~4 CSO hand meshes heavily) are collapsed to shared
-entries by content hash, shrinking both the file and the vertex budget.
+`ini` for drop-in compatibility; the same data structure serialised).
+*(revised)* Hands are written PER MODEL (`v_<model>/hands.smd`, hands
+bodygroup aligned one entry per model): every mesh SMD keeps its model's own
+bind, so a shared content-hash file invited pairing a foreign-bind hands mesh
+with another weapon's skeleton, which shreds the mesh in Blender inspection.
+Identical ANIMATIONS are deduped instead — by (SMD bytes, fps, events) within
+a part — so recolour variants share sequence indices via the manifest.
 
 ### 3.10 Output splitting
-Hard limits force parts: ~80–90 textures (~30 weapons) per .mdl, 2048
-verts/submodel, 64 KB animation data per sequence, ≤32 bodyparts, ≤127 bones
-after pooling. The planner packs models into `<name>`, `<name>_part2`, … by
-first-exceeded budget, deterministically (sorted by name), and `analyze` mode
-(`--dry-run`) prints the plan + budgets without writing. For the 56-pistol
-corpus expect ~2 parts (texture-bound).
+*(revised)* Hard limits force parts — the binding one in the field is
+studiomdl's fixed 32-entry submodel arrays (exceeding them is silent memory
+corruption, not an error). The planner packs models into `p1…pN`
+deterministically under: 32 submodels (weapons + blanks + per-model hands),
+127 bones under structure-matched pooling (grow while under budget, reshape
+only when full — early reshaping defeats the anim RLE and blows the 64 KB
+per-sequence cap; every plan is previewed with a byte-exact studiomdl size
+replica and falls back to reparent-free pooling), the texture budget
+(default 80) and the sequence budget (default 111, post-dedupe). The
+56-pistol corpus lands at 5 parts.
 
 ### 3.11 Texture downscale (ported from prior art)
 
@@ -272,9 +282,11 @@ Config mirrors the flags plus per-model overrides; documented in
 
 1. **Naming:** space-style reference names (`Bip01 L Hand`) — approved.
 2. **Shared root:** `Bip01` (no `Universal_Root`).
-3. **Prune:** full vertex-less prune, `--no-prune` escape (Nubs always go).
-4. **Hands:** each weapon keeps its own hand meshes; identical meshes shared
-   by content hash — approved. No male/female variant machinery here.
+3. **Prune:** *(revised in the field)* full prune broke in-game animations
+   (folded animated pivots upset studiomdl's RLE); default now removes ONLY
+   `Finger{N}Nub`, with `--prune` opting into the full prune.
+4. **Hands:** each weapon keeps its own hand meshes, written per model
+   *(revised — see §3.9; content-hash sharing broke Blender inspection)*.
 5. **Splitting:** automatic parts by budget — approved.
 6. **Manifest:** field contract kept; format `ini` (default) | `json` | `toml`
    via `--manifest-format`.
@@ -283,16 +295,20 @@ Config mirrors the flags plus per-model overrides; documented in
 
 ## 7. Implementation milestones
 
-- **M1** — package scaffold (`merge_view/`), discovery + sanitise + model
-  loading on the typed QC/SMD layer; `--dry-run` inventory report. Unit tests.
-- **M2** — hand rig detection + canonical rename + re-hierarchy + Nub removal
-  + full prune, with the FK pose-preservation check as the development
-  harness. Corpus target: all 56 pistols matched or explicitly diagnosed.
-- **M3** — bodygroup collapse, bone pooling, merge (bones/sequences/
-  attachments), QC + manifest generation, `Bip01` root unification.
-- **M4** — texture stage: dedupe, downscale, atlas packing, UV rewrite.
-- **M5** — splitting planner, full verification gate, docs
-  (`docs/merge-view.md`) + `configs/example_merge_view.toml`, corpus run.
+All milestones COMPLETE (2026-08-01):
 
-Each milestone lands with tests green and is exercised against
-`tmp/pistols/view` before the next begins.
+- **M1** ✓ discovery + sanitise + loading, `--dry-run` inventory.
+- **M2** ✓ hand rig detection (56/56 corpus), canonical rename/re-hierarchy,
+  Nub removal; FK pose preservation to 1e-8u.
+- **M3** ✓ bodygroup collapse, budget-gated bone pooling, merge, QC +
+  manifest, `$texrendermode` carry, sequence dedupe, `--sound-path`.
+- **M4** ✓ texture stage: `--max-texture-size` downscale, `--pack-textures`
+  atlases (bmp8/atlas modules).
+- **M5** ✓ splitting planner (submodels/bones/textures/sequences budgets),
+  verification gate (§3.13, `verify.py`), `docs/merge-view.md`,
+  `configs/example_merge_view.toml`, `--config`.
+
+Extras beyond the draft: a native macOS studiomdl (`tools/studiomdl`,
+`tools/build_studiomdl.sh`) with the `$texrendermode` extension, used to
+compile-verify every delivery; every part additionally pose-verified against
+the shipped per-weapon `.mdl` files.

@@ -1,0 +1,44 @@
+# Example config for `merge-view` — every supported key with its default.
+# Usage:
+#   python -m valve_qc_merger merge-view <models_dir> --out <dir> \
+#       --config configs/example_merge_view.toml
+# Explicit command-line flags always win over config values.
+# `models_dir` and `--out` stay on the command line.
+
+# Output model name stem: parts compile to <name>_p1.mdl, <name>_p2.mdl, ...
+name = "v_merged"
+
+# Canonical hand skeleton the models are renamed/re-hierarchised onto.
+reference = "storage/hands/reference_hands.smd"
+
+# Model directories to skip.
+exclude = []
+
+# Continue past models whose hand rig cannot be matched (they are dropped).
+skip_unmatched = false
+
+# Also fold away vertex-less unreferenced bones. The default removes ONLY
+# Finger*Nub bones — the full prune broke in-game animations in the field.
+prune = false
+
+# Skip bone pooling entirely (the merged table may then exceed 127 bones).
+no_pool_bones = false
+
+# Manifest format: "ini", "json" or "toml".
+manifest_format = "ini"
+
+# Per-part budgets used by the splitter.
+texture_budget = 80    # hard engine cap is 100
+sequence_budget = 111  # counted after animation dedupe
+
+# Texture stage. max_texture_size resamples anything larger on either axis;
+# pack_textures composites four 256x256 tiles into 512x512 atlases.
+# max_texture_size = 512
+pack_textures = false
+no_pack_texture = []   # globs, e.g. ["*hand*", "scope*.bmp"]
+
+# Rewrite every sound event path; ${fileBasename} is the original file name.
+# sound_path = "csforce/pistols/${fileBasename}"
+
+# Skip the post-merge verification gate (not recommended).
+no_verify = false

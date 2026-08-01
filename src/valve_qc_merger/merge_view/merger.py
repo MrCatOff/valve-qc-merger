@@ -276,6 +276,20 @@ def _collect_render_modes(
     return modes
 
 
+_SOUND_EVENT_RE = re.compile(r'"([^"]+\.wav)"', re.IGNORECASE)
+
+
+def _rewrite_sound_events(
+    events: tuple[str, ...], template: str,
+) -> tuple[str, ...]:
+    """Point every sound event at ``template`` (``${fileBasename}`` = the
+    original file's basename), e.g. ``csforce/pistols/${fileBasename}``."""
+    def replace(match: re.Match[str]) -> str:
+        basename = match.group(1).replace("\\", "/").rsplit("/", 1)[-1]
+        return '"' + template.replace("${fileBasename}", basename) + '"'
+    return tuple(_SOUND_EVENT_RE.sub(replace, event) for event in events)
+
+
 SEQ_NAME_LIMIT = 31  # studiomdl strcpy's labels into char[32] unchecked
 
 
@@ -305,6 +319,7 @@ def merge_models(
     manifest_format: str = "ini",
     write_manifest: bool = True,
     textures: TextureOptions | None = None,
+    sound_path: str | None = None,
 ) -> MergeReport:
     """Write the merged model directory; returns the budget report."""
     report = MergeReport()
@@ -398,6 +413,10 @@ def merge_models(
             meta = next(
                 (s for s in model.sequences if s.name == seq_name), None
             )
+            if meta is not None and sound_path is not None:
+                meta = dataclasses.replace(
+                    meta, events=_rewrite_sound_events(meta.events, sound_path)
+                )
             text = write_smd_text(anim)
             key = (
                 hashlib.md5(text.encode("latin-1")).hexdigest(),

@@ -26,6 +26,7 @@ from valve_qc_merger.merge_view.canonicalize import canonicalize_model
 from valve_qc_merger.merge_view.discovery import (
     MergeViewError,
     ModelInput,
+    _resolve_smd,
     discover_models,
     load_model,
     sanitize_model_dir,
@@ -48,6 +49,7 @@ from valve_qc_merger.merge_view.parts import (
     PartBudget,
     split_parts,
 )
+from valve_qc_merger.merge_view.verify import verify_part
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget.config import DEFAULT_REFERENCE
 from valve_qc_merger.retarget.correspondence import CorrespondenceError
@@ -99,10 +101,21 @@ class MergeViewCommand(Command):
                             metavar="GLOB",
                             help="keep matching textures out of atlases "
                                  "(repeatable)")
+        parser.add_argument("--sound-path", metavar="TEMPLATE",
+                            help="rewrite sound event paths for every weapon; "
+                                 "${fileBasename} is the original file name "
+                                 "(e.g. 'csforce/pistols/${fileBasename}')")
+        parser.add_argument("--config", type=Path, metavar="TOML",
+                            help="TOML file supplying defaults for any flag "
+                                 "(explicit CLI values win)")
+        parser.add_argument("--no-verify", action="store_true",
+                            help="skip the post-merge verification gate")
         parser.add_argument("--dry-run", action="store_true",
                             help="discover, sanitise and load only; print the inventory")
 
     def run(self, args: argparse.Namespace) -> int:
+        if args.config is not None:
+            _apply_config(args)
         try:
             model_dirs = discover_models(args.models_dir, exclude=set(args.exclude))
         except MergeViewError as exc:
@@ -118,6 +131,8 @@ class MergeViewCommand(Command):
         inventory: list[dict[str, object]] = []
         failures: list[str] = []
         merged_pairs: list[tuple[ModelInput, ModelParts]] = []
+        hand_renames: dict[str, dict[str, str]] = {}
+        original_anims: dict[str, dict[str, str]] = {}
         for model_dir in model_dirs:
             sanitised = sanitize_model_dir(model_dir)
             try:
@@ -166,6 +181,12 @@ class MergeViewCommand(Command):
                                                             encoding="latin-1")
                 parts = collapse_bodygroups(model)
                 merged_pairs.append((model, parts))
+                hand_renames[model.name] = dict(match.renames)
+                original_anims[model.name] = {
+                    seq.name: str(_resolve_smd(model_dir, seq.smd))
+                    for seq in model.sequences
+                    if seq.smd is not None and seq.name in model.anims
+                }
                 canonical = {
                     "renamed": result.renamed,
                     "reparented": result.reparented,
@@ -277,6 +298,7 @@ class MergeViewCommand(Command):
                             pack=args.pack_textures,
                             no_pack=args.no_pack_texture,
                         ),
+                        sound_path=args.sound_path,
                     )
                 except MergeError as exc:
                     print(f"error: merge failed ({part_name}): {exc}")
@@ -296,9 +318,76 @@ class MergeViewCommand(Command):
                     }
                 if report.atlas:
                     aggregate[f"textures_{part_name}"] = dict(report.atlas)
+                if not args.no_verify:
+                    bone_maps: dict[str, dict[str, str]] = {}
+                    for model, _parts in part_pairs:
+                        renames = hand_renames.get(model.name, {})
+                        assignment = (part_plan.assignments.get(model.name, {})
+                                      if part_plan is not None else {})
+                        bone_maps[model.name] = {
+                            orig: assignment.get(renames.get(orig, orig),
+                                                 renames.get(orig, orig))
+                            for orig in all_bones[model.name]
+                        }
+                    manifest_anim = {
+                        model.name: {
+                            key[5:]: int(value)
+                            for key, value in report.manifest[model.name].items()
+                            if key.startswith("anim_")
+                        }
+                        for model, _parts in part_pairs
+                    }
+                    gate = verify_part(
+                        part_out, f"{part_name}.qc", args.models_dir,
+                        [m.name for m, _ in part_pairs], bone_maps,
+                        manifest_anim, args.reference, original_anims,
+                    )
+                    for row in gate:
+                        mark = "PASS" if row.passed else "FAIL"
+                        print(f"    verify {row.check:<20} {mark}  {row.detail}")
+                    if not all(row.passed for row in gate):
+                        failures.append(f"{part_name}: verification gate failed")
             if multi:
                 write_manifest_data(args.out, aggregate, args.manifest_format)
         return EXIT_FAIL if failures else EXIT_OK
+
+
+_CONFIG_DEFAULTS: dict[str, object] = {
+    "name": "v_merged",
+    "exclude": [],
+    "reference": Path(DEFAULT_REFERENCE),
+    "skip_unmatched": False,
+    "prune": False,
+    "no_pool_bones": False,
+    "manifest_format": "ini",
+    "texture_budget": TEXTURE_BUDGET,
+    "sequence_budget": SEQUENCE_BUDGET,
+    "max_texture_size": None,
+    "pack_textures": False,
+    "no_pack_texture": [],
+    "no_verify": False,
+    "sound_path": None,
+}
+
+
+def _apply_config(args: argparse.Namespace) -> None:
+    """Fill flags from a TOML config; explicit CLI values keep priority.
+
+    A value is taken from the config only when the parsed argument still
+    holds its default (so ``--flag`` on the command line always wins).
+    """
+    import tomllib
+
+    with open(args.config, "rb") as handle:
+        config = tomllib.load(handle)
+    for key, value in config.items():
+        attr = key.replace("-", "_")
+        if attr not in _CONFIG_DEFAULTS:
+            raise SystemExit(f"error: unknown config key {key!r}")
+        if getattr(args, attr) == _CONFIG_DEFAULTS[attr]:
+            if attr == "reference":
+                value = Path(str(value))
+            setattr(args, attr, value)
 
 
 __all__ = ["MergeViewCommand"]

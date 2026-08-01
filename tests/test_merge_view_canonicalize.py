@@ -21,7 +21,7 @@ def test_anaconda_canonicalises_exactly(tmp_path: Path) -> None:
     import shutil
 
     work = tmp_path / "v_anaconda"
-    shutil.copytree("tmp/anaconda", work)
+    shutil.copytree("tests/examples/v_anaconda", work)
     model = load_model(work)
     reference = load_reference_rig(_REFERENCE)
     fullest = max(model.meshes.values(), key=lambda m: len(m.nodes))
