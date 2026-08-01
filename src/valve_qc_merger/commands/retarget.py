@@ -17,6 +17,7 @@ from valve_qc_merger.resources import resource_path
 from valve_qc_merger.retarget.config import RetargetConfig
 from valve_qc_merger.retarget.driver import (
     DriverError,
+    Inputs,
     SequenceResult,
     assert_identical_node_tables,
     assert_variant_skeletons,
@@ -79,6 +80,7 @@ class RetargetCommand(Command):
         except DriverError as exc:
             print(f"error: {exc}")
             return EXIT_DISCOVERY  # bad/missing inputs
+        _print_hand_scale(inputs, config)
         try:
             assert_identical_node_tables(inputs)  # §5 gate
             assert_variant_skeletons(inputs)  # hand variants share the reference rig
@@ -185,6 +187,50 @@ def _write_summary(
             "warnings": verify.warnings,
         }
     (out_dir / "report.json").write_text(json.dumps(summary, indent=2))
+
+
+def _print_hand_scale(inputs: Inputs, config: RetargetConfig) -> None:
+    """Diagnostic: source hand size vs the reference, before anything runs.
+
+    Separates the two coverage-failure classes up front: a ratio near 1.0
+    means any grip problem is pose/rig, NOT size (no offset will fix it); a
+    real mismatch prints the surplus and the auto compensation the worker
+    will apply (still overridable via ``hand_offset`` in the config). Never
+    blocks the run — measurement failures just report themselves.
+    """
+    try:
+        from valve_qc_merger.merge_view.hands import load_reference_rig
+        from valve_qc_merger.parsers.smd import parse_smd_file
+        from valve_qc_merger.retarget.handscale import measure_hand_scale
+
+        hands_smd = parse_smd_file(inputs.original_hands)
+        # Restrict arm discovery to vertex-weighted bones — the same weights
+        # signal the pipeline uses; helper stubs under a wrist would
+        # otherwise read as a sixth finger (anaconda).
+        name_of = {n.index: n.name for n in hands_smd.nodes}
+        weighted = {name_of[v.bone]
+                    for t in hands_smd.triangles for v in t.vertices}
+        scale = measure_hand_scale(
+            hands_smd,
+            load_reference_rig(inputs.reference),
+            parse_smd_file(inputs.reference),
+            include=weighted or None,
+        )
+        if not scale.chains:
+            print("  hand scale: no complete finger chains matched")
+            return
+        if abs(scale.ratio - 1.0) < 0.01:
+            print(f"  hand scale: {scale.ratio:.3f}x vs reference — hands "
+                  "match; grip issues here are pose/rig, not size")
+            return
+        shift = scale.surplus * config.hand_center_fraction
+        override = (" (config hand_offset overrides this)"
+                    if config.hand_offset is not None else "")
+        print(f"  hand scale: {scale.ratio:.3f}x vs reference (chain surplus "
+              f"{scale.surplus:+.2f}u over {scale.chains} chains); auto hand "
+              f"offset shifts ~{shift:.2f}u along the palm axis{override}")
+    except Exception as exc:  # noqa: BLE001 - diagnostic only
+        print(f"  hand scale: unmeasured ({exc})")
 
 
 def _exit_code(results: list[SequenceResult]) -> int:

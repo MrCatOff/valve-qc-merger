@@ -100,10 +100,16 @@ bodygroups and merges the reference hands with the weapon into a single SMD).
    helper/bullet stubs under the wrist) are handled.
 4. **Hand placement** — each wrist anchors at its source wrist, shifted back
    along the source grip's palm-forward axis by `hand_center_fraction` (default
-   0.5) of the measured hand-length difference: the two hands' centres align,
-   so the size surplus splits evenly behind and ahead of the grip. The derived
-   vector is recorded in the report (`hand_offset_auto`); an explicit
-   `hand_offset` overrides it.
+   1.0 = fingertip alignment) of the measured hand-length difference. The
+   default is calibrated against a ground-truth pair in the corpus:
+   `v_g_deagle` is the author-converted version of `v_deagle`'s weapon (same
+   gun, correct hands), and fingertip alignment reproduces its authored
+   weapon-to-wrist placement to 0.001u along the palm axis (0.5 — centre
+   alignment — recovered only half the shift). The command prints the measured
+   hand scale and the offset it will apply before any sequence runs; the
+   derived vector is recorded in the report (`hand_offset_auto`); an explicit
+   `hand_offset` overrides it, and `hand_center_fraction = 0.5` restores the
+   old centring behaviour.
 5. **Pose transfer** — rotation retargeting through per-arm anatomical frames;
    fingers copy the original grip by direction transfer (each joint's segment
    is aimed exactly where the source finger's segment points — no IK, nothing

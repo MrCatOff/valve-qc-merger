@@ -58,7 +58,9 @@ swap_arms = false
 #   0.5 = centres of the two hands aligned (default; the surplus splits evenly
 #         behind and ahead of the grip)
 #   1.0 = fingertip-aligned
-hand_center_fraction = 0.5
+# 1.0 aligns fingertips (calibrated on the v_deagle/v_g_deagle pair);
+# 0.5 centres the hands, 0.0 anchors wrists plainly.
+hand_center_fraction = 1.0
 
 # Explicit constant world translation for the hands; bypasses the automatic
 # half-length rule entirely. The derived automatic vector is recorded per run

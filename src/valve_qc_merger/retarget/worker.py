@@ -489,7 +489,7 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
     if hand_offset is None:
         hand_offset = _auto_hand_offset(
             by_wrist, thumb_of, mapping, tgt_rest, src_rest,
-            fraction=float(cfg.get("hand_center_fraction", 0.5)),
+            fraction=float(cfg.get("hand_center_fraction", 1.0)),
         )
         auto_offset = hand_offset
 

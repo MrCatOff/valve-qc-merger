@@ -89,10 +89,14 @@ class RetargetConfig:
     # None => automatic: shift back along the source rest grip's palm-forward axis
     # by hand_center_fraction of the hand-length difference (ours - original's).
     hand_offset: tuple[float, float, float] | None = None
-    # Fraction of the hand-length surplus the auto offset shifts back by. 0.5
-    # centres the two hands (the surplus splits evenly behind and ahead of the
-    # grip); 0.0 reproduces plain wrist anchoring, 1.0 aligns the fingertips.
-    hand_center_fraction: float = 0.5
+    # Fraction of the hand-length surplus the auto offset shifts back by.
+    # 0.0 reproduces plain wrist anchoring, 0.5 centres the two hands, 1.0
+    # aligns the FINGERTIPS. Default 1.0: calibrated against the
+    # v_deagle/v_g_deagle ground-truth pair (same weapon, old 0.854x hands vs
+    # author-converted hands) — fingertip alignment reproduces the authored
+    # weapon-to-wrist placement to 0.001u along the palm axis, where 0.5
+    # recovered only half the needed shift.
+    hand_center_fraction: float = 1.0
     # Reference hands SMD (immutable retarget target). The CLI --reference flag
     # overrides; otherwise this default applies.
     reference: str = DEFAULT_REFERENCE
