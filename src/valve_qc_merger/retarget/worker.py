@@ -851,11 +851,17 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
         # for timeline scrubbing — after export this is the unified skeleton
         # with the keyed animation, hand variants and weapon mesh.
         if do_export:
-            # BST's exporter leaves an orphan duplicate armature behind when
-            # debug_value=2 disables its undo cleanup; drop everything but the
-            # unified reference rig so the blend is tidy.
+            # BST's exporter leaves orphan duplicates behind when
+            # debug_value=2 disables its undo cleanup: extra armatures AND
+            # unparented mesh copies (weapon/hands ".001/.002") frozen at
+            # bind pose. Those stray meshes read as "the gun floating outside
+            # the hand" when the blend is opened — drop everything that is
+            # not the unified reference rig or a mesh parented to it.
             for ob in list(bpy.data.objects):
                 if ob.type == "ARMATURE" and ob is not scene.reference:
+                    bpy.data.objects.remove(ob, do_unlink=True)
+            for ob in list(bpy.data.objects):
+                if ob.type == "MESH" and ob.parent is not scene.reference:
                     bpy.data.objects.remove(ob, do_unlink=True)
         blend_path = os.path.splitext(job["report"])[0] + ".blend"
         bpy.context.scene.frame_set(bpy.context.scene.frame_start)
