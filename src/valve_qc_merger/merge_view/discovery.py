@@ -145,8 +145,13 @@ def _resolve_smd(model_dir: Path, stem: str) -> Path:
     return model_dir / relative
 
 
-def load_model(model_dir: Path) -> ModelInput:
-    """Parse one model's QC manifest and every SMD it references."""
+def load_model(model_dir: Path, *, require_anims: bool = True) -> ModelInput:
+    """Parse one model's QC manifest and every SMD it references.
+
+    ``require_anims=False`` tolerates QCs with no ``$sequence`` blocks at all
+    (some decompiled p_ models ship without one); view-model merging always
+    requires animations.
+    """
     qc_path = sorted(model_dir.glob("*.qc"))[0]
     qc_text = qc_path.read_text(encoding="latin-1")
     bodygroups = parse_bodygroups(qc_text)
@@ -177,7 +182,7 @@ def load_model(model_dir: Path) -> ModelInput:
 
     if not model.meshes:
         raise MergeViewError(f"model {model.name!r}: no mesh SMDs resolved from the QC")
-    if not model.anims:
+    if require_anims and not model.anims:
         raise MergeViewError(f"model {model.name!r}: no animation SMDs resolved from the QC")
     return model
 
