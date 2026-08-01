@@ -66,4 +66,4 @@ Thumbs.db
 # Project working files
 *.log
 /tmp/
-.idea/
+.idea/valve-qc-merger.spec

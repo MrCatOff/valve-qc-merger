@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
+from valve_qc_merger.resources import resource_path
 from valve_qc_merger.retarget.config import RetargetConfig
 from valve_qc_merger.retarget.driver import (
     DriverError,
@@ -66,7 +67,7 @@ class RetargetCommand(Command):
     def run(self, args: argparse.Namespace) -> int:
         try:
             config = _load_config(args)
-            reference = args.reference or Path(config.reference)
+            reference = resource_path(args.reference or Path(config.reference))
             if not reference.exists():
                 raise DriverError(f"reference hands SMD not found: {reference}")
             inputs = resolve_inputs(

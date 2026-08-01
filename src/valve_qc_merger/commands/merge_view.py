@@ -51,6 +51,7 @@ from valve_qc_merger.merge_view.parts import (
 )
 from valve_qc_merger.merge_view.verify import verify_part
 from valve_qc_merger.parsers.smd import parse_smd_file
+from valve_qc_merger.resources import resource_path
 from valve_qc_merger.retarget.config import DEFAULT_REFERENCE
 from valve_qc_merger.retarget.correspondence import CorrespondenceError
 from valve_qc_merger.writers.smd import write_smd_file
@@ -116,6 +117,7 @@ class MergeViewCommand(Command):
     def run(self, args: argparse.Namespace) -> int:
         if args.config is not None:
             _apply_config(args)
+        args.reference = resource_path(args.reference)
         try:
             model_dirs = discover_models(args.models_dir, exclude=set(args.exclude))
         except MergeViewError as exc:

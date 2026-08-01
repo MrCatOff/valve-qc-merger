@@ -11,7 +11,7 @@ the QC/SMD/hitbox features are being built on top.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+ (none at all if you use a standalone executable, see below)
 
 ## Installation
 
@@ -21,6 +21,26 @@ Development install (editable, with tooling) into a virtual environment:
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+```
+
+### Standalone executable (no Python needed)
+
+PyInstaller builds a single self-contained binary with the reference hands
+and the Blender worker bundled in. It must be built ON the target OS
+(PyInstaller does not cross-compile):
+
+```bash
+sh tools/build_exe.sh        # macOS / Linux  -> dist/valve-qc-merger
+tools\build_exe.bat          # Windows        -> dist\valve-qc-merger.exe
+```
+
+Or let CI build all three: the `build-exe` GitHub Actions workflow
+(`.github/workflows/build-exe.yml`) runs on manual dispatch and on `v*` tags
+and uploads `valve-qc-merger-windows` / `-macos` / `-linux` artifacts, each
+smoke-tested with a real merge. The exe runs from any directory:
+
+```bat
+valve-qc-merger.exe merge-player C:\work\player_pistols --out merged --name p_pistols
 ```
 
 ## Usage
