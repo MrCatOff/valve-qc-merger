@@ -42,6 +42,7 @@ from valve_qc_merger.merge_view.merger import (
     write_manifest_data,
 )
 from valve_qc_merger.merge_view.parts import (
+    SEQUENCE_BUDGET,
     TEXTURE_BUDGET,
     PartBudget,
     split_parts,
@@ -83,6 +84,9 @@ class MergeViewCommand(Command):
         parser.add_argument("--texture-budget", type=int, default=TEXTURE_BUDGET,
                             help="max textures per compiled part (default "
                                  f"{TEXTURE_BUDGET}; hard engine cap is 100)")
+        parser.add_argument("--sequence-budget", type=int, default=SEQUENCE_BUDGET,
+                            help="max sequences per compiled part after "
+                                 f"dedupe (default {SEQUENCE_BUDGET})")
         parser.add_argument("--dry-run", action="store_true",
                             help="discover, sanitise and load only; print the inventory")
 
@@ -197,7 +201,9 @@ class MergeViewCommand(Command):
                     for n in fullest.nodes
                 }
             part_split = split_parts(
-                merged_pairs, PartBudget(textures=args.texture_budget),
+                merged_pairs,
+                PartBudget(textures=args.texture_budget,
+                           sequences=args.sequence_budget),
                 model_bones=all_bones, shared=shared,
             )
 
@@ -258,9 +264,12 @@ class MergeViewCommand(Command):
                 except MergeError as exc:
                     print(f"error: merge failed ({part_name}): {exc}")
                     return EXIT_FAIL
+                shared_note = (f" ({report.sequences_deduped} shared)"
+                               if report.sequences_deduped else "")
                 print(f"  {part_name}: bones={report.bones} "
                       f"bodyparts={report.bodyparts} "
-                      f"sequences={report.sequences} textures={report.textures}")
+                      f"sequences={report.sequences}{shared_note} "
+                      f"textures={report.textures}")
                 for warning in report.warnings:
                     print(f"    warn: {warning}")
                 for model, _parts in part_pairs:

@@ -20,11 +20,13 @@ from dataclasses import dataclass
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.bonepool import plan_pool
 from valve_qc_merger.merge_view.discovery import ModelInput
+from valve_qc_merger.writers.smd import write_smd_text
 
 # Hard studiomdl array size; exceeding it is memory corruption, not an error.
 SUBMODEL_LIMIT = 32
 TEXTURE_BUDGET = 80
 BONE_BUDGET = 127
+SEQUENCE_BUDGET = 111
 
 Pair = tuple[ModelInput, ModelParts]
 
@@ -36,6 +38,7 @@ class PartBudget:
     submodels: int = SUBMODEL_LIMIT
     textures: int = TEXTURE_BUDGET
     bones: int = BONE_BUDGET
+    sequences: int = SEQUENCE_BUDGET
 
 
 def _texture_keys(model: ModelInput, parts: ModelParts) -> set[tuple[str, str]]:
@@ -56,10 +59,29 @@ def _texture_keys(model: ModelInput, parts: ModelParts) -> set[tuple[str, str]]:
     return keys
 
 
+def _sequence_keys(model: ModelInput) -> list[tuple[str, float | None, tuple[str, ...]]]:
+    """Dedupe identity of each sequence: (anim bytes, fps, events).
+
+    Matches the merge-time dedupe: recolour variants of one weapon carry
+    byte-identical animations, so within a part they compile to ONE
+    $sequence that every variant's manifest entries point at.
+    """
+    keys = []
+    for seq_name, anim in model.anims.items():
+        meta = next((s for s in model.sequences if s.name == seq_name), None)
+        keys.append((
+            hashlib.md5(write_smd_text(anim).encode("latin-1")).hexdigest(),
+            meta.fps if meta is not None else None,
+            meta.events if meta is not None else (),
+        ))
+    return keys
+
+
 def _part_counts(
     part: list[Pair],
     textures: dict[str, set[tuple[str, str]]],
-) -> tuple[int, int]:
+    seq_keys: dict[str, list[tuple[str, float | None, tuple[str, ...]]]],
+) -> tuple[int, int, int]:
     """(submodels, textures) a part would compile to.
 
     Hands are one submodel per model (kept per-model so every hands SMD pairs
@@ -73,9 +95,11 @@ def _part_counts(
     hands = len(part) if any_hands else 0
     submodels = sum(groups) + blanks + hands
     materials: set[tuple[str, str]] = set()
+    sequences: set[tuple[str, float | None, tuple[str, ...]]] = set()
     for model, _ in part:
         materials |= textures[model.name]
-    return submodels, len(materials)
+        sequences.update(seq_keys[model.name])
+    return submodels, len(materials), len(sequences)
 
 
 def split_parts(
@@ -99,8 +123,10 @@ def split_parts(
     if budget is None:
         budget = PartBudget()
     textures: dict[str, set[tuple[str, str]]] = {}
+    seq_keys: dict[str, list[tuple[str, float | None, tuple[str, ...]]]] = {}
     for model, parts in pairs:
         textures[model.name] = _texture_keys(model, parts)
+        seq_keys[model.name] = _sequence_keys(model)
 
     def bones_fit(part: list[Pair]) -> bool:
         if model_bones is None or shared is None:
@@ -115,9 +141,10 @@ def split_parts(
     current: list[Pair] = []
     for pair in pairs:
         trial = current + [pair]
-        submodels, texcount = _part_counts(trial, textures)
+        submodels, texcount, seqcount = _part_counts(trial, textures, seq_keys)
         if current and (submodels > budget.submodels
                         or texcount > budget.textures
+                        or seqcount > budget.sequences
                         or not bones_fit(trial)):
             out.append(current)
             current = [pair]
@@ -128,4 +155,5 @@ def split_parts(
     return out
 
 
-__all__ = ["PartBudget", "SUBMODEL_LIMIT", "TEXTURE_BUDGET", "split_parts"]
+__all__ = ["PartBudget", "SEQUENCE_BUDGET", "SUBMODEL_LIMIT",
+           "TEXTURE_BUDGET", "split_parts"]

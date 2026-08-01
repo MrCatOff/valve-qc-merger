@@ -11,6 +11,7 @@ manifest (ini/json/toml) with ``pev_body`` and merged sequence indices.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import shlex
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from valve_qc_merger.merge_view.skeleton_ops import (
 )
 from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.models.smd import Smd, Triangle
+from valve_qc_merger.retarget.qc_build import QcSequence
 from valve_qc_merger.transform import matrix_to_euler
 from valve_qc_merger.writers.smd import write_smd_text
 
@@ -47,6 +49,7 @@ class MergeReport:
     bones: int = 0
     bodyparts: int = 0
     sequences: int = 0
+    sequences_deduped: int = 0
     textures: int = 0
     pev_body: dict[str, int] = field(default_factory=dict)
     manifest: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -304,16 +307,41 @@ def merge_models(
             hands_paths[model.name] = f"{model.name}\\hands"
             written[model.name].append(hands)
 
-    # --- animations -------------------------------------------------------
+    # --- animations (deduped within the part) -----------------------------
+    # Recolour variants of one weapon ship byte-identical animations (and a
+    # model's shoot1/shoot2 are often the same file); each unique
+    # (content, fps, events) triple becomes ONE $sequence owned by its first
+    # model, and every duplicate's manifest entry points at that index.
     seq_names = _unique_sequence_names(models)
-    sequence_order: list[tuple[str, str, str]] = []  # (model, final name, path)
+    # (owner model, final name, qc path, sequence meta)
+    sequence_order: list[tuple[str, str, str, QcSequence | None]] = []
+    manifest_anim: dict[str, dict[str, int]] = {m.name: {} for m in models}
+    seen_sequences: dict[tuple[str, float | None, tuple[str, ...]], int] = {}
     for model in models:
         for seq_name, anim in model.anims.items():
-            final = seq_names[(model.name, seq_name)]
-            (out_dir / model.name / f"{final}.smd").write_text(
-                write_smd_text(anim), encoding="latin-1"
+            meta = next(
+                (s for s in model.sequences if s.name == seq_name), None
             )
-            sequence_order.append((model.name, final, f"{model.name}\\{final}"))
+            text = write_smd_text(anim)
+            key = (
+                hashlib.md5(text.encode("latin-1")).hexdigest(),
+                meta.fps if meta is not None else None,
+                meta.events if meta is not None else (),
+            )
+            seq_index = seen_sequences.get(key)
+            if seq_index is None:
+                final = seq_names[(model.name, seq_name)]
+                (out_dir / model.name / f"{final}.smd").write_text(
+                    text, encoding="latin-1"
+                )
+                seq_index = len(sequence_order)
+                sequence_order.append(
+                    (model.name, final, f"{model.name}\\{final}", meta)
+                )
+                seen_sequences[key] = seq_index
+            else:
+                report.sequences_deduped += 1
+            manifest_anim[model.name][seq_name] = seq_index
     report.sequences = len(sequence_order)
 
     # --- bodygroups + pev_body -------------------------------------------
@@ -441,14 +469,7 @@ def merge_models(
                 lines.append(stripped)
     lines.append("")
 
-    manifest_anim: dict[str, dict[str, int]] = {m.name: {} for m in models}
-    for index, (model_name, final, smd_path) in enumerate(sequence_order):
-        model = next(m for m in models if m.name == model_name)
-        original = next(
-            orig for (mname, orig), fin in seq_names.items()
-            if mname == model_name and fin == final
-        )
-        seq_meta = next((s for s in model.sequences if s.name == original), None)
+    for _model_name, final, smd_path, seq_meta in sequence_order:
         lines.append(f'$sequence "{final}" {{')
         lines.append(f'\t"{smd_path}"')
         if seq_meta is not None:
@@ -458,7 +479,6 @@ def merge_models(
                 fps = int(seq_meta.fps) if seq_meta.fps == int(seq_meta.fps) else seq_meta.fps
                 lines.append(f"\tfps {fps}")
         lines.append("}")
-        manifest_anim[model_name][original] = index
     (out_dir / f"{name}.qc").write_text("\n".join(lines) + "\n", encoding="latin-1")
 
     report.manifest = {
