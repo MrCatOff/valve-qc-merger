@@ -1,8 +1,8 @@
 """Configuration for the retargeting pipeline.
 
-Every knob in ``TECHNICAL_SPECIFICATIONS_V2.md`` lives here, including the §11
-author decisions (recorded explicitly so they are reversible rather than
-assumed). The config is a plain dataclass with no ``bpy`` dependency: the driver
+Every pipeline knob lives here, with author decisions recorded explicitly
+so they are reversible rather than assumed. The config is a plain dataclass
+with no ``bpy`` dependency: the driver
 loads it, then serialises the resolved values into each worker job so the
 in-Blender worker never imports this module.
 

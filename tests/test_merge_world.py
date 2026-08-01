@@ -53,7 +53,9 @@ def test_full_merge_single_part(tmp_path: Path) -> None:
     for position, fixture in enumerate(fixtures, 1):
         assert f"[{fixture}]" in manifest
         assert f"pev_body = {position}" in manifest
+    # Luger's skin rows are spelled out so a plugin can switch them by index.
     assert "skins = 3" in manifest
+    assert "skin_0 = " in manifest and "skin_2 = " in manifest
 
     # Two bones total, identity transforms, every vertex on 'weapon'.
     for fixture in fixtures:

@@ -22,7 +22,7 @@ python -m valve_qc_merger merge-player tmp/player_pistols \
 ```
 out/
   models.ini            one section per weapon: which part .mdl, pev_body,
-                        and skins = N for weapons with $texturegroup rows
+                        skins = N and skin_<i> = <texture> rows for skin variants
   inventory.json        per-model analysis record (weapon bones, collapses)
   p1/ ... pN/           one directory per compiled part:
     p_<name>_pN.qc      compile-ready QC (weapons bodygroup, $texrendermode,
@@ -64,7 +64,7 @@ idle animation.
 - `$texturegroup` skin rows (CSO +6/+8 upgrade skins, mask variants) are
   merged column-wise into one `skinfamilies` block; models with fewer rows
   repeat their last row. Only one weapon is visible at a time, so a global
-  skin row is safe. `models.ini` records `skins = N` for those weapons.
+  skin row is safe. `models.ini` records `skins = N` plus one `skin_<i> = <texture>` line per row for those weapons, so a plugin can identify each variant and select it with `pev_skin = i`.
 - `$texrendermode` entries are carried per staged texture, as in merge-view.
 - Per-weapon `$attachment` entries are **dropped** (with a warning): GoldSrc
   caps a model at 4 attachments, so 30 per-weapon muzzle-flash points cannot

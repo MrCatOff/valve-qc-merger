@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,7 +60,7 @@ class MergeReport:
     textures: int = 0
     pev_body: dict[str, int] = field(default_factory=dict)
     atlas: dict[str, str] = field(default_factory=dict)
-    manifest: dict[str, dict[str, int]] = field(default_factory=dict)
+    manifest: dict[str, dict[str, int | str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -599,7 +600,7 @@ def merge_models(
 
 
 def write_manifest_data(
-    out_dir: Path, data: dict[str, dict[str, object]] | dict[str, dict[str, int]],
+    out_dir: Path, data: Mapping[str, Mapping[str, object]],
     manifest_format: str,
 ) -> None:
     """Write the models manifest in the chosen format."""

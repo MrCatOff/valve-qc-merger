@@ -22,7 +22,7 @@ python -m valve_qc_merger merge-world tmp/pistols_world \
 ```
 out/
   models.ini            one section per weapon: which part .mdl, pev_body,
-                        and skins = N for weapons with $texturegroup rows
+                        skins = N and skin_<i> = <texture> rows for skin variants
   inventory.json        per-model record (bake distance, warnings)
   p1/ ... pN/           one directory per compiled part:
     w_<name>_pN.qc      compile-ready QC (weapons bodygroup, $texrendermode,
@@ -51,7 +51,7 @@ is rebound to `weapon`.
 ## Skins, render modes, hitboxes
 
 - `$texturegroup` skin rows merge column-wise into one `skinfamilies` block
-  (only one weapon renders at a time); `models.ini` records `skins = N`.
+  (only one weapon renders at a time); `models.ini` records `skins = N` plus one `skin_<i> = <texture>` line per row, so a plugin can identify each variant and select it with `pev_skin = i`.
 - `$texrendermode` entries are carried per staged texture.
 - Original per-model `$hbox` lines are **not** carried: their bones no longer
   exist. The auto-generated box on `weapon` is the union of the part's

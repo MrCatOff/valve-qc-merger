@@ -1,6 +1,6 @@
 """Blender-driven weapon-animation retargeting pipeline.
 
-Implements the pipeline in ``TECHNICAL_SPECIFICATIONS_V2.md``: a non-``bpy``
+See ``docs/retarget.md``. The pipeline: a non-``bpy``
 driver (:mod:`valve_qc_merger.retarget.driver`) spawns one headless Blender
 worker (:mod:`valve_qc_merger.retarget.worker`, run *inside* Blender) per
 animation sequence, then verifies the emitted SMDs at the text level

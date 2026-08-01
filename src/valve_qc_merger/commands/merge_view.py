@@ -1,4 +1,4 @@
-"""CLI wiring for merge-view (docs/merge-view-spec.md).
+"""CLI wiring for merge-view (docs/merge-view.md).
 
 Milestone 1: discovery + sanitisation + loading with a ``--dry-run`` inventory.
 Later milestones add hand canonicalisation, pooling, merging and textures; the

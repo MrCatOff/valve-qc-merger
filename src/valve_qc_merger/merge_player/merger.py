@@ -74,16 +74,19 @@ def _stage_skin_variants(
     staged_renames: dict[str, dict[str, str]],
     staged_names: list[str],
     report: MergeReport,
-) -> tuple[list[list[str]], list[str]]:
+) -> tuple[list[list[str]], list[str], dict[str, list[list[str]]]]:
     """Stage skin-row textures and build merged ``$texturegroup`` columns.
 
-    Returns ``(columns, variant_names)``: each column is the staged file names
-    of one original column, row 0 first; ``variant_names`` are the extra files
-    staged here (rows past 0).
+    Returns ``(columns, variant_names, model_columns)``: each column is the
+    staged file names of one original column, row 0 first; ``variant_names``
+    are the extra files staged here (rows past 0); ``model_columns`` maps a
+    model name to ITS columns, so the manifest can spell out which texture
+    each pev_skin row shows for that weapon.
     """
     on_disk = {name.lower(): name for name in staged_names}
     columns: list[list[str]] = []
     variants: list[str] = []
+    model_columns: dict[str, list[list[str]]] = {}
     for model in models:
         rows = parse_texturegroups(model.qc_text)
         if len(rows) < 2:
@@ -125,7 +128,8 @@ def _stage_skin_variants(
                 merged_column.append(final)
             else:
                 columns.append(merged_column)
-    return columns, variants
+                model_columns.setdefault(model.name, []).append(merged_column)
+    return columns, variants, model_columns
 
 
 def merge_player_models(
@@ -170,7 +174,7 @@ def merge_player_models(
     render_modes = _collect_render_modes(
         models, kept, staged_renames, staged_names, report,
     )
-    skin_columns, variant_names = _stage_skin_variants(
+    skin_columns, variant_names, model_columns = _stage_skin_variants(
         out_dir, models, staged_renames, staged_names, report,
     )
     all_staged = staged_names + variant_names
@@ -318,9 +322,16 @@ def merge_player_models(
     skin_rows = max((len(c) for c in skin_columns), default=1)
     for position, (model, _plan) in enumerate(pairs):
         report.pev_body[model.name] = position + 1
-        entry: dict[str, int] = {"pev_body": position + 1}
-        if len(parse_texturegroups(model.qc_text)) > 1:
+        entry: dict[str, int | str] = {"pev_body": position + 1}
+        own_columns = model_columns.get(model.name)
+        if own_columns:
+            # Spell out what each pev_skin row shows for THIS weapon, so an
+            # amxx plugin can identify and switch skin variants by index.
             entry["skins"] = skin_rows
+            for row in range(skin_rows):
+                entry[f"skin_{row}"] = ",".join(
+                    column[min(row, len(column) - 1)] for column in own_columns
+                )
         report.manifest[model.name] = entry
     if write_manifest:
         write_manifest_data(

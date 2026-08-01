@@ -101,7 +101,11 @@ def test_full_merge_single_part(tmp_path: Path) -> None:
     for position, fixture in enumerate(fixtures, 1):
         assert f"[{fixture}]" in manifest
         assert f"pev_body = {position}" in manifest
-    assert "skins = 3" in manifest  # luger
+    # Luger's skin rows are spelled out so a plugin can switch them by index.
+    assert "skins = 3" in manifest
+    assert "skin_0 = #256256Luger_P_08_Old_p.bmp" in manifest
+    assert "skin_1 = #256256Luger_p_6.bmp" in manifest
+    assert "skin_2 = #256256Luger_p_8.bmp" in manifest
 
     # All emitted SMDs share one table; weapon bones are model-named.
     idle = parse_smd_file(out / "animations" / "idle.smd")

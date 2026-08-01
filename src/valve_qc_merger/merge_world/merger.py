@@ -16,7 +16,6 @@ from pathlib import Path
 
 from valve_qc_merger.merge_player.merger import (
     _stage_skin_variants,
-    parse_texturegroups,
 )
 from valve_qc_merger.merge_view.atlas import (
     TextureOptions,
@@ -104,7 +103,7 @@ def merge_world_models(
     render_modes = _collect_render_modes(
         models, kept, staged_renames, staged_names, report,
     )
-    skin_columns, variant_names = _stage_skin_variants(
+    skin_columns, variant_names, model_columns = _stage_skin_variants(
         out_dir, models, staged_renames, staged_names, report,
     )
     all_staged = staged_names + variant_names
@@ -227,9 +226,16 @@ def merge_world_models(
     skin_rows = max((len(c) for c in skin_columns), default=1)
     for position, model in enumerate(models):
         report.pev_body[model.name] = position + 1
-        entry: dict[str, int] = {"pev_body": position + 1}
-        if len(parse_texturegroups(model.qc_text)) > 1:
+        entry: dict[str, int | str] = {"pev_body": position + 1}
+        own_columns = model_columns.get(model.name)
+        if own_columns:
+            # Spell out what each pev_skin row shows for THIS weapon, so an
+            # amxx plugin can identify and switch skin variants by index.
             entry["skins"] = skin_rows
+            for row in range(skin_rows):
+                entry[f"skin_{row}"] = ",".join(
+                    column[min(row, len(column) - 1)] for column in own_columns
+                )
         report.manifest[model.name] = entry
     if write_manifest:
         write_manifest_data(
