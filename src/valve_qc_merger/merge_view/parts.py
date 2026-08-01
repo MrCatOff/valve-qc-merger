@@ -88,9 +88,10 @@ def split_parts(
     """Greedily pack models into parts that fit the budget.
 
     When ``model_bones``/``shared`` are given, a part must also fit the bone
-    budget under REPARENT-FREE pooling — reparents defeat studiomdl's
-    constant-channel compression and can push a sequence past its hard 64K
-    anim-stream cap, so parts are sized to never need them.
+    budget under structure-matched pooling (prior-art rules: the pool stays
+    near the largest single model's weapon-bone count, so a dozen weapons
+    share ~90 slots). The CLI previews each part's pooled sequence sizes and
+    falls back to reparent-free pooling if the 64K cap would be hit.
 
     A single model that alone exceeds the budget still gets its own part —
     the merger warns about the overrun rather than dropping the model.
@@ -105,8 +106,8 @@ def split_parts(
         if model_bones is None or shared is None:
             return True
         plan = plan_pool(
-            {m.name: model_bones[m.name] for m, _ in part},
-            shared, allow_reparent=False,
+            {m.name: model_bones[m.name] for m, _ in part}, shared,
+            max_slots=budget.bones - len(shared),
         )
         return len(shared) + plan.size <= budget.bones
 

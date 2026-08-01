@@ -265,6 +265,28 @@ def conform_to_table(
         ]
         present.add(name)
 
+    # Enforce the table's parentage EXACTLY (per-frame re-solve) before the
+    # reorder below stamps it structurally: pooling may hand a model a slot
+    # whose canonical parent the model never carried (prior-art rule; the
+    # parent was just grafted above). Rooting first breaks any transient
+    # cycle; both moves preserve every world transform.
+    current_parent = {
+        n.name: next((p.name for p in smd.nodes if p.index == n.parent), None)
+        for n in smd.nodes
+    }
+    for name, parent in table:
+        if current_parent.get(name) == parent:
+            continue
+        try:
+            reparent_bone(smd, name, parent)
+        except ValueError:
+            reparent_bone(smd, name, None)
+            reparent_bone(smd, name, parent)
+        current_parent = {
+            n.name: next((p.name for p in smd.nodes if p.index == n.parent), None)
+            for n in smd.nodes
+        }
+
     # Reorder to the exact global table.
     order = [name for name, _ in table]
     position = {name: i for i, name in enumerate(order)}

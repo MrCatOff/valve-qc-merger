@@ -13,8 +13,14 @@ import json
 from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
+from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT
 from valve_qc_merger.merge_view.bodygroups import ModelParts, collapse_bodygroups
-from valve_qc_merger.merge_view.bonepool import apply_pool, plan_pool
+from valve_qc_merger.merge_view.bonepool import (
+    PoolPlan,
+    apply_pool,
+    plan_pool,
+    preview_pool_sizes,
+)
 from valve_qc_merger.merge_view.canonicalize import canonicalize_model
 from valve_qc_merger.merge_view.discovery import (
     MergeViewError,
@@ -194,35 +200,55 @@ class MergeViewCommand(Command):
                 merged_pairs, PartBudget(textures=args.texture_budget),
                 model_bones=all_bones, shared=shared,
             )
-            multi = len(part_split) > 1
+
+            # Resolve each part's pooling BEFORE writing anything: prefer
+            # structure-matched pooling (prior-art; ~90 slots for a dozen
+            # weapons), but preview the pooled sequence sizes with the exact
+            # studiomdl replica — if a reparent would blow the 64K cap, fall
+            # back to reparent-free pooling, halving the part if that then
+            # exceeds the bone budget.
+            resolved: list[tuple[list[tuple[ModelInput, ModelParts]],
+                                 PoolPlan | None, str]] = []
+            queue = list(part_split)
+            while queue:
+                part_pairs = queue.pop(0)
+                if args.no_pool_bones:
+                    resolved.append((part_pairs, None, "unpooled"))
+                    continue
+                model_bones = {
+                    model.name: all_bones[model.name]
+                    for model, _parts in part_pairs
+                }
+                plan = plan_pool(model_bones, shared,
+                                 max_slots=BONE_LIMIT - len(shared))
+                sizes = preview_pool_sizes(part_pairs, plan)
+                if max(sizes.values(), default=0) <= SEQ_DATA_LIMIT:
+                    resolved.append((part_pairs, plan, "pooled"))
+                    continue
+                plan = plan_pool(model_bones, shared, allow_reparent=False)
+                if len(shared) + plan.size <= BONE_LIMIT or len(part_pairs) == 1:
+                    resolved.append((part_pairs, plan, "rename-only"))
+                    continue
+                mid = len(part_pairs) // 2
+                queue = [part_pairs[:mid], part_pairs[mid:]] + queue
+
+            multi = len(resolved) > 1
             if multi:
-                print(f"  split: {len(part_split)} parts "
+                print(f"  split: {len(resolved)} parts "
                       f"(studiomdl caps one model at 32 submodels)")
             aggregate: dict[str, dict[str, object]] = {}
-            for number, part_pairs in enumerate(part_split, start=1):
+            for number, (part_pairs, part_plan, mode) in enumerate(resolved, 1):
                 part_name = f"{args.name}_p{number}" if multi else args.name
                 part_out = args.out / f"p{number}" if multi else args.out
-                if not args.no_pool_bones:
-                    model_bones = {
-                        model.name: all_bones[model.name]
-                        for model, _parts in part_pairs
-                    }
-                    # Reparent-free first: reparented bones defeat studiomdl's
-                    # constant-channel compression and can blow the 64K-per-
-                    # sequence cap. Parts are split to fit this mode; the
-                    # fallback only fires for a lone oversized model.
-                    plan = plan_pool(model_bones, shared, allow_reparent=False)
-                    mode = "rename-only"
-                    if len(shared) + plan.size > BONE_LIMIT:
-                        plan = plan_pool(model_bones, shared)
-                        mode = "with-reparents"
+                if part_plan is not None:
                     pooled = 0
                     for model, _parts in part_pairs:
                         pooled += len(apply_pool(
-                            model, plan.assignments[model.name], plan.slot_parent
+                            model, part_plan.assignments[model.name],
+                            part_plan.slot_parent,
                         ))
-                    print(f"  {part_name}: pool {plan.size} slots "
-                          f"({mode}), {pooled} reparents")
+                    print(f"  {part_name}: {len(part_pairs)} models, pool "
+                          f"{part_plan.size} slots ({mode}), {pooled} reparents")
                 try:
                     report = merge_models(
                         part_pairs, part_out, part_name,

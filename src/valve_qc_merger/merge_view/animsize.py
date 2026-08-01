@@ -56,30 +56,34 @@ def _wrap(v: float) -> float:
 def sequence_sizes(models: list[ModelInput]) -> dict[tuple[str, str], int]:
     """(model name, sequence name) -> compiled anim stream bytes.
 
-    Assumes every SMD was conformed to one identical node table and every
-    mesh carries the shared bind as its single skeleton frame (merge-view's
-    post-unify state) — exactly what studiomdl will see.
+    Matches names, not indices, so it works both before and after the SMDs
+    are conformed to one table. Bone defaults come from the first model's
+    mesh that carries each bone — exactly the first reference file studiomdl
+    reads. Bones a sequence lacks are grafted static at those defaults by
+    the merge, which compresses to zero bytes, so skipping them is exact.
     """
-    any_mesh = next(iter(models[0].meshes.values()))
-    nbones = len(any_mesh.nodes)
-    defaults: list[tuple[float, ...]] = [()] * nbones
-    for pose in any_mesh.frames[0].poses:
-        defaults[pose.bone] = (
-            pose.position.x, pose.position.y, pose.position.z,
-            pose.rotation.x, pose.rotation.y, pose.rotation.z,
-        )
+    defaults: dict[str, tuple[float, ...]] = {}
+    for model in models:
+        mesh = max(model.meshes.values(), key=lambda m: len(m.nodes))
+        names = {n.index: n.name for n in mesh.nodes}
+        for pose in mesh.frames[0].poses:
+            defaults.setdefault(names[pose.bone], (
+                pose.position.x, pose.position.y, pose.position.z,
+                pose.rotation.x, pose.rotation.y, pose.rotation.z,
+            ))
+    nbones = len(defaults)
+    zero = (0.0,) * 6
 
     # Pass 1: per bone-channel min/max delta over every sequence.
-    minv = [(-_POS_FLOOR if c < 3 else -_ROT_FLOOR)
-            for _b in range(nbones) for c in range(6)]
-    maxv = [(_POS_FLOOR if c < 3 else _ROT_FLOOR)
-            for _b in range(nbones) for c in range(6)]
+    minv: dict[tuple[str, int], float] = {}
+    maxv: dict[tuple[str, int], float] = {}
     for model in models:
         for anim in model.anims.values():
+            names = {n.index: n.name for n in anim.nodes}
             for frame in anim.frames:
                 for pose in frame.poses:
-                    dflt = defaults[pose.bone]
-                    base = pose.bone * 6
+                    name = names[pose.bone]
+                    dflt = defaults.get(name, zero)
                     for c, value in enumerate((
                         pose.position.x, pose.position.y, pose.position.z,
                         pose.rotation.x, pose.rotation.y, pose.rotation.z,
@@ -87,24 +91,36 @@ def sequence_sizes(models: list[ModelInput]) -> dict[tuple[str, str], int]:
                         v = value - dflt[c]
                         if c >= 3:
                             v = _wrap(v)
-                        if v < minv[base + c]:
-                            minv[base + c] = v
-                        elif v > maxv[base + c]:
-                            maxv[base + c] = v
-    scales = [
-        (minv[i] / -32768.0) if -minv[i] > maxv[i] else (maxv[i] / 32767.0)
-        for i in range(nbones * 6)
-    ]
+                        key = (name, c)
+                        floor = _POS_FLOOR if c < 3 else _ROT_FLOOR
+                        if v < minv.get(key, -floor):
+                            minv[key] = v
+                        elif v > maxv.get(key, floor):
+                            maxv[key] = v
+
+    scales: dict[tuple[str, int], float] = {}
+
+    def scale(name: str, c: int) -> float:
+        key = (name, c)
+        cached = scales.get(key)
+        if cached is None:
+            floor = _POS_FLOOR if c < 3 else _ROT_FLOOR
+            lo = minv.get(key, -floor)
+            hi = maxv.get(key, floor)
+            cached = lo / -32768.0 if -lo > hi else hi / 32767.0
+            scales[key] = cached
+        return cached
 
     # Pass 2: quantize each sequence's channels and sum RLE sizes.
     sizes: dict[tuple[str, str], int] = {}
     for model in models:
         for seq_name, anim in model.anims.items():
-            channels: list[list[int]] = [[] for _ in range(nbones * 6)]
+            names = {n.index: n.name for n in anim.nodes}
+            channels: dict[tuple[str, int], list[int]] = {}
             for frame in anim.frames:
                 for pose in frame.poses:
-                    dflt = defaults[pose.bone]
-                    base = pose.bone * 6
+                    name = names[pose.bone]
+                    dflt = defaults.get(name, zero)
                     for c, value in enumerate((
                         pose.position.x, pose.position.y, pose.position.z,
                         pose.rotation.x, pose.rotation.y, pose.rotation.z,
@@ -112,9 +128,11 @@ def sequence_sizes(models: list[ModelInput]) -> dict[tuple[str, str], int]:
                         v = value - dflt[c]
                         if c >= 3:
                             v = _wrap(v)
-                        channels[base + c].append(int(v / scales[base + c]))
+                        channels.setdefault((name, c), []).append(
+                            int(v / scale(name, c))
+                        )
             total = 12 * nbones
-            for values in channels:
+            for values in channels.values():
                 total += rle_bytes(values)
             sizes[(model.name, seq_name)] = total
     return sizes

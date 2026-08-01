@@ -53,27 +53,25 @@ class MergeReport:
     warnings: list[str] = field(default_factory=list)
 
 
-def _check_skeleton_consistency(models: list[ModelInput]) -> dict[str, str | None]:
-    """One global name -> parent-name table; conflicting parentage is fatal."""
+def merged_skeleton(models: list[ModelInput]) -> dict[str, str | None]:
+    """One global name -> parent-name table, first owner wins.
+
+    Pooling may hand a later model a slot whose canonical parent that model
+    never carried, so its SMDs still show the natural parent; the first
+    owner's (= the pool's) parentage is canonical and ``unify_skeletons``
+    re-solves every disagreeing SMD onto it exactly, per frame.
+    """
     merged: dict[str, str | None] = {}
-    owner: dict[str, str] = {}
     for model in models:
         fullest = max(model.meshes.values(), key=lambda m: len(m.nodes))
         name_of = {n.index: n.name for n in fullest.nodes}
         for node in fullest.nodes:
             parent = name_of.get(node.parent) if node.parent >= 0 else None
-            if node.name in merged and merged[node.name] != parent:
-                raise MergeError(
-                    f"bone {node.name!r} has parent {merged[node.name]!r} in "
-                    f"{owner[node.name]} but {parent!r} in {model.name}; "
-                    "pooling should have prevented this"
-                )
             merged.setdefault(node.name, parent)
-            owner.setdefault(node.name, model.name)
     return merged
 
 
-def _unify_skeletons(models: list[ModelInput], skeleton: dict[str, str | None]) -> None:
+def unify_skeletons(models: list[ModelInput], skeleton: dict[str, str | None]) -> None:
     """Graft the full merged skeleton into every SMD (prior-art _unify_skeleton).
 
     Every mesh and sequence SMD of every model ends up with the identical node
@@ -252,9 +250,9 @@ def merge_models(
     """Write the merged model directory; returns the budget report."""
     report = MergeReport()
     models = [model for model, _ in pairs]
-    skeleton = _check_skeleton_consistency(models)
+    skeleton = merged_skeleton(models)
     report.bones = len(skeleton)
-    _unify_skeletons(models, skeleton)
+    unify_skeletons(models, skeleton)
     _sequence_size_warnings(models, report)
     if report.bones > BONE_LIMIT:
         report.warnings.append(
