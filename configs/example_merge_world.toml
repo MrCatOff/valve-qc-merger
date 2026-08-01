@@ -1,0 +1,28 @@
+# Example config for `merge-world` — every supported key with its default.
+# Usage:
+#   python -m valve_qc_merger merge-world <models_dir> --out <dir> \
+#       --config configs/example_merge_world.toml
+# Explicit command-line flags always win over config values.
+# `models_dir` and `--out` stay on the command line.
+
+# Output model name stem: parts compile to <name>_p1.mdl, <name>_p2.mdl, ...
+name = "w_merged"
+
+# Model directories to skip.
+exclude = []
+
+# Manifest format: "ini", "json" or "toml".
+manifest_format = "ini"
+
+# Max textures per compiled part (hard engine cap is 100).
+texture_budget = 80
+
+# Texture stage. max_texture_size resamples anything larger on either axis;
+# pack_textures composites four 256x256 tiles into 512x512 atlases
+# (skin-family textures always stay standalone).
+# max_texture_size = 512
+pack_textures = false
+no_pack_texture = []   # globs, e.g. ["*hand*", "scope*.bmp"]
+
+# Skip the post-merge verification gate (not recommended).
+no_verify = false
