@@ -31,6 +31,7 @@ from valve_qc_merger.retarget.driver import DriverError, find_blender
 from valve_qc_merger.retarget.handscale import (
     GripMeasure,
     dominant_weapon_bone,
+    grip_components,
     grip_measure,
     measure_hand_scale,
 )
@@ -113,12 +114,31 @@ def test_retarget_reproduces_gold_placement(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "hand scale: 0.857x" in proc.stdout
 
+    # Gold ground truth, derived live from the fixture (all THREE palm-frame
+    # components — the 1-D along-palm check missed a lateral error that put
+    # the gun through the fingers in HLMV).
+    reference = load_reference_rig(_REFERENCE)
+    gold = load_model(_PAIR / "v_g_deagle", require_anims=False)
+    fullest = max(gold.meshes.values(), key=lambda m: len(m.nodes))
+    match = match_hands(fullest, reference,
+                        hand_bone_names(gold.meshes, gold.bodygroups))
+    to_src = {new: old for old, new in match.renames.items()}
+    gidle = gold.anims.get("idle1") or next(iter(gold.anims.values()))
+    gold_smd = next(s for stem, s in gold.meshes.items()
+                    if "Deagle_Gold" in stem)
+    want = grip_components(
+        gidle, to_src["Bip01 R Hand"], to_src["Bip01 R Finger1"],
+        to_src["Bip01 R Finger4"],
+        [to_src[f"Bip01 R Finger{i}"] for i in (1, 2, 3, 4)],
+        dominant_weapon_bone(gold_smd),
+    )
     out_idle = parse_smd_file(out / "anims" / "idle1.smd")
     weapon = parse_smd_file(out / "ref_deonly.smd")
-    got = grip_measure(
-        out_idle, "Bip01 R Hand",
+    got = grip_components(
+        out_idle, "Bip01 R Hand", "Bip01 R Finger1", "Bip01 R Finger4",
         [f"Bip01 R Finger{i}" for i in (1, 2, 3, 4)],
         dominant_weapon_bone(weapon),
     )
-    # Calibrated run measured +3.461 vs gold +3.462; allow solver drift.
-    assert abs(got.along_palm - _GOLD_ALONG_PALM) < 0.15
+    # Calibrated run matched gold to 0.001u on every axis; allow drift.
+    for got_c, want_c in zip(got, want, strict=True):
+        assert abs(got_c - want_c) < 0.15, (got, want)

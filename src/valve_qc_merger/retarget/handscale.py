@@ -153,10 +153,109 @@ def grip_measure(
     )
 
 
+# Ground-truth calibration from the v_deagle/v_g_deagle pair: how far the
+# authored conversion moved the GUN relative to the wrist, per unit of
+# hand-size surplus, in the orthonormal palm frame (palm-forward, across
+# knuckles index->pinky, palm normal). The old 1-D palm-forward-only offset
+# matched gold on that axis but left the gun laterally where the SMALL hand
+# held it — in HLMV the bigger reference hand's fingers pierced the grip.
+GUN_SHIFT_PER_SURPLUS = (1.880, -0.564, -0.370)
+
+
+def _v(a: Vector3, b: Vector3) -> Vector3:
+    return Vector3(b.x - a.x, b.y - a.y, b.z - a.z)
+
+
+def _dot(u: Vector3, w: Vector3) -> float:
+    return u.x * w.x + u.y * w.y + u.z * w.z
+
+
+def _norm(u: Vector3) -> Vector3:
+    m = _dot(u, u) ** 0.5
+    return Vector3(u.x / m, u.y / m, u.z / m)
+
+
+def _cross(u: Vector3, w: Vector3) -> Vector3:
+    return Vector3(u.y * w.z - u.z * w.y, u.z * w.x - u.x * w.z,
+                   u.x * w.y - u.y * w.x)
+
+
+def palm_frame(
+    worlds: dict[str, Vector3], wrist: str, index: str, pinky: str,
+    knuckles: list[str],
+) -> tuple[Vector3, Vector3, Vector3]:
+    """Orthonormal (palm-forward, across-knuckles, palm-normal) world basis."""
+    w = worlds[wrist]
+    cen = Vector3(
+        sum(worlds[k].x for k in knuckles) / len(knuckles),
+        sum(worlds[k].y for k in knuckles) / len(knuckles),
+        sum(worlds[k].z for k in knuckles) / len(knuckles),
+    )
+    a = _norm(_v(w, cen))
+    raw = _v(worlds[index], worlds[pinky])
+    k = _norm(Vector3(raw.x - _dot(raw, a) * a.x,
+                      raw.y - _dot(raw, a) * a.y,
+                      raw.z - _dot(raw, a) * a.z))
+    return a, k, _cross(a, k)
+
+
+def grip_components(
+    smd: Smd, wrist: str, index: str, pinky: str, knuckles: list[str],
+    weapon_bone: str,
+) -> tuple[float, float, float]:
+    """Signed weapon-from-wrist components in the orthonormal palm frame."""
+    worlds = _rest_worlds(smd)
+    a, k, n = palm_frame(worlds, wrist, index, pinky, knuckles)
+    d = _v(worlds[wrist], worlds[weapon_bone])
+    return _dot(d, a), _dot(d, k), _dot(d, n)
+
+
+def auto_hand_offset_world(
+    scale: HandScale, grip_anim: Smd,
+) -> Vector3 | None:
+    """The world-space hand offset compensating a hand-size mismatch.
+
+    Built on the SOURCE grip pose (frame 0 of an idle-like animation — the
+    weapon's authored grip, constant across sequences): the gun must move by
+    ``GUN_SHIFT_PER_SURPLUS x surplus`` in the palm frame, and since the
+    weapon stays exactly where the animation puts it, the HANDS shift by the
+    negative of that. Right hand preferred; left-hand-only rigs mirror the
+    across axis. Returns None when the grip bones are absent from the anim.
+    """
+    to_source = {new: old for old, new in scale.renames.items()}
+    worlds = _rest_worlds(grip_anim)
+    for side, index_f, pinky_f in (("R", 1, 4), ("L", 4, 1)):
+        names = {
+            "wrist": to_source.get(f"Bip01 {side} Hand"),
+            "index": to_source.get(f"Bip01 {side} Finger{index_f}"),
+            "pinky": to_source.get(f"Bip01 {side} Finger{pinky_f}"),
+        }
+        knuckles = [to_source.get(f"Bip01 {side} Finger{i}") for i in (1, 2, 3, 4)]
+        bones = [*names.values(), *knuckles]
+        if any(b is None or b not in worlds for b in bones):
+            continue
+        a, k, n = palm_frame(
+            worlds, str(names["wrist"]), str(names["index"]),
+            str(names["pinky"]), [str(b) for b in knuckles],
+        )
+        fa, fk, fn = GUN_SHIFT_PER_SURPLUS
+        s = scale.surplus
+        return Vector3(
+            -(fa * a.x + fk * k.x + fn * n.x) * s,
+            -(fa * a.y + fk * k.y + fn * n.y) * s,
+            -(fa * a.z + fk * k.z + fn * n.z) * s,
+        )
+    return None
+
+
 __all__ = [
+    "GUN_SHIFT_PER_SURPLUS",
+    "grip_components",
     "GripMeasure",
     "HandScale",
+    "auto_hand_offset_world",
     "dominant_weapon_bone",
     "grip_measure",
     "measure_hand_scale",
+    "palm_frame",
 ]

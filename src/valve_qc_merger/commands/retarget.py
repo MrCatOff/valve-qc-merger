@@ -80,7 +80,7 @@ class RetargetCommand(Command):
         except DriverError as exc:
             print(f"error: {exc}")
             return EXIT_DISCOVERY  # bad/missing inputs
-        _print_hand_scale(inputs, config)
+        config = _resolve_hand_offset(inputs, config)
         try:
             assert_identical_node_tables(inputs)  # §5 gate
             assert_variant_skeletons(inputs)  # hand variants share the reference rig
@@ -189,19 +189,24 @@ def _write_summary(
     (out_dir / "report.json").write_text(json.dumps(summary, indent=2))
 
 
-def _print_hand_scale(inputs: Inputs, config: RetargetConfig) -> None:
-    """Diagnostic: source hand size vs the reference, before anything runs.
+def _resolve_hand_offset(inputs: Inputs, config: RetargetConfig) -> RetargetConfig:
+    """Measure hand size vs the reference; derive the pair-calibrated offset.
 
     Separates the two coverage-failure classes up front: a ratio near 1.0
-    means any grip problem is pose/rig, NOT size (no offset will fix it); a
-    real mismatch prints the surplus and the auto compensation the worker
-    will apply (still overridable via ``hand_offset`` in the config). Never
-    blocks the run — measurement failures just report themselves.
+    means any grip problem is pose/rig, NOT size. A real mismatch derives the
+    full 3-D hand offset (palm-forward AND lateral, GUN_SHIFT_PER_SURPLUS
+    calibrated on the v_deagle/v_g_deagle authored pair) from the source's
+    idle grip pose and injects it as the explicit ``hand_offset`` — printed,
+    and skipped entirely when the config already sets one. Never blocks the
+    run — measurement failures fall back to the worker's palm-forward auto.
     """
     try:
         from valve_qc_merger.merge_view.hands import load_reference_rig
         from valve_qc_merger.parsers.smd import parse_smd_file
-        from valve_qc_merger.retarget.handscale import measure_hand_scale
+        from valve_qc_merger.retarget.handscale import (
+            auto_hand_offset_world,
+            measure_hand_scale,
+        )
 
         hands_smd = parse_smd_file(inputs.original_hands)
         # Restrict arm discovery to vertex-weighted bones — the same weights
@@ -218,19 +223,39 @@ def _print_hand_scale(inputs: Inputs, config: RetargetConfig) -> None:
         )
         if not scale.chains:
             print("  hand scale: no complete finger chains matched")
-            return
+            return config
         if abs(scale.ratio - 1.0) < 0.01:
             print(f"  hand scale: {scale.ratio:.3f}x vs reference — hands "
                   "match; grip issues here are pose/rig, not size")
-            return
-        shift = scale.surplus * config.hand_center_fraction
-        override = (" (config hand_offset overrides this)"
-                    if config.hand_offset is not None else "")
+            return config
+        if config.hand_offset is not None:
+            print(f"  hand scale: {scale.ratio:.3f}x vs reference (chain "
+                  f"surplus {scale.surplus:+.2f}u); config hand_offset "
+                  "overrides the calibrated compensation")
+            return config
+        # The grip pose: an idle-like sequence (draw starts swung away).
+        anim_name = next((n for n in inputs.sequences if "idle" in n.lower()),
+                         next(iter(inputs.sequences), None))
+        offset = None
+        if anim_name is not None:
+            offset = auto_hand_offset_world(
+                scale, parse_smd_file(inputs.sequences[anim_name])
+            )
+        if offset is None:
+            print(f"  hand scale: {scale.ratio:.3f}x vs reference (chain "
+                  f"surplus {scale.surplus:+.2f}u); grip bones unmatched — "
+                  "falling back to the palm-forward worker offset")
+            return config
         print(f"  hand scale: {scale.ratio:.3f}x vs reference (chain surplus "
-              f"{scale.surplus:+.2f}u over {scale.chains} chains); auto hand "
-              f"offset shifts ~{shift:.2f}u along the palm axis{override}")
+              f"{scale.surplus:+.2f}u over {scale.chains} chains); "
+              f"calibrated hand offset ({offset.x:+.2f}, {offset.y:+.2f}, "
+              f"{offset.z:+.2f}) from the {anim_name!r} grip pose")
+        return dataclasses.replace(
+            config, hand_offset=(offset.x, offset.y, offset.z)
+        )
     except Exception as exc:  # noqa: BLE001 - diagnostic only
         print(f"  hand scale: unmeasured ({exc})")
+        return config
 
 
 def _exit_code(results: list[SequenceResult]) -> int:
