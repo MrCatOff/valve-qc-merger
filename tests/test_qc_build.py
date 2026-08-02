@@ -5,6 +5,7 @@ from __future__ import annotations
 from valve_qc_merger.retarget.qc_build import (
     build_qc,
     parse_attachments,
+    parse_bodygroups,
     parse_sequences,
 )
 
@@ -41,6 +42,42 @@ def test_parse_sequences_reads_fps_and_events() -> None:
 def test_parse_attachments_drops_deleted_bones() -> None:
     kept = parse_attachments(_QC, surviving_bones={"Bone63"})
     assert kept == ['$attachment 0 "Bone63" 0 -5.75 0']  # Bone01 dropped
+
+
+# The decompiler (tools/decompmdl) writes a different QC dialect: bare (unquoted)
+# names, single-line sequences, and a leading "./" on anim paths.
+_DECOMPILED_QC = """
+$modelname v_elite.mdl
+$cd .
+$cdtexture ./maps_8bit
+
+$body studio "v_elite-pv"
+$bodygroup hands
+{
+    studio "hands_female"
+    studio "hands_male"
+}
+
+$attachment 0 "Bone63" 0 -5.75 0
+
+$sequence idle "./anims/idle" fps 16
+$sequence shoot_right1 {
+    "./anims/shoot_right1"
+    fps 40
+    { event 5011 0 "11" }
+}
+"""
+
+
+def test_parse_decompiled_dialect() -> None:
+    # Bare names, single-line + braced bodies, "./anims/..." paths all parse.
+    seqs = parse_sequences(_DECOMPILED_QC)
+    assert [s.name for s in seqs] == ["idle", "shoot_right1"]
+    assert seqs[0].fps == 16 and seqs[0].smd == "./anims/idle"
+    assert seqs[1].fps == 40
+    assert seqs[1].events == ('{ event 5011 0 "11" }',)
+    assert parse_attachments(_DECOMPILED_QC, {"Bone63"}) == ['$attachment 0 "Bone63" 0 -5.75 0']
+    assert parse_bodygroups(_DECOMPILED_QC) == {"hands": ["hands_female", "hands_male"]}
 
 
 def test_build_qc_points_at_merged_mesh_and_anims() -> None:

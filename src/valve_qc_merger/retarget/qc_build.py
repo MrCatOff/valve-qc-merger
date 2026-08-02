@@ -15,7 +15,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_SEQ_HEAD_RE = re.compile(r'\$sequence\s+"(?P<name>[^"]+)"\s*\{')
+_SEQ_KW_RE = re.compile(r"\$sequence\b")
+# A QC token: a quoted string or a bare word (studiomdl and every decompiler
+# accept sequence/bodygroup names with or without quotes).
+_TOKEN_RE = re.compile(r'\s*(?:"(?P<q>[^"]+)"|(?P<w>[^\s{}"]+))')
 _FPS_RE = re.compile(r"\bfps\s+(?P<fps>[0-9.]+)")
 _EVENT_RE = re.compile(r"\{\s*event\b[^}]*\}")
 _ATTACH_RE = re.compile(
@@ -50,24 +53,35 @@ def _matching_brace(text: str, open_index: int) -> int:
 def parse_sequences(qc_text: str) -> list[QcSequence]:
     """Extract every ``$sequence`` with its fps and raw event lines, in file order.
 
-    The body is delimited by brace matching, not a lazy regex, because a
-    ``$sequence`` block contains nested ``{ event ... }`` blocks.
+    Handles both dialects: our/Crowbar style ``$sequence "name" { ... }`` and the
+    decompiler's ``$sequence name "./anims/name" fps 16`` (bare name, single line).
+    A braced body is delimited by brace matching (it may nest ``{ event ... }``);
+    an unbraced body runs to the end of the line.
     """
     out: list[QcSequence] = []
-    for m in _SEQ_HEAD_RE.finditer(qc_text):
-        open_index = m.end() - 1
-        close_index = _matching_brace(qc_text, open_index)
-        body = qc_text[open_index + 1:close_index]
+    for kw in _SEQ_KW_RE.finditer(qc_text):
+        name_m = _TOKEN_RE.match(qc_text, kw.end())
+        if name_m is None:
+            continue
+        name = name_m.group("q") or name_m.group("w")
+        cursor = name_m.end()
+        while cursor < len(qc_text) and qc_text[cursor] in " \t":
+            cursor += 1
+        if cursor < len(qc_text) and qc_text[cursor] == "{":
+            body = qc_text[cursor + 1:_matching_brace(qc_text, cursor)]
+        else:
+            end = qc_text.find("\n", cursor)
+            body = qc_text[cursor:len(qc_text) if end == -1 else end]
         fps_m = _FPS_RE.search(body)
         fps = float(fps_m.group("fps")) if fps_m else None
         events = tuple(e.strip() for e in _EVENT_RE.findall(body))
         smd_m = _SEQ_SMD_RE.search(_EVENT_RE.sub("", body))
         smd = smd_m.group("path") if smd_m else None
-        out.append(QcSequence(m.group("name"), fps, events, smd))
+        out.append(QcSequence(name, fps, events, smd))
     return out
 
 
-_BODYGROUP_RE = re.compile(r'\$bodygroup\s+"(?P<name>[^"]+)"\s*\{')
+_BODYGROUP_RE = re.compile(r'\$bodygroup\s+(?:"(?P<name>[^"]+)"|(?P<bare>[^\s{}"]+))\s*\{')
 _STUDIO_RE = re.compile(r'studio\s+"(?P<stem>[^"]+)"')
 
 
@@ -83,10 +97,11 @@ def parse_bodygroups(qc_text: str) -> dict[str, list[str]]:
         open_index = m.end() - 1
         close_index = _matching_brace(qc_text, open_index)
         body = qc_text[open_index + 1:close_index]
-        name = m.group("name")
+        raw = m.group("name") or m.group("bare")
+        name = raw
         counter = 2
         while name in out:
-            name = f"{m.group('name')}_{counter}"
+            name = f"{raw}_{counter}"
             counter += 1
         out[name] = [s.group("stem") for s in _STUDIO_RE.finditer(body)]
     return out
