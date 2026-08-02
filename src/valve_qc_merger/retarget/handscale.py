@@ -153,13 +153,15 @@ def grip_measure(
     )
 
 
-# Ground-truth calibration from the v_deagle/v_g_deagle pair: how far the
-# authored conversion moved the GUN relative to the wrist, per unit of
-# hand-size surplus, in the orthonormal palm frame (palm-forward, across
-# knuckles index->pinky, palm normal). The old 1-D palm-forward-only offset
-# matched gold on that axis but left the gun laterally where the SMALL hand
-# held it — in HLMV the bigger reference hand's fingers pierced the grip.
-GUN_SHIFT_PER_SURPLUS = (1.880, -0.564, -0.370)
+# Ground-truth calibration from the v_deagle/v_g_deagle pair: the hand
+# offset per unit of hand-size surplus, expressed in the SOURCE grip's
+# orthonormal palm frame (palm-forward, across knuckles index->pinky, palm
+# normal). Calibrated so the retargeted WRIST lands exactly on the authored
+# gold wrist in world space — earlier scalar palm-frame projections agreed
+# while the wrist still sat 0.55u off (the two rigs' palm axes differ by 7
+# degrees and absorbed it); in first person that offset showed as fingers
+# poking out under the grip.
+GUN_SHIFT_PER_SURPLUS = (1.949, -1.336, -0.907)
 
 
 def _v(a: Vector3, b: Vector3) -> Vector3:
