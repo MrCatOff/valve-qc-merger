@@ -695,7 +695,10 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
                     if depth < len(archetype):
                         target_deg = float(archetype[depth])
                     else:
-                        target_deg = float(archetype[-1]) * 0.66
+                        # DIP couples to PIP; 0.85 tucks the longer reference
+                        # fingertips behind the grip (0.66 left them poking
+                        # past its front edge in HLMV).
+                        target_deg = float(archetype[-1]) * 0.85
                     base_int = _interiors(angles).get(joint)
                     if base_int is None:
                         continue
