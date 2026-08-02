@@ -472,7 +472,11 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
 
     chains = _finger_chains(mapping, tgt_parent, corr)
     hoff = cfg.get("hand_offset")
-    hand_offset = Vector3(*hoff) if hoff else None  # None => auto (half-length centering)
+    hand_offset: Any = Vector3(*hoff) if hoff else None
+    by_side = cfg.get("hand_offsets_by_side")
+    if hand_offset is None and by_side:
+        # Driver-computed per-side offsets (wrist-world calibrated).
+        hand_offset = {side: Vector3(*vec) for side, vec in by_side.items()}
     auto_offset: Vector3 | None = None
 
     # Group the chains per wrist and mark each wrist's thumb (most abducted base).
@@ -528,16 +532,20 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
     tip_errors: list[float] = []
     solved_chains: set[str] = set()
     # The authored reference-hand pistol grip, measured from v_g_deagle's
-    # idle (interior angles in degrees at MCP, PIP per finger; 1=index ..
-    # 4=pinky). Overridable via config grip_archetype.
+    # idle, PER SIDE (interior angles in degrees at MCP, PIP per finger;
+    # 1=index .. 4=pinky). CS viewmodels are authored left-handed: the LEFT
+    # hand grips. Overridable via config grip_archetype.
     default_archetype = {
-        "1": (31.2, 47.7), "2": (15.9, 95.2),
-        "3": (13.0, 79.5), "4": (23.8, 58.4),
+        "R": {"1": (31.2, 47.7), "2": (15.9, 95.2),
+              "3": (13.0, 79.5), "4": (23.8, 58.4)},
+        "L": {"1": (21.4, 6.5), "2": (36.8, 92.8),
+              "3": (30.9, 83.7), "4": (23.3, 43.8)},
     }
-    grip_archetype: dict[str, tuple[float, ...]] = {
-        str(k): tuple(v) for k, v in
-        (cfg.get("grip_archetype") or default_archetype).items()
+    grip_archetype: dict[str, dict[str, tuple[float, ...]]] = {
+        str(side): {str(k): tuple(v) for k, v in table.items()}
+        for side, table in (cfg.get("grip_archetype") or default_archetype).items()
     }
+    grip_side_set = set(cfg.get("grip_sides") or [])
 
     aim_errors: list[float] = []
     for frame in range(start, end + 1):
@@ -619,6 +627,9 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
             # corrections on top of direction transfer. Only fingers whose
             # source distal sits near the weapon are touched — a free hand
             # keeps its own animation.
+            chain_side = "L" if " L " in f" {wrist} " else "R"
+            if chain_side not in grip_side_set:
+                continue  # support/free hand keeps its own animation
             if key not in grip_near:
                 sd = scene.src.pose.bones[mapping[deepest]].head
                 near = 1e9
@@ -633,7 +644,7 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
             finger_match = re.search(r"Finger(\d)", chain[0])
             if finger_match is None:
                 continue
-            archetype = grip_archetype.get(finger_match.group(1))
+            archetype = grip_archetype.get(chain_side, {}).get(finger_match.group(1))
             if archetype is None:
                 continue
             sub = chain[: chain.index(deepest) + 1]
@@ -741,6 +752,7 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
             "tip_error_mean": (sum(tip_errors) / len(tip_errors)
                                if tip_errors else 0.0),
             "tip_error_max": max(tip_errors, default=0.0),
+            "grip_sides": sorted(grip_side_set),
         },
     }
 

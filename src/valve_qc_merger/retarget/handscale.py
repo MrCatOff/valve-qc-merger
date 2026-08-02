@@ -153,15 +153,17 @@ def grip_measure(
     )
 
 
-# Ground-truth calibration from the v_deagle/v_g_deagle pair: the hand
-# offset per unit of hand-size surplus, expressed in the SOURCE grip's
-# orthonormal palm frame (palm-forward, across knuckles index->pinky, palm
-# normal). Calibrated so the retargeted WRIST lands exactly on the authored
-# gold wrist in world space — earlier scalar palm-frame projections agreed
-# while the wrist still sat 0.55u off (the two rigs' palm axes differ by 7
-# degrees and absorbed it); in first person that offset showed as fingers
-# poking out under the grip.
-GUN_SHIFT_PER_SURPLUS = (1.949, -1.336, -0.907)
+# Ground-truth calibration from the v_deagle/v_g_deagle pair, PER SIDE: the
+# hand offset per unit of hand-size surplus, in each SOURCE hand's orthonormal
+# palm frame, calibrated so each retargeted WRIST lands exactly on the
+# authored gold wrist in world space. Sides genuinely differ: CS viewmodels
+# are authored left-handed (the game mirrors via cl_righthand), so the LEFT
+# hand grips the weapon and the RIGHT supports/reloads — their authored
+# offsets are not mirror images.
+GUN_SHIFT_PER_SURPLUS = {
+    "R": (1.949, -1.336, -0.907),
+    "L": (2.668, 0.459, -0.737),
+}
 
 
 def _v(a: Vector3, b: Vector3) -> Vector3:
@@ -201,6 +203,84 @@ def palm_frame(
     return a, k, _cross(a, k)
 
 
+def auto_hand_offsets(
+    scale: HandScale, grip_anim: Smd,
+) -> dict[str, Vector3]:
+    """Per-side world hand offsets compensating a hand-size mismatch.
+
+    Built on the SOURCE grip pose (frame 0 of an idle-like animation): each
+    side's wrist shifts by its calibrated GUN_SHIFT_PER_SURPLUS x surplus in
+    that side's palm frame. Sides whose grip bones are absent are omitted.
+    """
+    to_source = {new: old for old, new in scale.renames.items()}
+    worlds = _rest_worlds(grip_anim)
+    out: dict[str, Vector3] = {}
+    for side in ("R", "L"):
+        constants = GUN_SHIFT_PER_SURPLUS[side]
+        names = [to_source.get(f"Bip01 {side} Hand"),
+                 to_source.get(f"Bip01 {side} Finger1"),
+                 to_source.get(f"Bip01 {side} Finger4")]
+        knuckles = [to_source.get(f"Bip01 {side} Finger{i}") for i in (1, 2, 3, 4)]
+        bones = [*names, *knuckles]
+        if any(b is None or b not in worlds for b in bones):
+            continue
+        a, k, n = palm_frame(worlds, str(names[0]), str(names[1]), str(names[2]),
+                             [str(b) for b in knuckles])
+        fa, fk, fn = constants
+        s = scale.surplus
+        out[side] = Vector3(
+            -(fa * a.x + fk * k.x + fn * n.x) * s,
+            -(fa * a.y + fk * k.y + fn * n.y) * s,
+            -(fa * a.z + fk * k.z + fn * n.z) * s,
+        )
+    return out
+
+
+GRIP_RIGID_STD = 1.0  # units; wrist-to-gun distance std below this = gripping
+
+
+def grip_sides(
+    scale: HandScale, anims: list[Smd], weapon_bone: str,
+) -> list[str]:
+    """Sides whose wrist the weapon follows rigidly across the animations.
+
+    CS viewmodels are authored left-handed: the gripping hand is usually the
+    LEFT one, and only rigidity tells (the support hand's fingers sit even
+    closer to the gun than the gripping hand's). A side counts as gripping
+    when its wrist-to-weapon-bone distance stays within GRIP_RIGID_STD across
+    every provided animation.
+    """
+    to_source = {new: old for old, new in scale.renames.items()}
+    sides: list[str] = []
+    for side in ("R", "L"):
+        wrist = to_source.get(f"Bip01 {side} Hand")
+        if wrist is None:
+            continue
+        worst = 0.0
+        seen = False
+        for anim in anims:
+            names = {n.name for n in anim.nodes}
+            if wrist not in names or weapon_bone not in names:
+                continue
+            distances = []
+            for frame in anim.frames:
+                worlds = fk_worlds(anim, frame)
+                idx = {n.name: n.index for n in anim.nodes}
+                a = worlds[idx[wrist]].translation
+                b = worlds[idx[weapon_bone]].translation
+                distances.append(((a.x - b.x) ** 2 + (a.y - b.y) ** 2
+                                  + (a.z - b.z) ** 2) ** 0.5)
+            if len(distances) < 2:
+                continue
+            seen = True
+            mean = sum(distances) / len(distances)
+            std = (sum((d - mean) ** 2 for d in distances) / len(distances)) ** 0.5
+            worst = max(worst, std)
+        if seen and worst < GRIP_RIGID_STD:
+            sides.append(side)
+    return sides
+
+
 def grip_components(
     smd: Smd, wrist: str, index: str, pinky: str, knuckles: list[str],
     weapon_bone: str,
@@ -212,52 +292,16 @@ def grip_components(
     return _dot(d, a), _dot(d, k), _dot(d, n)
 
 
-def auto_hand_offset_world(
-    scale: HandScale, grip_anim: Smd,
-) -> Vector3 | None:
-    """The world-space hand offset compensating a hand-size mismatch.
-
-    Built on the SOURCE grip pose (frame 0 of an idle-like animation — the
-    weapon's authored grip, constant across sequences): the gun must move by
-    ``GUN_SHIFT_PER_SURPLUS x surplus`` in the palm frame, and since the
-    weapon stays exactly where the animation puts it, the HANDS shift by the
-    negative of that. Right hand preferred; left-hand-only rigs mirror the
-    across axis. Returns None when the grip bones are absent from the anim.
-    """
-    to_source = {new: old for old, new in scale.renames.items()}
-    worlds = _rest_worlds(grip_anim)
-    for side, index_f, pinky_f in (("R", 1, 4), ("L", 4, 1)):
-        names = {
-            "wrist": to_source.get(f"Bip01 {side} Hand"),
-            "index": to_source.get(f"Bip01 {side} Finger{index_f}"),
-            "pinky": to_source.get(f"Bip01 {side} Finger{pinky_f}"),
-        }
-        knuckles = [to_source.get(f"Bip01 {side} Finger{i}") for i in (1, 2, 3, 4)]
-        bones = [*names.values(), *knuckles]
-        if any(b is None or b not in worlds for b in bones):
-            continue
-        a, k, n = palm_frame(
-            worlds, str(names["wrist"]), str(names["index"]),
-            str(names["pinky"]), [str(b) for b in knuckles],
-        )
-        fa, fk, fn = GUN_SHIFT_PER_SURPLUS
-        s = scale.surplus
-        return Vector3(
-            -(fa * a.x + fk * k.x + fn * n.x) * s,
-            -(fa * a.y + fk * k.y + fn * n.y) * s,
-            -(fa * a.z + fk * k.z + fn * n.z) * s,
-        )
-    return None
-
-
 __all__ = [
+    "GRIP_RIGID_STD",
     "GUN_SHIFT_PER_SURPLUS",
-    "grip_components",
     "GripMeasure",
     "HandScale",
-    "auto_hand_offset_world",
+    "auto_hand_offsets",
     "dominant_weapon_bone",
+    "grip_components",
     "grip_measure",
+    "grip_sides",
     "measure_hand_scale",
     "palm_frame",
 ]

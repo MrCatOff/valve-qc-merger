@@ -115,12 +115,19 @@ class RetargetConfig:
     # knuckle, deeper curl). None => auto: solve only for fingers that
     # overshoot their source joint by > 0.3u (size-matched hands are no-ops).
     grip_tip_solve: bool | None = None
-    # Authored grip articulation targets: per finger (1=index .. 4=pinky),
-    # interior angles in degrees at the knuckle and middle joints, measured
-    # from v_g_deagle's idle (the reference hand holding a pistol grip).
-    # Applied only to gripping fingers of size-mismatched hands; None keeps
-    # the built-in gold-pair table.
-    grip_archetype: dict[str, tuple[float, float]] | None = None
+    # Authored grip articulation targets, per side then finger (1=index ..
+    # 4=pinky): interior angles in degrees at the knuckle and middle joints,
+    # measured from v_g_deagle's idle. Applied only to the GRIPPING side(s)
+    # of size-mismatched hands; None keeps the built-in gold-pair table.
+    grip_archetype: dict[str, dict[str, tuple[float, float]]] | None = None
+    # Sides ("L"/"R") whose wrist the weapon follows rigidly — the gripping
+    # hand(s). None => the driver measures rigidity across the model's own
+    # animations and fills this in (CS viewmodels are authored left-handed,
+    # so it is usually the LEFT hand).
+    grip_sides: tuple[str, ...] | None = None
+    # Driver-computed per-side world hand offsets (internal; overrides the
+    # scalar auto path when present). An explicit hand_offset still wins.
+    hand_offsets_by_side: dict[str, tuple[float, float, float]] | None = None
     allow_rerig: bool = False  # §11.3
     frustum_policy: FrustumPolicy = "warn"  # §11.4
     finger_priority: tuple[str, ...] = ("pinky", "ring", "middle", "index", "thumb")  # §11.5
@@ -170,6 +177,8 @@ class RetargetConfig:
                 kwargs[offset_key] = tuple(kwargs[offset_key])
         if "finger_priority" in kwargs:
             kwargs["finger_priority"] = tuple(kwargs["finger_priority"])
+        if kwargs.get("grip_sides") is not None:
+            kwargs["grip_sides"] = tuple(kwargs["grip_sides"])
         if "solver" in kwargs:
             kwargs["solver"] = _solver_from_dict(kwargs["solver"])
         if "camera" in kwargs:

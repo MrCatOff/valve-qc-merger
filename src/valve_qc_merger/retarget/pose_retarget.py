@@ -64,7 +64,7 @@ def compute_bases(
     src_pose: dict[str, Transform],
     anchors: list[Anchor],
     orient: dict[str, tuple[Matrix3, Matrix3]] | None = None,
-    hand_offset: Vector3 | None = None,
+    hand_offset: Vector3 | dict[str, Vector3] | None = None,
 ) -> dict[str, Transform]:
     """Return each target bone's ``matrix_basis`` for one frame (§7.4).
 
@@ -154,7 +154,7 @@ def _solve_anchors(
     basis: dict[str, Transform],
     src_pose: dict[str, Transform],
     anchors: list[Anchor],
-    hand_offset: Vector3 | None = None,
+    hand_offset: Vector3 | dict[str, Vector3] | None = None,
 ) -> None:
     """Set each anchor's basis translation so its wrist lands on the source wrist.
 
@@ -166,9 +166,15 @@ def _solve_anchors(
         if anchor.source_wrist not in src_pose or anchor.wrist not in posed:
             continue
         target = src_pose[anchor.source_wrist].translation
-        if hand_offset is not None:
-            target = Vector3(target.x + hand_offset.x, target.y + hand_offset.y,
-                             target.z + hand_offset.z)
+        offset: Vector3 | None
+        if isinstance(hand_offset, dict):
+            side = "L" if " L " in f" {anchor.wrist} " else "R"
+            offset = hand_offset.get(side)
+        else:
+            offset = hand_offset
+        if offset is not None:
+            target = Vector3(target.x + offset.x, target.y + offset.y,
+                             target.z + offset.z)
         current = posed[anchor.wrist].translation
         delta = Vector3(target.x - current.x, target.y - current.y, target.z - current.z)
 

@@ -204,7 +204,9 @@ def _resolve_hand_offset(inputs: Inputs, config: RetargetConfig) -> RetargetConf
         from valve_qc_merger.merge_view.hands import load_reference_rig
         from valve_qc_merger.parsers.smd import parse_smd_file
         from valve_qc_merger.retarget.handscale import (
-            auto_hand_offset_world,
+            auto_hand_offsets,
+            dominant_weapon_bone,
+            grip_sides,
             measure_hand_scale,
         )
 
@@ -236,22 +238,46 @@ def _resolve_hand_offset(inputs: Inputs, config: RetargetConfig) -> RetargetConf
         # The grip pose: an idle-like sequence (draw starts swung away).
         anim_name = next((n for n in inputs.sequences if "idle" in n.lower()),
                          next(iter(inputs.sequences), None))
-        offset = None
+        offsets: dict[str, object] = {}
         if anim_name is not None:
-            offset = auto_hand_offset_world(
+            offsets = dict(auto_hand_offsets(
                 scale, parse_smd_file(inputs.sequences[anim_name])
-            )
-        if offset is None:
+            ))
+        if not offsets:
             print(f"  hand scale: {scale.ratio:.3f}x vs reference (chain "
                   f"surplus {scale.surplus:+.2f}u); grip bones unmatched — "
                   "falling back to the palm-forward worker offset")
             return config
+        # Gripping side(s): the wrist the weapon follows rigidly across the
+        # model's own animations (CS viewmodels are authored left-handed, so
+        # this is usually the LEFT hand — the support hand's fingers sit even
+        # closer to the gun, so only rigidity tells them apart).
+        sides: list[str] = []
+        if config.grip_sides is not None:
+            sides = list(config.grip_sides)
+        else:
+            weapon_smd = parse_smd_file(inputs.weapon_pv)
+            weapon_bone = dominant_weapon_bone(weapon_smd)
+            # Probe EVERY sequence: only the dynamic ones (draw, reload)
+            # separate the gripping wrist from the support wrist — during
+            # idle/shoot both hands hold still on the gun.
+            probe_anims = [
+                parse_smd_file(path) for path in inputs.sequences.values()
+            ]
+            sides = grip_sides(scale, probe_anims, weapon_bone)
+        rendered = {s: (round(v.x, 2), round(v.y, 2), round(v.z, 2))  # type: ignore[attr-defined]
+                    for s, v in offsets.items()}
         print(f"  hand scale: {scale.ratio:.3f}x vs reference (chain surplus "
               f"{scale.surplus:+.2f}u over {scale.chains} chains); "
-              f"calibrated hand offset ({offset.x:+.2f}, {offset.y:+.2f}, "
-              f"{offset.z:+.2f}) from the {anim_name!r} grip pose")
+              f"per-side offsets {rendered} from the {anim_name!r} grip "
+              f"pose; gripping side(s): {sides or 'none detected'}")
         return dataclasses.replace(
-            config, hand_offset=(offset.x, offset.y, offset.z)
+            config,
+            hand_offsets_by_side={
+                s: (v.x, v.y, v.z)  # type: ignore[attr-defined]
+                for s, v in offsets.items()
+            },
+            grip_sides=tuple(sides),
         )
     except Exception as exc:  # noqa: BLE001 - diagnostic only
         print(f"  hand scale: unmeasured ({exc})")
