@@ -153,16 +153,18 @@ def grip_measure(
     )
 
 
-# Ground-truth calibration from the v_deagle/v_g_deagle pair, PER SIDE: the
-# hand offset per unit of hand-size surplus, in each SOURCE hand's orthonormal
-# palm frame, calibrated so each retargeted WRIST lands exactly on the
-# authored gold wrist in world space. Sides genuinely differ: CS viewmodels
-# are authored left-handed (the game mirrors via cl_righthand), so the LEFT
-# hand grips the weapon and the RIGHT supports/reloads — their authored
-# offsets are not mirror images.
-GUN_SHIFT_PER_SURPLUS = {
-    "R": (1.949, -1.336, -0.907),
-    "L": (2.668, 0.459, -0.737),
+# Calibration from FOUR authored Valve->CSO conversion pairs (v_deagle/
+# v_g_deagle, v_glock18, v_mac10, v_p228 — same weapon mesh, small 0.85x
+# hands replaced by reference-proportioned hands): component-wise MEDIAN
+# world-space wrist offset per unit of hand-size surplus, per side. All
+# GoldSource viewmodels share one view space, so world offsets transfer
+# directly between models — no palm-frame projection (an earlier single-pair
+# palm-frame calibration overfitted v_g_deagle, whose authors also
+# repositioned the whole viewmodel ~2u toward the camera; the medians shrink
+# that to the typical authored shift of ~1u toward camera, slightly down).
+HAND_OFFSET_PER_SURPLUS = {
+    "R": (-0.304, 1.248, -0.416),
+    "L": (0.310, 1.011, -0.733),
 }
 
 
@@ -203,36 +205,20 @@ def palm_frame(
     return a, k, _cross(a, k)
 
 
-def auto_hand_offsets(
-    scale: HandScale, grip_anim: Smd,
-) -> dict[str, Vector3]:
+def auto_hand_offsets(scale: HandScale) -> dict[str, Vector3]:
     """Per-side world hand offsets compensating a hand-size mismatch.
 
-    Built on the SOURCE grip pose (frame 0 of an idle-like animation): each
-    side's wrist shifts by its calibrated GUN_SHIFT_PER_SURPLUS x surplus in
-    that side's palm frame. Sides whose grip bones are absent are omitted.
+    The median authored conversion shift, scaled by the measured surplus.
+    Sides absent from the hand match are omitted.
     """
     to_source = {new: old for old, new in scale.renames.items()}
-    worlds = _rest_worlds(grip_anim)
     out: dict[str, Vector3] = {}
-    for side in ("R", "L"):
-        constants = GUN_SHIFT_PER_SURPLUS[side]
-        names = [to_source.get(f"Bip01 {side} Hand"),
-                 to_source.get(f"Bip01 {side} Finger1"),
-                 to_source.get(f"Bip01 {side} Finger4")]
-        knuckles = [to_source.get(f"Bip01 {side} Finger{i}") for i in (1, 2, 3, 4)]
-        bones = [*names, *knuckles]
-        if any(b is None or b not in worlds for b in bones):
+    for side, constants in HAND_OFFSET_PER_SURPLUS.items():
+        if to_source.get(f"Bip01 {side} Hand") is None:
             continue
-        a, k, n = palm_frame(worlds, str(names[0]), str(names[1]), str(names[2]),
-                             [str(b) for b in knuckles])
-        fa, fk, fn = constants
-        s = scale.surplus
-        out[side] = Vector3(
-            -(fa * a.x + fk * k.x + fn * n.x) * s,
-            -(fa * a.y + fk * k.y + fn * n.y) * s,
-            -(fa * a.z + fk * k.z + fn * n.z) * s,
-        )
+        out[side] = Vector3(constants[0] * scale.surplus,
+                            constants[1] * scale.surplus,
+                            constants[2] * scale.surplus)
     return out
 
 
@@ -294,7 +280,7 @@ def grip_components(
 
 __all__ = [
     "GRIP_RIGID_STD",
-    "GUN_SHIFT_PER_SURPLUS",
+    "HAND_OFFSET_PER_SURPLUS",
     "GripMeasure",
     "HandScale",
     "auto_hand_offsets",

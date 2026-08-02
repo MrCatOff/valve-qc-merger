@@ -531,19 +531,20 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
     hinge_max_step = math.radians(float(solver_cfg.get("max_step_degrees", 35.0)))
     tip_errors: list[float] = []
     solved_chains: set[str] = set()
-    # The authored reference-hand pistol grip, measured from v_g_deagle's
-    # idle, PER SIDE (interior angles in degrees at MCP, PIP per finger;
-    # 1=index .. 4=pinky). CS viewmodels are authored left-handed: the LEFT
-    # hand grips. Overridable via config grip_archetype.
+    # The authored reference-hand grip, component-wise MEDIAN over the four
+    # authored Valve->CSO conversion pairs (deagle/glock18/mac10/p228):
+    # interior angles in degrees at MCP, PIP per finger (1=index .. 4=pinky),
+    # measured on each pair's GRIPPING hand. Applied to whichever side grips
+    # (CS viewmodels are authored left-handed, so usually the LEFT); the
+    # trigger finger stays relaxed, fingers 2-4 clench. Overridable via
+    # config grip_archetype.
     default_archetype = {
-        "R": {"1": (31.2, 47.7), "2": (15.9, 95.2),
-              "3": (13.0, 79.5), "4": (23.8, 58.4)},
-        "L": {"1": (21.4, 6.5), "2": (36.8, 92.8),
-              "3": (30.9, 83.7), "4": (23.3, 43.8)},
+        "1": (17.6, 21.2), "2": (32.1, 95.1),
+        "3": (29.3, 98.9), "4": (27.0, 80.2),
     }
-    grip_archetype: dict[str, dict[str, tuple[float, ...]]] = {
-        str(side): {str(k): tuple(v) for k, v in table.items()}
-        for side, table in (cfg.get("grip_archetype") or default_archetype).items()
+    grip_archetype: dict[str, tuple[float, ...]] = {
+        str(k): tuple(v) for k, v in
+        (cfg.get("grip_archetype") or default_archetype).items()
     }
     grip_side_set = set(cfg.get("grip_sides") or [])
 
@@ -644,7 +645,7 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
             finger_match = re.search(r"Finger(\d)", chain[0])
             if finger_match is None:
                 continue
-            archetype = grip_archetype.get(chain_side, {}).get(finger_match.group(1))
+            archetype = grip_archetype.get(finger_match.group(1))
             if archetype is None:
                 continue
             sub = chain[: chain.index(deepest) + 1]

@@ -115,11 +115,12 @@ class RetargetConfig:
     # knuckle, deeper curl). None => auto: solve only for fingers that
     # overshoot their source joint by > 0.3u (size-matched hands are no-ops).
     grip_tip_solve: bool | None = None
-    # Authored grip articulation targets, per side then finger (1=index ..
-    # 4=pinky): interior angles in degrees at the knuckle and middle joints,
-    # measured from v_g_deagle's idle. Applied only to the GRIPPING side(s)
-    # of size-mismatched hands; None keeps the built-in gold-pair table.
-    grip_archetype: dict[str, dict[str, tuple[float, float]]] | None = None
+    # Authored grip articulation targets per finger (1=index .. 4=pinky):
+    # interior angles in degrees at the knuckle and middle joints — medians
+    # over the four authored Valve->CSO conversion pairs' gripping hands.
+    # Applied only to the GRIPPING side(s) of size-mismatched hands; None
+    # keeps the built-in table.
+    grip_archetype: dict[str, tuple[float, float]] | None = None
     # Sides ("L"/"R") whose wrist the weapon follows rigidly — the gripping
     # hand(s). None => the driver measures rigidity across the model's own
     # animations and fills this in (CS viewmodels are authored left-handed,

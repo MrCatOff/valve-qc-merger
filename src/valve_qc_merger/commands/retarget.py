@@ -235,14 +235,7 @@ def _resolve_hand_offset(inputs: Inputs, config: RetargetConfig) -> RetargetConf
                   f"surplus {scale.surplus:+.2f}u); config hand_offset "
                   "overrides the calibrated compensation")
             return config
-        # The grip pose: an idle-like sequence (draw starts swung away).
-        anim_name = next((n for n in inputs.sequences if "idle" in n.lower()),
-                         next(iter(inputs.sequences), None))
-        offsets: dict[str, object] = {}
-        if anim_name is not None:
-            offsets = dict(auto_hand_offsets(
-                scale, parse_smd_file(inputs.sequences[anim_name])
-            ))
+        offsets: dict[str, object] = dict(auto_hand_offsets(scale))
         if not offsets:
             print(f"  hand scale: {scale.ratio:.3f}x vs reference (chain "
                   f"surplus {scale.surplus:+.2f}u); grip bones unmatched — "
@@ -269,8 +262,8 @@ def _resolve_hand_offset(inputs: Inputs, config: RetargetConfig) -> RetargetConf
                     for s, v in offsets.items()}
         print(f"  hand scale: {scale.ratio:.3f}x vs reference (chain surplus "
               f"{scale.surplus:+.2f}u over {scale.chains} chains); "
-              f"per-side offsets {rendered} from the {anim_name!r} grip "
-              f"pose; gripping side(s): {sides or 'none detected'}")
+              f"per-side offsets {rendered} (authored-median x surplus); "
+              f"gripping side(s): {sides or 'none detected'}")
         return dataclasses.replace(
             config,
             hand_offsets_by_side={
