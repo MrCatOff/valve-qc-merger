@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import traceback
 from typing import Any
@@ -458,7 +459,8 @@ def _vnorm(v: Vector3) -> Vector3:
     return Vector3(v.x / length, v.y / length, v.z / length)
 
 
-def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[str, Any]:
+def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
+             classes: dict[str, list[str]] | None = None) -> dict[str, Any]:
     """Key the reference skeleton: rotation retarget (§7.4) + grip solve (§7.6)."""
     _assert_identity_world(scene.src, scene.reference)
     tgt_rest = _rest_transforms(scene.reference)
@@ -512,7 +514,6 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
     # are untouched.
     solver_cfg: dict[str, Any] = cfg.get("solver") or {}
     tip_solve_cfg = cfg.get("grip_tip_solve")  # None => auto per finger
-    hinge_max_step = math.radians(float(solver_cfg.get("max_step_degrees", 35.0)))
 
     def _hinge_limits(depth: int) -> tuple[float, float]:
         key = ("hinge_mcp", "hinge_pip", "hinge_dip")[min(depth, 2)]
@@ -521,9 +522,22 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
 
     solve_enabled: dict[str, bool] = {}  # chain key -> decided on first frame
     solve_sign: dict[str, float] = {}
+    grip_near: dict[str, bool] = {}
     warm_angles: dict[str, dict[str, float]] = {}
+    hinge_max_step = math.radians(float(solver_cfg.get("max_step_degrees", 35.0)))
     tip_errors: list[float] = []
     solved_chains: set[str] = set()
+    # The authored reference-hand pistol grip, measured from v_g_deagle's
+    # idle (interior angles in degrees at MCP, PIP per finger; 1=index ..
+    # 4=pinky). Overridable via config grip_archetype.
+    default_archetype = {
+        "1": (31.2, 47.7), "2": (15.9, 95.2),
+        "3": (13.0, 79.5), "4": (23.8, 58.4),
+    }
+    grip_archetype: dict[str, tuple[float, ...]] = {
+        str(k): tuple(v) for k, v in
+        (cfg.get("grip_archetype") or default_archetype).items()
+    }
 
     aim_errors: list[float] = []
     for frame in range(start, end + 1):
@@ -598,36 +612,111 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
             axis = Vector3(last.x - first.x, last.y - first.y, last.z - first.z)
             if axis.length() < 1e-6:
                 continue
+            # Grip archetype (gold pair): gripping fingers take the
+            # AUTHORED big-hand articulation instead of a geometric guess.
+            # v_g_deagle demonstrates how the reference hand holds a pistol
+            # grip; per-joint interior angles from it are targeted as hinge
+            # corrections on top of direction transfer. Only fingers whose
+            # source distal sits near the weapon are touched — a free hand
+            # keeps its own animation.
+            if key not in grip_near:
+                sd = scene.src.pose.bones[mapping[deepest]].head
+                near = 1e9
+                for wb in (classes or {}).get("weapon", []):
+                    wp = scene.src.pose.bones[wb].head
+                    near = min(near, math.dist(
+                        (sd[0], sd[1], sd[2]), (wp[0], wp[1], wp[2])))
+                grip_near[key] = near < 6.0
+            if not grip_near[key]:
+                continue
+            unit_axis2 = _vnorm(axis)
+            finger_match = re.search(r"Finger(\d)", chain[0])
+            if finger_match is None:
+                continue
+            archetype = grip_archetype.get(finger_match.group(1))
+            if archetype is None:
+                continue
             sub = chain[: chain.index(deepest) + 1]
-            limits = {b: _hinge_limits(i) for i, b in enumerate(dof_bones)}
-            # Target every joint at its SOURCE joint position: the original
-            # hand's contact line on the weapon (removes MCP/PIP redundancy).
-            joint_targets: dict[str, Vector3] = {}
-            for bone in sub[1:]:
-                src_of = mapping.get(bone)
-                if src_of is not None:
-                    hp = scene.src.pose.bones[src_of].head
-                    joint_targets[bone] = Vector3(hp[0], hp[1], hp[2])
             if key not in solve_sign:
                 solve_sign[key] = grip_ik.calibrate_axis_sign(
                     sub, dof_bones, posed[wrist], rl, target, _vnorm(axis),
                     pre_basis=dt_basis,
                 )
-            signed_axis = Vector3(axis.x * solve_sign[key],
-                                  axis.y * solve_sign[key],
-                                  axis.z * solve_sign[key])
-            solved_basis, angles = grip_ik.solve_finger_joints(
-                sub, dof_bones, posed[wrist], rl, joint_targets, limits,
-                axis=signed_axis, pre_basis=dt_basis,
-                warm_start=warm_angles.get(key),
-                max_step=hinge_max_step if key in warm_angles else None,
+            def _interiors(angles_now: dict[str, float], *,
+                           chain: list[str] = chain,
+                           dof_bones: list[str] = dof_bones,
+                           base: Transform = posed[wrist],
+                           rl: dict[str, Transform] = rl,
+                           axis: Vector3 = unit_axis2,
+                           dt_basis: dict[str, Transform] = dt_basis,
+                           ) -> dict[str, float]:
+                basis_now = grip_ik._bases_from_angles(
+                    chain, dof_bones, base, rl, axis,
+                    angles_now, dt_basis,
+                )
+                posed_now = grip_ik._fk(chain, base, rl, basis_now)
+                out: dict[str, float] = {}
+                for j2, bone2 in enumerate(chain):
+                    if j2 + 1 >= len(chain):
+                        continue
+                    prev_p = (posed_now[chain[j2 - 1]].translation if j2 > 0
+                              else base.translation)
+                    joint_p = posed_now[bone2].translation
+                    child_p = posed_now[chain[j2 + 1]].translation
+                    u = (prev_p.x - joint_p.x, prev_p.y - joint_p.y,
+                         prev_p.z - joint_p.z)
+                    v = (child_p.x - joint_p.x, child_p.y - joint_p.y,
+                         child_p.z - joint_p.z)
+                    du = math.sqrt(sum(x * x for x in u)) or 1.0
+                    dv = math.sqrt(sum(x * x for x in v)) or 1.0
+                    dot_uv = sum(a * b for a, b in zip(u, v, strict=True))
+                    cosang = max(-1.0, min(1.0, dot_uv / (du * dv)))
+                    out[bone2] = 180.0 - math.degrees(math.acos(cosang))
+                return out
+
+            # Slope-probed hinge targeting: sign conventions do not survive
+            # composition with the direction-transfer pre-basis, so measure
+            # each joint's actual d(interior)/d(hinge) with a probe and solve
+            # the delta from it. Two passes absorb proximal/distal coupling.
+            angles: dict[str, float] = {}
+            for _pass in range(2):
+                for depth, joint in enumerate(dof_bones):
+                    if depth < len(archetype):
+                        target_deg = float(archetype[depth])
+                    else:
+                        target_deg = float(archetype[-1]) * 0.66
+                    base_int = _interiors(angles).get(joint)
+                    if base_int is None:
+                        continue
+                    probe = dict(angles)
+                    probe[joint] = angles.get(joint, 0.0) + 0.2
+                    probed_int = _interiors(probe).get(joint)
+                    if probed_int is None:
+                        continue
+                    slope = (probed_int - base_int) / 0.2
+                    if abs(slope) < 5.0:  # degenerate: hinge barely moves it
+                        continue
+                    # slope is degrees-of-interior per radian-of-hinge
+                    delta = (target_deg - base_int) / slope
+                    delta = max(-math.pi / 2, min(math.pi / 2, delta))
+                    angles[joint] = angles.get(joint, 0.0) + delta
+            prev_angles = warm_angles.get(key)
+            if prev_angles is not None:
+                for b in list(angles):
+                    prev = prev_angles.get(b)
+                    if prev is not None:
+                        angles[b] = min(prev + hinge_max_step,
+                                        max(prev - hinge_max_step, angles[b]))
+            warm_angles[key] = dict(angles)
+            solved_basis = grip_ik._bases_from_angles(
+                chain, dof_bones, posed[wrist], rl, _vnorm(axis), angles,
+                dt_basis,
             )
-            warm_angles[key] = angles
-            for bone in sub:
+            for bone in chain:
                 bases[bone] = solved_basis[bone]
             solved_chains.add(key)
             tip_errors.append(grip_ik.tip_error(
-                sub, posed[wrist], rl, solved_basis, target
+                chain, posed[wrist], rl, solved_basis, target
             ))
         for name, basis in bases.items():
             pose_bone = reference.pose.bones[name]
@@ -642,7 +731,7 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any]) -> dict[st
             [auto_offset.x, auto_offset.y, auto_offset.z] if auto_offset else None
         ),
         "grip": {
-            "mode": ("tip-solve" if solved_chains else "direction-transfer"),
+            "mode": ("grip-archetype" if solved_chains else "direction-transfer"),
             "fingers_per_frame": len(chains),
             "solved_fingers": len(solved_chains),
             # Distance of our deepest mapped finger joint from the source's
@@ -904,7 +993,8 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
     classes = classify(scene, float(cfg["w_min"]))
     corr = correspond(scene, classes, bool(cfg.get("swap_arms", False)))
     dry_run = bool(job.get("dry_run", False))
-    solved = {"frames": 0, "grip": {}} if dry_run else retarget(scene, corr, cfg)
+    solved = ({"frames": 0, "grip": {}} if dry_run
+              else retarget(scene, corr, cfg, classes))
 
     action = scene.src.animation_data.action
     frame_range = [int(action.frame_range[0]), int(action.frame_range[1])]

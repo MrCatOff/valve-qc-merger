@@ -243,6 +243,118 @@ def solve_finger_joints(
     return basis, angles
 
 
+def solve_finger_wrap(
+    chain: list[str],
+    dof: list[str],
+    base_parent_world: Transform,
+    rest_local: dict[str, Transform],
+    axis_point: Vector3,
+    radii: dict[str, float],
+    limits: dict[str, tuple[float, float]],
+    *,
+    axis: Vector3,
+    point_targets: dict[str, Vector3] | None = None,
+    pre_basis: dict[str, Transform] | None = None,
+    warm_start: dict[str, float] | None = None,
+    max_step: float | None = None,
+) -> tuple[dict[str, Transform], dict[str, float]]:
+    """Wrap a finger around the grip cylinder the ORIGINAL fingers define.
+
+    The source hand's finger joints lie on the weapon's grip surface; the
+    grip is a cylinder through ``axis_point`` along ``axis`` with each
+    child's radius taken from the SOURCE joint. Every DOF joint curls (in
+    the calibrated positive direction) until its child meets the cylinder:
+    the child's hinge circle (centre = the joint, in the hinge plane) is
+    intersected with the grip circle, and the FIRST intersection reached by
+    curling is taken — never the uncurl direction, so longer reference
+    segments travel further around the grip exactly like an authored
+    big-hand grip (gold pair: flatter knuckle, deeper curl). A size-matched
+    hand meets the cylinder immediately and keeps the source pose.
+    """
+    axis = _norm(axis)
+
+    def plane(v: Vector3) -> tuple[float, float]:
+        # 2-D coordinates in the hinge plane (any fixed orthonormal pair).
+        return (v.x * _U.x + v.y * _U.y + v.z * _U.z,
+                v.x * _W.x + v.y * _W.y + v.z * _W.z)
+
+    # Fixed in-plane basis (u, w) with w = axis x u, so the signed rotation
+    # from one in-plane direction to another equals the hinge angle delta.
+    seed = Vector3(1.0, 0.0, 0.0)
+    if abs(axis.x) > 0.9:
+        seed = Vector3(0.0, 1.0, 0.0)
+    _U = _norm(_project_off_axis(seed, axis))
+    _W = Vector3(axis.y * _U.z - axis.z * _U.y,
+                 axis.z * _U.x - axis.x * _U.z,
+                 axis.x * _U.y - axis.y * _U.x)
+
+    a2 = plane(axis_point)
+    angles: dict[str, float] = {b: 0.0 for b in dof}
+    for _pass in range(3):
+        for joint in dof:
+            j = chain.index(joint)
+            child = chain[j + 1] if j + 1 < len(chain) else None
+            radius = radii.get(child) if child is not None else None
+            if child is None or radius is None:
+                continue
+            basis = _bases_from_angles(
+                chain, dof, base_parent_world, rest_local, axis, angles, pre_basis
+            )
+            posed = _fk(chain, base_parent_world, rest_local, basis)
+            p2 = plane(posed[joint].translation)
+            c2 = plane(posed[child].translation)
+            cx, cy = c2[0] - p2[0], c2[1] - p2[1]
+            big_l = math.hypot(cx, cy)
+            point = (point_targets or {}).get(child)
+            if point is not None:
+                # Knuckle-line joint: aim the child at the ORIGINAL joint's
+                # position (the authored knuckle stays OFF the grip surface).
+                t2 = plane(point)
+                tx, ty = t2[0] - p2[0], t2[1] - p2[1]
+                if big_l < 1e-6 or math.hypot(tx, ty) < 1e-6:
+                    continue
+                delta = math.atan2(cx * ty - cy * tx, cx * tx + cy * ty)
+                lo, hi = limits.get(joint, (-math.pi, math.pi))
+                angles[joint] = min(hi, max(lo, angles[joint] + delta))
+                continue
+            dx, dy = a2[0] - p2[0], a2[1] - p2[1]
+            d = math.hypot(dx, dy)
+            if big_l < 1e-6 or d < 1e-6:
+                continue
+            # Intersect the child's hinge circle (P, L) with the grip circle
+            # (A, r); no intersection => the child cannot reach the surface,
+            # leave the direction-transferred pose alone.
+            if d > big_l + radius or d < abs(big_l - radius):
+                continue
+            h = (big_l * big_l - radius * radius + d * d) / (2.0 * d)
+            q = max(0.0, big_l * big_l - h * h) ** 0.5
+            mx, my = p2[0] + h * dx / d, p2[1] + h * dy / d
+            candidates = [
+                (mx - q * dy / d, my + q * dx / d),
+                (mx + q * dy / d, my - q * dx / d),
+            ]
+            deltas = []
+            for tx, ty in candidates:
+                delta = math.atan2(cx * (ty - p2[1]) - cy * (tx - p2[0]),
+                                   cx * (tx - p2[0]) + cy * (ty - p2[1]))
+                deltas.append(delta)
+            positive = [x for x in deltas if x >= -1e-6]
+            delta = min(positive) if positive else max(deltas)
+            lo, hi = limits.get(joint, (-math.pi, math.pi))
+            angles[joint] = min(hi, max(lo, angles[joint] + delta))
+
+    if warm_start is not None and max_step is not None:
+        for b in dof:
+            prev = warm_start.get(b)
+            if prev is not None and b in angles:
+                angles[b] = min(prev + max_step, max(prev - max_step, angles[b]))
+
+    basis = _bases_from_angles(
+        chain, dof, base_parent_world, rest_local, axis, angles, pre_basis
+    )
+    return basis, angles
+
+
 def calibrate_axis_sign(
     chain: list[str],
     dof: list[str],
@@ -283,4 +395,11 @@ def tip_error(
     return posed[chain[-1]].translation.distance_to(target_tip)
 
 
-__all__ = ["rest_locals", "solve_finger", "solve_finger_joints", "calibrate_axis_sign", "tip_error"]
+__all__ = [
+    "calibrate_axis_sign",
+    "rest_locals",
+    "solve_finger",
+    "solve_finger_joints",
+    "solve_finger_wrap",
+    "tip_error",
+]

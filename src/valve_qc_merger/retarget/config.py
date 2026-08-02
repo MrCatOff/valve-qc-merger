@@ -115,6 +115,12 @@ class RetargetConfig:
     # knuckle, deeper curl). None => auto: solve only for fingers that
     # overshoot their source joint by > 0.3u (size-matched hands are no-ops).
     grip_tip_solve: bool | None = None
+    # Authored grip articulation targets: per finger (1=index .. 4=pinky),
+    # interior angles in degrees at the knuckle and middle joints, measured
+    # from v_g_deagle's idle (the reference hand holding a pistol grip).
+    # Applied only to gripping fingers of size-mismatched hands; None keeps
+    # the built-in gold-pair table.
+    grip_archetype: dict[str, tuple[float, float]] | None = None
     allow_rerig: bool = False  # §11.3
     frustum_policy: FrustumPolicy = "warn"  # §11.4
     finger_priority: tuple[str, ...] = ("pinky", "ring", "middle", "index", "thumb")  # §11.5
