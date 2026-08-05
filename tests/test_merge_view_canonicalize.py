@@ -41,9 +41,9 @@ def test_anaconda_canonicalises_exactly(tmp_path: Path) -> None:
             for n in smd.nodes
         }
         # Canonical structure enforced (this rig had reversed forearms).
-        assert parent_of["Bip01 L Forearm"] == "Bip01"
-        assert parent_of["Bip01 L Hand"] == "Bip01 L Forearm"
-        assert parent_of["Bip01 R Finger0"] == "Bip01 R Hand"
+        assert parent_of["ValveBiped.Bip01_L_Forearm"] == "Bip01"
+        assert parent_of["ValveBiped.Bip01_L_Hand"] == "ValveBiped.Bip01_L_Forearm"
+        assert parent_of["ValveBiped.Bip01_R_Finger0"] == "ValveBiped.Bip01_R_Hand"
         # No Nubs, no orphan roots besides Bip01.
         assert not any(n.endswith("Nub") for n in names)
         roots = [n.name for n in smd.nodes if n.parent == -1]

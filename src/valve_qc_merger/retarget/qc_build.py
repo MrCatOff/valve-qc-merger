@@ -34,7 +34,7 @@ class QcSequence:
     name: str
     fps: float | None
     events: tuple[str, ...]
-    smd: str | None = None  # animation SMD path as written in the QC (backslashes)
+    smd: str | None = None  # animation SMD path as parsed from the QC (either separator)
 
 
 def _matching_brace(text: str, open_index: int) -> int:
@@ -181,7 +181,10 @@ def build_qc(
 
     for seq in sequences:
         lines.append(f'$sequence "{seq.name}" {{')
-        lines.append(f'\t"{anims_subdir}\\{seq.name}"')
+        # Forward slash: GoldSrc studiomdl accepts it on Windows and it is the
+        # only separator the native macOS studiomdl port resolves (a backslash
+        # reads as a literal filename char there -> "anims\idle.smd doesn't exist").
+        lines.append(f'\t"{anims_subdir}/{seq.name}"')
         for event in seq.events:
             lines.append(f"\t{event}")
         if seq.fps is not None:

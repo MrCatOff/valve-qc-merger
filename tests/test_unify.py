@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-
 from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.retarget.correspondence import BoneMap, Correspondence, RigBone
 from valve_qc_merger.retarget.unify import (
-    UnifyError,
     assign_wrists,
     discover_guns,
 )
@@ -69,10 +66,45 @@ def test_assign_wrists_matches_gun_to_its_arm() -> None:
     assert assignment == {"gunL": "Bip01 L Hand", "gunR": "Bip01 R Hand"}
 
 
-def test_assign_wrists_rejects_non_bijection() -> None:
-    # Both guns hang off the same arm -> two guns want one wrist: not a bijection.
+# A grafted template rig (glock18): the gun is a SEPARATE root tree, disjoint
+# from the hands, whose root carries no weapon weight (a pure pivot) but whose
+# subtree does. Its root is placed near the left wrist (x≈0).
+_SEP_SRC = [
+    _bone("armL", None, 0.0),
+    _bone("foreL", "armL", 0.0),
+    _bone("wristL", "foreL", 0.0),
+    _bone("fingerL", "wristL", 0.0),
+    _bone("armR", None, 10.0),
+    _bone("foreR", "armR", 10.0),
+    _bone("wristR", "foreR", 10.0),
+    _bone("fingerR", "wristR", 10.0),
+    _bone("USP", None, 1.0),          # separate weapon root (unweighted pivot)
+    _bone("gunBody", "USP", 1.0),     # weapon geometry
+]
+_SEP_HAND = {"armL", "foreL", "wristL", "fingerL", "armR", "foreR", "wristR", "fingerR"}
+_SEP_WEAPON = {"gunBody"}
+
+
+def test_discover_guns_finds_separate_root() -> None:
+    guns = discover_guns(_SEP_SRC, _SEP_HAND, _SEP_WEAPON)
+    assert {g.root for g in guns} == {"USP"}
+    gun = guns[0]
+    assert gun.src_parent is None              # a disjoint root, not off a hand
+    assert set(gun.bones) == {"USP", "gunBody"}
+
+
+def test_assign_wrists_attaches_separate_root_to_nearest_wrist() -> None:
+    guns = discover_guns(_SEP_SRC, _SEP_HAND, _SEP_WEAPON)
+    # USP sits at x=1, so the left wrist (x=0) is nearer than the right (x=10).
+    assert assign_wrists(guns, _SEP_SRC, _corr()) == {"USP": "Bip01 L Hand"}
+
+
+def test_assign_wrists_allows_multiple_guns_per_arm() -> None:
+    # A multi-part weapon: two weapon roots both hang off the LEFT arm (gun body
+    # + a loose shell/prop). Both attach to that arm's wrist — no bijection is
+    # enforced, since the reach rule already sends each to its own arm.
     src = [b for b in _SRC if b.name not in {"gunR", "gunR_tip"}]
     src = [*src, _bone("gunR", "foreL", 0.5), _bone("gunR_tip", "gunR", 0.5)]
     guns = discover_guns(src, _HAND, _WEAPON)
-    with pytest.raises(UnifyError, match="bijection"):
-        assign_wrists(guns, src, _corr())
+    assignment = assign_wrists(guns, src, _corr())
+    assert assignment == {"gunL": "Bip01 L Hand", "gunR": "Bip01 L Hand"}

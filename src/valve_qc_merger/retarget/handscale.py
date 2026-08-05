@@ -33,6 +33,14 @@ _FINGERS = (1, 2, 3, 4)
 _SEGMENTS = ("", "1", "2")  # proximal, middle, distal suffixes
 
 
+def _ref_key(name: str) -> str:
+    """Canonical key for a reference bone so the two naming conventions of the
+    storage/hands rig compare equal: the legacy ``Bip01 L Hand`` (spaces) and
+    the ValveBiped ``ValveBiped.Bip01_L_Hand`` (dotted, underscored). Lets the
+    ``f"Bip01 {side} Hand"`` lookups below match either form."""
+    return name.replace("ValveBiped.", "").replace("_", " ")
+
+
 @dataclass(frozen=True)
 class HandScale:
     """Wrist-down size of a model's hands relative to the reference hands."""
@@ -81,9 +89,9 @@ def measure_hand_scale(
     when the rig cannot be matched at all (same failure the pipeline reports).
     """
     match = match_hands(mesh, reference, include)
-    to_source = {new: old for old, new in match.renames.items()}
+    to_source = {_ref_key(new): old for old, new in match.renames.items()}
     src_worlds = _rest_worlds(mesh)
-    ref_worlds = _rest_worlds(reference_smd)
+    ref_worlds = {_ref_key(k): v for k, v in _rest_worlds(reference_smd).items()}
 
     ratios: list[float] = []
     surpluses: list[float] = []
@@ -211,7 +219,7 @@ def auto_hand_offsets(scale: HandScale) -> dict[str, Vector3]:
     The median authored conversion shift, scaled by the measured surplus.
     Sides absent from the hand match are omitted.
     """
-    to_source = {new: old for old, new in scale.renames.items()}
+    to_source = {_ref_key(new): old for old, new in scale.renames.items()}
     out: dict[str, Vector3] = {}
     for side, constants in HAND_OFFSET_PER_SURPLUS.items():
         if to_source.get(f"Bip01 {side} Hand") is None:
@@ -236,7 +244,7 @@ def grip_sides(
     when its wrist-to-weapon-bone distance stays within GRIP_RIGID_STD across
     every provided animation.
     """
-    to_source = {new: old for old, new in scale.renames.items()}
+    to_source = {_ref_key(new): old for old, new in scale.renames.items()}
     sides: list[str] = []
     for side in ("R", "L"):
         wrist = to_source.get(f"Bip01 {side} Hand")

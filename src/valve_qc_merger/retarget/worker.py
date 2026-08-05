@@ -44,6 +44,7 @@ from valve_qc_merger.retarget.correspondence import (  # noqa: E402
     Correspondence,
     CorrespondenceError,
     RigBone,
+    _side_of,
     build_correspondence,
 )
 from valve_qc_merger.retarget.pose_retarget import (  # noqa: E402
@@ -628,7 +629,7 @@ def retarget(scene: Scene, corr: Correspondence, cfg: dict[str, Any],
             # corrections on top of direction transfer. Only fingers whose
             # source distal sits near the weapon are touched — a free hand
             # keeps its own animation.
-            chain_side = "L" if " L " in f" {wrist} " else "R"
+            chain_side = "L" if _side_of(wrist) == "L" else "R"
             if chain_side not in grip_side_set:
                 continue  # support/free hand keeps its own animation
             if key not in grip_near:
@@ -841,8 +842,13 @@ def key_guns(
             f"gun bones not in XYZ rotation mode (euler keys would be dead): {non_euler}"
         )
     shift = BlenderVector((offset[0], offset[1], offset[2])) if offset else None
-    roots = {name for name in gun_names if src.data.bones[name].parent is not None
-             and src.data.bones[name].parent.name not in gun_names}
+    # Subtree roots get their absolute armature-space matrix set (reproducing the
+    # source world pose under whatever parent unify assigned); deeper bones copy
+    # their unchanged local basis. A gun that is a SEPARATE source root
+    # (parent is None — grafted template rigs) is a subtree root too.
+    roots = {name for name in gun_names
+             if src.data.bones[name].parent is None
+             or src.data.bones[name].parent.name not in gun_names}
     scene_ctx = bpy.context.scene
     for frame in range(start, end + 1):
         scene_ctx.frame_set(frame)

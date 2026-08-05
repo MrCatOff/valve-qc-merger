@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from valve_qc_merger.models.geometry import Vector3
+from valve_qc_merger.retarget.correspondence import _side_of
 from valve_qc_merger.transform import (
     Matrix3,
     Transform,
@@ -168,7 +169,7 @@ def _solve_anchors(
         target = src_pose[anchor.source_wrist].translation
         offset: Vector3 | None
         if isinstance(hand_offset, dict):
-            side = "L" if " L " in f" {anchor.wrist} " else "R"
+            side = "L" if _side_of(anchor.wrist) == "L" else "R"
             offset = hand_offset.get(side)
         else:
             offset = hand_offset

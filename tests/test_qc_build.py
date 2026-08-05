@@ -86,8 +86,8 @@ def test_build_qc_points_at_merged_mesh_and_anims() -> None:
         surviving_bones={"Bone63"}, model_name="v_elite-PV.mdl",
     )
     assert '$body "studio" "v_elite-PV"' in qc
-    assert '"anims\\idle"' in qc
-    assert '"anims\\shoot_right1"' in qc
+    assert '"anims/idle"' in qc
+    assert '"anims/shoot_right1"' in qc
     assert '{ event 5011 0 "11" }' in qc
     assert '$attachment 0 "Bone63"' in qc
     assert "Bone01" not in qc  # deleted arm bone must not survive in the QC

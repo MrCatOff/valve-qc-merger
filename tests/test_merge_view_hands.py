@@ -37,11 +37,11 @@ def test_grafted_rig_maps_onto_reference_names() -> None:
     assert include is not None and "Bip01_L_Hand" in include
     match = match_hands(mesh, reference, include)
     renames = match.renames
-    assert renames["Bip01_L_Hand"] == "Bip01 L Hand"
-    assert renames["Bip01_R_Hand"] == "Bip01 R Hand"
-    assert renames["Bip01_L_Finger0"] == "Bip01 L Finger0"  # thumb to thumb
-    assert renames["Bip01_R_Finger4"] == "Bip01 R Finger4"
-    assert renames["Bip01_L_Forearm"] == "Bip01 L Forearm"  # reversed forearm mapped
+    assert renames["Bip01_L_Hand"] == "ValveBiped.Bip01_L_Hand"
+    assert renames["Bip01_R_Hand"] == "ValveBiped.Bip01_R_Hand"
+    assert renames["Bip01_L_Finger0"] == "ValveBiped.Bip01_L_Finger0"  # thumb to thumb
+    assert renames["Bip01_R_Finger4"] == "ValveBiped.Bip01_R_Finger4"
+    assert renames["Bip01_L_Forearm"] == "ValveBiped.Bip01_L_Forearm"  # reversed forearm mapped
     # 3-joint fingers: the reference Nubs stay unmatched.
     assert all(name.endswith("Nub") for name in match.held_reference)
     assert len(match.held_reference) == 10

@@ -43,7 +43,7 @@ def _hand_fraction(smd: Smd) -> float:
     for t in smd.triangles:
         for v in t.vertices:
             total += 1
-            if name_of[v.bone].startswith("Bip01"):
+            if "Bip01" in name_of[v.bone]:
                 hand += 1
     return hand / total if total else 0.0
 

@@ -54,8 +54,8 @@ def _grip_of_source(model_dir: Path, weapon_stem_hint: str) -> GripMeasure:
                       if weapon_stem_hint in stem)
     idle = model.anims.get("idle1") or next(iter(model.anims.values()))
     return grip_measure(
-        idle, to_src["Bip01 R Hand"],
-        [to_src[f"Bip01 R Finger{i}"] for i in (1, 2, 3, 4)],
+        idle, to_src["ValveBiped.Bip01_R_Hand"],
+        [to_src[f"ValveBiped.Bip01_R_Finger{i}"] for i in (1, 2, 3, 4)],
         dominant_weapon_bone(weapon_smd),
     )
 
@@ -105,7 +105,7 @@ def test_retarget_reproduces_gold_placement(tmp_path: Path) -> None:
     shutil.copytree(_PAIR / "v_deagle", weapon_dir)
     out = tmp_path / "out"
     proc = subprocess.run(
-        ["python", "-m", "valve_qc_merger", "retarget",
+        ["python", "-m", "valve_qc_merger", "retarget", "--force",
          "--weapon-dir", str(weapon_dir), "--out", str(out)],
         capture_output=True, text=True, timeout=600,
     )
@@ -146,8 +146,8 @@ def test_retarget_reproduces_gold_placement(tmp_path: Path) -> None:
     out_worlds = fk_worlds(out_idle, out_idle.frames[0])
     out_index = {n.name: n.index for n in out_idle.nodes}
     for side in ("R", "L"):
-        src_wrist = src_worlds[src_index[to_src[f"Bip01 {side} Hand"]]].translation
-        got = out_worlds[out_index[f"Bip01 {side} Hand"]].translation
+        src_wrist = src_worlds[src_index[to_src[f"ValveBiped.Bip01_{side}_Hand"]]].translation
+        got = out_worlds[out_index[f"ValveBiped.Bip01_{side}_Hand"]].translation
         expected = tuple(
             getattr(src_wrist, axis) + HAND_OFFSET_PER_SURPLUS[side][i] * surplus
             for i, axis in enumerate("xyz")
@@ -169,7 +169,7 @@ def test_retarget_reproduces_gold_placement(tmp_path: Path) -> None:
         return 180.0 - _math.degrees(_math.acos(c))
 
     for finger in (2, 3):
-        pip = interior([f"Bip01 L Finger{finger}",
-                        f"Bip01 L Finger{finger}1",
-                        f"Bip01 L Finger{finger}2"])
+        pip = interior([f"ValveBiped.Bip01_L_Finger{finger}",
+                        f"ValveBiped.Bip01_L_Finger{finger}1",
+                        f"ValveBiped.Bip01_L_Finger{finger}2"])
         assert pip >= 60.0, (finger, pip)

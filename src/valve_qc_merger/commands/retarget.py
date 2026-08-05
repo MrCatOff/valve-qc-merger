@@ -34,6 +34,15 @@ EXIT_FAIL = 2
 EXIT_DISCOVERY = 3
 EXIT_ENV = 4
 
+# Stage-1 hand-compatibility gate. Native CSO-2009 hands (ours — male/female)
+# measure 1:1 against the reference; a foreign hand mesh is meaningfully
+# shorter (deagle 0.857, elite 0.828, anaconda's girl hand 0.926). Anything
+# inside this band is "our hands" and takes a straight mesh swap.
+_COMPAT_TOLERANCE = 0.01
+_INCOMPATIBLE_MESSAGE = (
+    "Hand conversion is currently not possible for this type of model"
+)
+
 
 class RetargetCommand(Command):
     """Retarget a weapon's animations onto the reference hands."""
@@ -47,10 +56,20 @@ class RetargetCommand(Command):
                                  "storage/hands/reference_hands.smd or config")
         parser.add_argument("--weapon-dir", type=Path, required=True,
                             help="weapon directory (holds *-PV.smd, hand mesh, anims)")
+        parser.add_argument("--category", default="uncategorized",
+                            help="destination bucket under storage/retarget/ "
+                                 "(default: uncategorized); the model lands in "
+                                 "storage/retarget/{category}/{model}")
         parser.add_argument("--anims",
                             help="glob (relative to weapon-dir) selecting animation SMDs; "
                                  "default: the paths listed by the weapon's QC")
-        parser.add_argument("--out", type=Path, required=True, help="output directory")
+        parser.add_argument("--out", type=Path,
+                            help="output directory; overrides the default "
+                                 "storage/retarget/{category}/{model} location")
+        parser.add_argument("--force", action="store_true",
+                            help="run the geometric retarget even when the model's "
+                                 "hands are not ours (bypasses the stage-1 "
+                                 "compatibility gate; the shape conversion is WIP)")
         parser.add_argument("--config", type=Path, help="TOML config; omitted keys take defaults")
         parser.add_argument("--weapon-pv", type=Path, help="override the *-PV.smd weapon mesh")
         parser.add_argument("--original-hands", type=Path, help="override the original hand mesh")
@@ -80,7 +99,41 @@ class RetargetCommand(Command):
         except DriverError as exc:
             print(f"error: {exc}")
             return EXIT_DISCOVERY  # bad/missing inputs
-        config = _resolve_hand_offset(inputs, config)
+
+        try:
+            out_dir = _resolve_out_dir(args)
+        except DriverError as exc:
+            print(f"error: {exc}")
+            return EXIT_DISCOVERY
+
+        # Stage-1 hand-compatibility split: a model whose bundled hands ARE
+        # ours (finger chains 1:1 with the reference) takes a straight
+        # male/female mesh swap with its animation intact; a model with foreign
+        # hands needs the shape conversion that is not available yet (stage 2),
+        # so it is reported and skipped. --force bypasses the gate and runs the
+        # geometric offset retarget regardless.
+        if args.force:
+            config = _resolve_hand_offset(inputs, config)
+        else:
+            compatible, detail = _hands_compatible(inputs)
+            print(detail)
+            if not compatible:
+                print(_INCOMPATIBLE_MESSAGE)
+                return EXIT_OK
+            # Native hands are 1:1 with ours, so the direction transfer already
+            # reproduces the authored grip angles exactly. Suppress the size-
+            # mismatch compensations meant for foreign hands: the auto wrist
+            # offset (which would shift both hands ~0.7u off the weapon) and the
+            # tip-solve curl (which the residual drift would then trigger). Any
+            # value the user set in --config still wins.
+            config = dataclasses.replace(
+                config,
+                hand_offset=config.hand_offset or (0.0, 0.0, 0.0),
+                grip_tip_solve=(False if config.grip_tip_solve is None
+                                else config.grip_tip_solve),
+                grip_sides=config.grip_sides or (),
+            )
+
         try:
             assert_identical_node_tables(inputs)  # §5 gate
             assert_variant_skeletons(inputs)  # hand variants share the reference rig
@@ -89,13 +142,14 @@ class RetargetCommand(Command):
             print(f"error: {exc}")
             return EXIT_ENV
 
-        args.out.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  output: {out_dir}")
         do_export = not args.dry_run and not args.no_export
         weapon_stem = inputs.weapon_pv.stem
         results: list[SequenceResult] = []
         for index, name in enumerate(inputs.sequences):
             result = run_sequence(
-                blender, inputs, name, config, args.out,
+                blender, inputs, name, config, out_dir,
                 dry_run=args.dry_run, export=do_export,
                 export_mesh=do_export and index == 0, weapon_stem=weapon_stem,
             )
@@ -105,10 +159,10 @@ class RetargetCommand(Command):
         verify = None
         verify_ok = True
         if do_export and any(r.ok for r in results):
-            verify, qc_out = finalize_export(inputs, args.out, results, config)
+            verify, qc_out = finalize_export(inputs, out_dir, results, config)
             verify_ok = _print_verify(verify, qc_out)
 
-        _write_summary(args.out, config, blender, results, verify)
+        _write_summary(out_dir, config, blender, results, verify)
         code = _exit_code(results)
         if code == EXIT_OK and not verify_ok:
             return EXIT_FAIL
@@ -131,6 +185,59 @@ def _load_config(args: argparse.Namespace) -> RetargetConfig:
             variants[name] = path
         config = dataclasses.replace(config, hand_variants=variants)
     return config
+
+
+def _resolve_out_dir(args: argparse.Namespace) -> Path:
+    """The output directory: an explicit ``--out`` wins, else the model lands
+    under ``storage/retarget/{category}/{model}`` (model = weapon-dir name)."""
+    if args.out is not None:
+        return args.out
+    category = args.category.strip()
+    if not category or "/" in category or "\\" in category or category in {".", ".."}:
+        raise DriverError(f"invalid --category {args.category!r} (must be a plain name)")
+    model = args.weapon_dir.name or args.weapon_dir.resolve().name
+    return resource_path(Path("storage") / "retarget" / category / model)
+
+
+def _measure_original_hands(inputs: Inputs) -> object | None:
+    """HandScale of the model's bundled hands vs the reference, or None when it
+    cannot be measured. Arm discovery is restricted to vertex-weighted bones —
+    the same weights the pipeline uses; helper stubs under a wrist would
+    otherwise read as a sixth finger (the anaconda)."""
+    from valve_qc_merger.merge_view.hands import load_reference_rig
+    from valve_qc_merger.parsers.smd import parse_smd_file
+    from valve_qc_merger.retarget.handscale import measure_hand_scale
+
+    try:
+        hands_smd = parse_smd_file(inputs.original_hands)
+        name_of = {n.index: n.name for n in hands_smd.nodes}
+        weighted = {name_of[v.bone]
+                    for t in hands_smd.triangles for v in t.vertices}
+        return measure_hand_scale(
+            hands_smd,
+            load_reference_rig(inputs.reference),
+            parse_smd_file(inputs.reference),
+            include=weighted or None,
+        )
+    except Exception:  # noqa: BLE001 - unmeasurable => treated as incompatible
+        return None
+
+
+def _hands_compatible(inputs: Inputs) -> tuple[bool, str]:
+    """Stage-1 split. Returns (compatible, human-readable detail). Compatible
+    means the model's bundled hands ARE ours (finger-chain length 1:1 with the
+    reference), so replacing them with male/female preserves the animation. A
+    size mismatch (foreign hands) needs the shape conversion of stage 2."""
+    scale = _measure_original_hands(inputs)
+    if scale is None or not scale.chains:  # type: ignore[attr-defined]
+        return False, "  hand scale: the model's hand rig could not be matched to the reference"
+    ratio = scale.ratio  # type: ignore[attr-defined]
+    if abs(ratio - 1.0) < _COMPAT_TOLERANCE:
+        return True, (f"  hand scale: {ratio:.3f}x vs reference — native hands; "
+                      "swapping to male/female")
+    return False, (f"  hand scale: {ratio:.3f}x vs reference "
+                   f"(chain surplus {scale.surplus:+.2f}u) — foreign hands"  # type: ignore[attr-defined]
+                   )
 
 
 def _selected(raw: str | None) -> set[str] | None:
@@ -201,29 +308,15 @@ def _resolve_hand_offset(inputs: Inputs, config: RetargetConfig) -> RetargetConf
     run — measurement failures fall back to the worker's palm-forward auto.
     """
     try:
-        from valve_qc_merger.merge_view.hands import load_reference_rig
         from valve_qc_merger.parsers.smd import parse_smd_file
         from valve_qc_merger.retarget.handscale import (
             auto_hand_offsets,
             dominant_weapon_bone,
             grip_sides,
-            measure_hand_scale,
         )
 
-        hands_smd = parse_smd_file(inputs.original_hands)
-        # Restrict arm discovery to vertex-weighted bones — the same weights
-        # signal the pipeline uses; helper stubs under a wrist would
-        # otherwise read as a sixth finger (anaconda).
-        name_of = {n.index: n.name for n in hands_smd.nodes}
-        weighted = {name_of[v.bone]
-                    for t in hands_smd.triangles for v in t.vertices}
-        scale = measure_hand_scale(
-            hands_smd,
-            load_reference_rig(inputs.reference),
-            parse_smd_file(inputs.reference),
-            include=weighted or None,
-        )
-        if not scale.chains:
+        scale = _measure_original_hands(inputs)
+        if scale is None or not scale.chains:
             print("  hand scale: no complete finger chains matched")
             return config
         if abs(scale.ratio - 1.0) < 0.01:

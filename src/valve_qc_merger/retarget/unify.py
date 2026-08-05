@@ -18,17 +18,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from valve_qc_merger.models.geometry import Vector3
 from valve_qc_merger.retarget.correspondence import Correspondence, RigBone
 
 
 @dataclass(frozen=True)
 class GunSubtree:
     """One gun: its root bone, every bone in the subtree (parents before children),
-    and the source bone its root hangs off (always a hand bone)."""
+    and the source bone its root hangs off — a hand bone, or None when the gun is
+    a separate root tree (grafted template rigs, e.g. glock18's ``USP``)."""
 
     root: str
     bones: tuple[str, ...]
-    src_parent: str
+    src_parent: str | None
 
 
 class UnifyError(RuntimeError):
@@ -66,16 +68,21 @@ def discover_guns(
 ) -> list[GunSubtree]:
     """Find every gun subtree (§7.7, §5 gun-subtree→arm bijection input).
 
-    A gun root is a non-hand bone whose parent is a hand bone; its subtree must
-    contain at least one weapon-weighted bone (guards against stray non-hand
-    bones that carry no weapon geometry).
+    A gun root is the top of a weapon-bearing subtree that sits OUTSIDE the hand
+    rig: a non-hand bone whose parent is a hand bone (the weapon grafted onto the
+    arm — v_elite, automag) OR None (a separate weapon root, as in grafted
+    template rigs — glock18's ``USP`` tree hangs off its own root, disjoint from
+    the hands). Its subtree must contain at least one weapon-weighted bone
+    (guards against stray non-hand bones that carry no weapon geometry).
     """
     parent = _parent_map(src_bones)
     children = _children_map(src_bones)
     guns: list[GunSubtree] = []
     for bone in src_bones:
         p = parent.get(bone.name)
-        if bone.name in hand_set or p is None or p not in hand_set:
+        # skip hand bones and mid-subtree bones (a non-hand, non-None parent
+        # means this bone sits inside a larger gun subtree, not at its top).
+        if bone.name in hand_set or (p is not None and p not in hand_set):
             continue
         bones = _subtree(bone.name, children)
         if not any(name in weapon_set for name in bones):
@@ -83,6 +90,10 @@ def discover_guns(
         guns.append(GunSubtree(bone.name, bones, p))
     guns.sort(key=lambda g: g.root)
     return guns
+
+
+def _dist_sq(a: Vector3, b: Vector3) -> float:
+    return (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2
 
 
 def _ancestors(name: str, parent: dict[str, str | None]) -> list[str]:
@@ -121,6 +132,7 @@ def assign_wrists(
         reach = {src_wrist, *_ancestors(src_wrist, parent)}
         wrist_reach.append((ref_target, src_wrist, reach))
 
+    head_of = {b.name: b.head for b in src_bones}
     assignment: dict[str, str] = {}
     for gun in guns:
         candidates = [
@@ -128,17 +140,30 @@ def assign_wrists(
             for ref_target, _src_wrist, reach in wrist_reach
             if gun.src_parent in reach
         ]
-        if not candidates:
+        if candidates:
+            # deepest wrist chain (smallest reach set) wins — the nearest arm
+            candidates.sort()
+            assignment[gun.root] = candidates[0][1]
+            continue
+        # A separate weapon root (src_parent None) shares no ancestor with any
+        # wrist. The runtime pose is set absolutely (key_guns copies the source
+        # armature-space matrix), so the parent is only structural — attach the
+        # gun to the geometrically nearest wrist at rest.
+        gun_head = head_of.get(gun.root)
+        if gun_head is None:
             raise UnifyError(
                 f"gun {gun.root} (off {gun.src_parent}) matches no arm's wrist chain"
             )
-        # deepest wrist chain (smallest reach set) wins — the nearest arm
-        candidates.sort()
-        assignment[gun.root] = candidates[0][1]
+        assignment[gun.root] = min(
+            wrist_pairs, key=lambda pair: _dist_sq(gun_head, head_of[pair[1]])
+        )[0]
 
-    targets = list(assignment.values())
-    if len(set(targets)) != len(targets):
-        raise UnifyError(f"arm→gun map is not a bijection: {assignment}")
+    # Multiple guns MAY share a wrist: a single weapon often decomposes into
+    # several weapon-bearing roots (the gun body plus loose shells, a magazine,
+    # charm/necklace props) that all belong to one hand. The reach rule already
+    # sends each grafted gun to its own arm's wrist, so no bijection is enforced
+    # — an akimbo rig still distributes naturally (each gun hangs off a distinct
+    # forearm), while multi-part weapons attach their extras to the same wrist.
     return assignment
 
 
