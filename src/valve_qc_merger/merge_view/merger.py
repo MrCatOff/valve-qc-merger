@@ -321,8 +321,15 @@ def merge_models(
     write_manifest: bool = True,
     textures: TextureOptions | None = None,
     sound_path: str | None = None,
+    shared_hands: bool = False,
 ) -> MergeReport:
-    """Write the merged model directory; returns the budget report."""
+    """Write the merged model directory; returns the budget report.
+
+    With ``shared_hands`` the models all wear the same hands (our retargeted
+    male/female, identical bind): one shared ``hands`` bodygroup (2 submodels)
+    is emitted for the whole model instead of one hands entry per weapon, so
+    ``pev_body`` stays ``hand + weapon x 2`` (< 255) rather than ``weapon x hands``.
+    """
     report = MergeReport()
     models = [model for model, _ in pairs]
     skeleton = merged_skeleton(models)
@@ -336,15 +343,29 @@ def merge_models(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Shared hands: take the first model's hand variants (all models carry the
+    # same male/female bind, verified identical) as ONE shared bodygroup.
+    shared_hand_meshes: list[tuple[str, Smd]] = []
+    if shared_hands and pairs[0][1].hand_variants:
+        first_model, first_parts = pairs[0]
+        for stem in first_parts.hand_variants:
+            variant = Path(stem.replace("\\", "/")).name
+            shared_hand_meshes.append((variant, first_model.meshes[stem]))
+
     # --- textures ---------------------------------------------------------
     # Sanitise material names and stage files FIRST, so the renames land in
     # every mesh written below.
     kept: dict[str, list[Smd]] = {}
     for model, parts in pairs:
         stems = [stem for group in parts.weapon_stems for stem in group]
-        if parts.hands_stem is not None:
+        if not shared_hands and parts.hands_stem is not None:
             stems.append(parts.hands_stem)
         kept[model.name] = [model.meshes[stem] for stem in stems]
+    if shared_hand_meshes:
+        # Stage the shared hand textures once, under the first model (whose
+        # directory carries male.bmp/female.bmp); the meshes are rewritten in
+        # place, then written to the shared hands folder below.
+        kept[pairs[0][0].name].extend(mesh for _v, mesh in shared_hand_meshes)
     staged_renames, staged_names = _stage_textures(out_dir, models, kept, report)
     render_modes = _collect_render_modes(
         models, kept, staged_renames, staged_names, report,
@@ -381,13 +402,13 @@ def merge_models(
             merged_mesh = _concat_meshes([model.meshes[s] for s in group])
             stem = "weapon" if index == 0 else f"weapon_{index + 1}"
             written[model.name].append(merged_mesh)
-            paths.append(f"{model.name}\\{stem}")
+            paths.append(f"{model.name}/{stem}")
             (model_dir / f"{stem}.smd").write_text(
                 write_smd_text(merged_mesh), encoding="latin-1"
             )
         weapon_paths[model.name] = paths
         max_weapon_groups = max(max_weapon_groups, len(paths))
-        if parts.hands_stem is not None:
+        if not shared_hands and parts.hands_stem is not None:
             # Hands live IN the model's folder (prior-art layout): every mesh
             # SMD keeps its model's own bind, so a hands file only pairs with
             # its own weapon's armature — a shared folder invites importing a
@@ -396,8 +417,21 @@ def merge_models(
             (model_dir / "hands.smd").write_text(
                 write_smd_text(hands), encoding="latin-1"
             )
-            hands_paths[model.name] = f"{model.name}\\hands"
+            hands_paths[model.name] = f"{model.name}/hands"
             written[model.name].append(hands)
+
+    # Shared hands: all models share the reference bind, so ONE copy of each
+    # variant serves the whole model (folder shared safely — no foreign bind).
+    shared_hand_paths: list[str] = []
+    if shared_hand_meshes:
+        hands_dir = out_dir / "hands"
+        hands_dir.mkdir(exist_ok=True)
+        for variant, mesh in shared_hand_meshes:
+            (hands_dir / f"{variant}.smd").write_text(
+                write_smd_text(mesh), encoding="latin-1"
+            )
+            shared_hand_paths.append(f"hands/{variant}")
+            written[pairs[0][0].name].append(mesh)  # count toward overrun checks
 
     # --- animations (deduped within the part) -----------------------------
     # Recolour variants of one weapon ship byte-identical animations (and a
@@ -432,7 +466,7 @@ def merge_models(
                 )
                 seq_index = len(sequence_order)
                 sequence_order.append(
-                    (model.name, final, f"{model.name}\\{final}", meta)
+                    (model.name, final, f"{model.name}/{final}", meta)
                 )
                 seen_sequences[key] = seq_index
             else:
@@ -442,19 +476,27 @@ def merge_models(
 
     # --- bodygroups + pev_body -------------------------------------------
     groups: list[tuple[str, list[str]]] = []
-    groups.append(("weapon", [weapon_paths[m.name][0] for m in models]))
-    for extra in range(1, max_weapon_groups):
-        entries = ["blank"] + [
-            weapon_paths[m.name][extra] for m in models
-            if len(weapon_paths[m.name]) > extra
-        ]
-        groups.append((f"weapon_{extra + 1}", entries))
-    if hands_paths:
-        # One entry per model, aligned with the weapon group, so one pev_body
-        # index pairs each weapon with its own hands (prior-art layout).
-        groups.append(("hands", [
-            hands_paths.get(m.name, "blank") for m in models
-        ]))
+    if shared_hand_paths:
+        # ONE shared hands bodygroup for the whole model (male/female), emitted
+        # FIRST as the low-order dimension: pev_body = weapon x 2 + hand, so the
+        # male/female bit is the cheap +1 the game toggles and the weapon index
+        # scales by 2. (Independent of the weapon: 2N-1 max, not weapon x hands.)
+        groups.append(("hands", list(shared_hand_paths)))
+        groups.append(("weapon", [weapon_paths[m.name][0] for m in models]))
+    else:
+        groups.append(("weapon", [weapon_paths[m.name][0] for m in models]))
+        for extra in range(1, max_weapon_groups):
+            entries = ["blank"] + [
+                weapon_paths[m.name][extra] for m in models
+                if len(weapon_paths[m.name]) > extra
+            ]
+            groups.append((f"weapon_{extra + 1}", entries))
+        if hands_paths:
+            # One entry per model, aligned with the weapon group, so one pev_body
+            # index pairs each weapon with its own hands (prior-art layout).
+            groups.append(("hands", [
+                hands_paths.get(m.name, "blank") for m in models
+            ]))
     report.bodyparts = len(groups)
     if report.bodyparts > BODYPART_LIMIT:
         report.warnings.append(
@@ -501,7 +543,9 @@ def merge_models(
                 extra = int(group_name.split("_")[1]) - 1
                 paths = weapon_paths[model.name]
                 index = entries.index(paths[extra]) if len(paths) > extra else 0
-            else:  # hands - aligned with the weapon group by construction
+            elif shared_hand_paths:  # shared hands: independent group, default 0
+                index = 0
+            else:  # per-weapon hands, aligned with the weapon group
                 index = position
             value += index * stride
             stride *= len(entries)

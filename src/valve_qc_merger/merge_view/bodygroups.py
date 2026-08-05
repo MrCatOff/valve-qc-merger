@@ -23,6 +23,10 @@ class ModelParts:
 
     weapon_stems: list[list[str]] = field(default_factory=list)  # per weapon submodel
     hands_stem: str | None = None
+    # Every entry of the hand bodygroup (e.g. [female, male]), QC order. The
+    # per-weapon merge keeps only ``hands_stem``; the shared-hands merge keeps
+    # all variants as ONE shared bodygroup across the whole merged model.
+    hand_variants: list[str] = field(default_factory=list)
     dropped: dict[str, list[str]] = field(default_factory=dict)  # group -> dropped entries
     warnings: list[str] = field(default_factory=list)
 
@@ -65,6 +69,7 @@ def collapse_bodygroups(
         if is_hand_group:
             if parts.hands_stem is None:
                 parts.hands_stem = resolved[0]
+                parts.hand_variants = list(resolved)  # all variants (female, male)
             if len(resolved) > 1:
                 parts.dropped[group] = resolved[1:]
             continue

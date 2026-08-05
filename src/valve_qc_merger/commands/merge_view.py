@@ -78,6 +78,12 @@ class MergeViewCommand(Command):
                             help="canonical hand skeleton SMD")
         parser.add_argument("--skip-unmatched", action="store_true",
                             help="continue past models whose rig cannot be matched")
+        parser.add_argument("--shared-hands", action="store_true",
+                            help="all inputs already wear our male/female hands "
+                                 "(e.g. the retarget output): emit ONE shared hands "
+                                 "bodygroup instead of per-weapon hands, so pev_body "
+                                 "stays hand+weapon*2 (<255). Multi-part weapons "
+                                 "(>1 weapon submodel) are rejected — use them alone")
         parser.add_argument("--prune", action="store_true",
                             help="also fold away vertex-less unreferenced bones "
                                  "(default keeps everything except Finger*Nub)")
@@ -182,6 +188,19 @@ class MergeViewCommand(Command):
                 (out_model / model.qc_path.name).write_text(model.qc_text,
                                                             encoding="latin-1")
                 parts = collapse_bodygroups(model)
+                if args.shared_hands and len(parts.weapon_stems) > 1:
+                    # A multi-part weapon needs an extra weapon bodygroup, which
+                    # multiplies pev_body past the 255 WRITE_BYTE ceiling once
+                    # merged. Reject it — it must be shipped on its own.
+                    print(f"  [Warning] Зброя {model.name} була відхилена по "
+                          "причині того що складається з декількох частин, "
+                          "можливість вийти за межі ліміту, використовуйте "
+                          "індивідуально")
+                    failures.append(
+                        f"model {model.name!r}: multi-part weapon rejected "
+                        "(--shared-hands)"
+                    )
+                    continue
                 merged_pairs.append((model, parts))
                 hand_renames[model.name] = dict(match.renames)
                 original_anims[model.name] = {
@@ -301,6 +320,7 @@ class MergeViewCommand(Command):
                             no_pack=args.no_pack_texture,
                         ),
                         sound_path=args.sound_path,
+                        shared_hands=args.shared_hands,
                     )
                 except MergeError as exc:
                     print(f"error: merge failed ({part_name}): {exc}")
@@ -359,6 +379,7 @@ _CONFIG_DEFAULTS: dict[str, object] = {
     "exclude": [],
     "reference": Path(DEFAULT_REFERENCE),
     "skip_unmatched": False,
+    "shared_hands": False,
     "prune": False,
     "no_pool_bones": False,
     "manifest_format": "ini",
