@@ -1,25 +1,38 @@
 # `retarget` — retarget a weapon's animations onto the reference hands
 
 Takes a GoldSource viewmodel (weapon mesh + its original hands + animation set)
-and rebuilds it on the project's reference hands, producing a directory that
-compiles with `studiomdl` as-is. Driven by headless Blender (one worker process
-per sequence) with the Blender Source Tools add-on; everything the workers emit
-is re-verified at text level before the run reports success.
+and rebuilds it on the project's reference hands (our `male`/`female`), producing
+a directory that compiles with `studiomdl` as-is. Driven by headless Blender (one
+worker process per sequence) with the Blender Source Tools add-on; everything the
+workers emit is re-verified at text level before the run reports success.
+
+A **hand-compatibility gate** runs first. A weapon whose bundled hands ARE ours
+(finger-chain length 1:1 with the reference — the native CSO-2009 hands) takes a
+straight male/female mesh swap with its authored grip intact; a weapon with
+foreign (differently-sized) hands is reported and skipped — the shape conversion
+for it is not available yet. `--force` bypasses the gate and runs the geometric
+offset retarget on any hands (the pipeline in "How it works" below).
 
 ## Quick start
 
 ```bash
-# Everything discovered from the weapon's QC:
+# Native-hand weapon -> storage/retarget/{category}/{model} (default output):
+python -m valve_qc_merger retarget \
+    --weapon-dir tmp/cso_nexon/pistols/v_deagle_automagv --category pistols
+
+# Explicit output directory (overrides the --category location):
 python -m valve_qc_merger retarget --weapon-dir tmp/usp --out tmp/final_usp
 
-# Explicit animation glob (when there is no QC, or it is wrong):
+# Foreign hands: force the geometric offset retarget instead of skipping:
 python -m valve_qc_merger retarget \
     --weapon-dir tmp/pistols/view/v_elite \
-    --anims 'v_elite_anims/*.smd' \
-    --out tmp/final_v_elite
+    --anims 'v_elite_anims/*.smd' --force --out tmp/final_v_elite
 ```
 
-## What ends up in `--out`
+## What ends up in the output directory
+
+The output directory is `storage/retarget/{category}/{model}` (from `--category`,
+default `uncategorized`) unless `--out` overrides it. It contains:
 
 | File | Content |
 |---|---|
@@ -62,7 +75,9 @@ bodygroups and merges the reference hands with the weapon into a single SMD).
 | Flag | Meaning |
 |---|---|
 | `--weapon-dir DIR` | weapon directory (required) |
-| `--out DIR` | output directory (required) |
+| `--category NAME` | destination bucket: output lands in `storage/retarget/{category}/{model}` (default `uncategorized`) |
+| `--out DIR` | explicit output directory; overrides the `--category` location |
+| `--force` | run the geometric retarget even when the hands are not ours (bypasses the compatibility gate) |
 | `--anims GLOB` | animation selection; default: the QC's `$sequence` paths |
 | `--reference SMD` | reference hands; default from config |
 | `--hands NAME=PATH` | add/override a hand bodygroup variant (repeatable); `blank` disables |
@@ -79,12 +94,17 @@ bodygroups and merges the reference hands with the weapon into a single SMD).
 
 | Code | Meaning |
 |---|---|
-| 0 | every sequence exported and the verification gate passed |
+| 0 | every sequence exported and the verification gate passed — or the hands were foreign, so the weapon was reported ("Hand conversion is currently not possible…") and skipped |
 | 2 | a sequence failed, or the exported model failed the gate |
 | 3 | input/rig-discovery/correspondence failure (bad paths, unmappable rig) |
 | 4 | environment/assertion failure (Blender missing, §5 node-table gate, worker crash) |
 
 ## How it works (pipeline)
+
+For a native-hand weapon (the default gate result) the size compensations in
+step 4 are zero and the tip-solve is off — the reference hands already fit, so
+the authored grip is reproduced with only the male/female mesh swap. The full
+geometric path below runs on a size mismatch, i.e. under `--force`.
 
 1. **Text gates before any Blender runs** — the weapon, original hands and all
    animations must share one node table; every hand variant must share the

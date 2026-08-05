@@ -4,9 +4,11 @@ Takes a folder of decompiled view-models (one weapon per subdirectory) and
 merges them into as few compilable `.mdl` files as studiomdl's hard limits
 allow. Hand bones are renamed and re-hierarchised onto the reference skeleton
 (`storage/hands/reference_hands.smd`), weapon bones share a pooled slot table,
-each weapon keeps its own hand meshes, and one `pev_body` value selects a
-weapon's meshes together. Every part is re-verified from the emitted files
-before the run reports success.
+and one `pev_body` value selects a weapon. By default each weapon keeps its own
+hand meshes (aligned to the weapon); with `--shared-hands` — for inputs that
+already wear our hands, e.g. the `retarget` output — all weapons share ONE
+male/female hands bodygroup, keeping `pev_body` under the 255 `WRITE_BYTE` cap.
+Every part is re-verified from the emitted files before the run reports success.
 
 ## Quick start
 
@@ -37,24 +39,40 @@ out/
   p1/ ... pN/           one directory per compiled part:
     v_<name>_pN.qc      compile-ready QC ($bodygroup, $texrendermode,
                         $sequence with fps + events)
-    v_<model>/          per-weapon meshes (weapon.smd, weapon_2.smd, hands.smd)
-                        and that weapon's animation SMDs
+    v_<model>/          per-weapon meshes (weapon.smd, weapon_2.smd, hands.smd
+                        unless --shared-hands) and that weapon's animation SMDs
+    hands/              (--shared-hands only) the one shared hands_female.smd +
+                        hands_male.smd used by every weapon
     *.bmp               staged textures (sanitised names) and atlases
 ```
 
-Compile each part from inside its directory (`studiomdl v_<name>_pN.qc`;
-on macOS convert QC backslashes first — see `tools/build_studiomdl.sh` for a
-native compiler with the `$texrendermode` extension).
+Compile each part from inside its directory (`studiomdl v_<name>_pN.qc`). QC
+studio paths use forward slashes, so the native macOS compiler (see
+`tools/build_studiomdl.sh` for one with the `$texrendermode` extension)
+resolves them directly.
 
 ## How a weapon is selected at runtime
 
-Bodygroups are aligned by model position: the `weapon` group has one entry
-per weapon, the `hands` group has that weapon's own hands at the same index
-(`blank` where a model has none), and `weapon_2`/`weapon_3` carry extra
-always-on submodel groups. `models.ini` gives the ready-made `pev_body` value
-per weapon and the merged sequence index for every original animation name —
-identical animations are deduped within a part, so recolour variants share
-sequence indices.
+**Default (per-weapon hands).** Bodygroups are aligned by model position: the
+`weapon` group has one entry per weapon, the `hands` group has that weapon's own
+hands at the same index (`blank` where a model has none), and
+`weapon_2`/`weapon_3` carry extra always-on submodel groups. One `pev_body`
+value pairs a weapon with its hands, so the byte scales as `weapon × hands` and
+nears 255 by ~16 weapons.
+
+**`--shared-hands`.** The `hands` group is emitted FIRST as an independent
+2-entry dimension (`hands_female`, `hands_male`) shared by every weapon, and the
+`weapon` group second. `pev_body = weapon_index × 2 + hand` — set the weapon by
+its `pev_body` from `models.ini`, then OR the low bit for the male hand. The
+byte is therefore `2N − 1` (well under 255; 42 pistols → max 47) instead of
+`weapon × hands`. This is valid only when the inputs share the same hand bind
+(the grip lives in the sequences, not the mesh); a **multi-part weapon** (more
+than one always-on weapon submodel) is rejected — each extra weapon bodygroup
+would multiply the byte, so ship such a weapon on its own.
+
+`models.ini` gives the ready-made `pev_body` value per weapon and the merged
+sequence index for every original animation name — identical animations are
+deduped within a part, so recolour variants share sequence indices.
 
 ## The pipeline
 
@@ -100,6 +118,7 @@ sequence indices.
 | `--exclude NAME` | skip a model directory (repeatable) |
 | `--reference SMD` | canonical hand skeleton (default `storage/hands/reference_hands.smd`) |
 | `--skip-unmatched` | continue past models whose rig cannot be matched |
+| `--shared-hands` | inputs already wear our male/female hands (e.g. the `retarget` output): emit ONE shared hands bodygroup (`pev_body = weapon × 2 + hand`) instead of per-weapon hands; multi-part weapons (>1 weapon submodel) are rejected |
 | `--prune` | also fold away vertex-less unreferenced bones (default keeps everything except `Finger*Nub`) |
 | `--no-pool-bones` | skip bone pooling (merged table may exceed 127) |
 | `--manifest-format ini\|json\|toml` | manifest format (default ini) |
