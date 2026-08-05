@@ -561,13 +561,21 @@ def _map_arm(
     maps: list[BoneMap] = [BoneMap(tgt_arm.wrist, src_arm.wrist, "wrist", side)]
 
     # Forearm: align distal-to-proximal so the wrist-adjacent bones pair up. Skip
-    # a shared root (parent is None): in a Bip01 rig both arms hang off the single
-    # Bip01 root, which cannot follow two different source bones, so it is held.
+    # only OUR shared root (parent is None): in a Bip01 rig both arms hang off the
+    # single Bip01 root, which cannot follow two different source bones, so it is
+    # held. A source forearm that is itself a per-arm ROOT (parent None — e.g.
+    # automag's Bone01/Bone04, where the wrist hangs directly off the forearm
+    # root) is still the anatomical forearm and MUST map; otherwise the reference
+    # forearm keeps its rest pose while the hand tracks the weapon and the
+    # elbow-to-wrist mesh tears.
     for tgt_bone, src_bone in zip(
         reversed(tgt_arm.forearm[:-1]), reversed(src_arm.forearm[:-1]), strict=False
     ):
-        if tgt.bones[tgt_bone].parent is None or src.bones[src_bone].parent is None:
-            continue
+        if tgt.bones[tgt_bone].parent is None:
+            continue  # our shared Bip01 root — cannot follow two source bones
+        if src.bones[src_bone].parent is None and src_arm.reversed_forearm is not None:
+            continue  # a reversed rig's real forearm is a leaf, mapped below;
+            # this root ancestor is NOT the forearm, so leave it for the fallback
         maps.append(BoneMap(tgt_bone, src_bone, "forearm", side))
 
     # Reversed-hierarchy source (forearm is a leaf child of the hand): the wrist
