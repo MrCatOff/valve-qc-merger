@@ -16,6 +16,14 @@
 # The --reference CLI flag overrides this.
 reference = "storage/hands/reference_hands.smd"
 
+# The weapon mesh, original hands and animations come from the weapon's own QC
+# in --weapon-dir; there is nothing to configure for them here. A weapon whose
+# geometry is split across several always-on $bodygroup "weapon" studios
+# (v_bloodhunter = pistol body + blood projectile + effects) is handled
+# automatically: every part is retargeted onto the one unified skeleton and
+# emitted as its own weapon bodygroup/submodel (kept under the 2048-vertex engine
+# cap). See docs/retarget.md "Multi-part weapons".
+
 # ---------------------------------------------------------------------------
 # Scene / process
 # ---------------------------------------------------------------------------

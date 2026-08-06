@@ -137,15 +137,23 @@ def _only_new_mesh(before: set[str]) -> Any:
 class Scene:
     """Handles onto the imported, consolidated scene (§7.2)."""
 
-    def __init__(self, src: Any, reference: Any, weapon_mesh: Any, original_mesh: Any,
-                 reference_mesh: Any,
+    def __init__(self, src: Any, reference: Any, weapon_meshes: list[Any],
+                 original_mesh: Any, reference_mesh: Any,
                  variant_meshes: dict[str, Any] | None = None) -> None:
         self.src = src  # animated BoneNN rig (source)
         self.reference = reference  # Bip01 rig (target)
-        self.weapon_mesh = weapon_mesh  # bound to src
+        # One mesh per always-on $bodygroup "weapon" studio, in QC order — a
+        # weapon split across parts (bloodhunter: pistol + blood projectile +
+        # effects) keeps each part a separate submodel. All bound to src.
+        self.weapon_meshes = list(weapon_meshes)
         self.original_mesh = original_mesh  # rebound to src (ground truth)
         self.reference_mesh = reference_mesh  # bound to reference
         self.variant_meshes = variant_meshes or {}  # bodygroup name -> mesh on reference
+
+    @property
+    def weapon_mesh(self) -> Any:
+        """The first weapon part (the rig-source mesh)."""
+        return self.weapon_meshes[0]
 
 
 def import_scene(job: dict[str, Any]) -> Scene:
@@ -160,7 +168,7 @@ def import_scene(job: dict[str, Any]) -> Scene:
     _import_smd(job["weapon_pv"], "NEW_ARMATURE")
     src = _only_new_armature(arms0)
     src.name = "SRC"
-    weapon_mesh = _only_new_mesh(meshes0)
+    weapon_meshes = [_only_new_mesh(meshes0)]
 
     # Attach the sequence animation onto the matching weapon rig (identical bones).
     _import_smd(job["sequence"]["path"], "APPEND")
@@ -192,7 +200,22 @@ def import_scene(job: dict[str, Any]) -> Scene:
         bpy.data.objects.remove(variant_rig, do_unlink=True)
         variant_meshes[variant_name] = variant_mesh
 
-    return Scene(src, reference, weapon_mesh, original_mesh, reference_mesh,
+    # A weapon split across several always-on $bodygroup "weapon" studios brings
+    # in one extra mesh per part (all sharing the source node table). Import each
+    # onto a throwaway rig, rebind it to SRC, and drop the duplicate rig — every
+    # part then rides the unified skeleton together. Done here (not right after
+    # the first import) so BST's importer runs with an established active-object
+    # context, as the reference/variant NEW_ARMATURE imports above rely on.
+    for extra_path in list(job.get("weapon_studios", []))[1:]:
+        arms_w, meshes_w = {a.name for a in _armatures()}, _mesh_names()
+        _import_smd(extra_path, "NEW_ARMATURE")
+        extra_rig = _only_new_armature(arms_w)
+        extra_mesh = _only_new_mesh(meshes_w)
+        _rebind(extra_mesh, src)
+        bpy.data.objects.remove(extra_rig, do_unlink=True)
+        weapon_meshes.append(extra_mesh)
+
+    return Scene(src, reference, weapon_meshes, original_mesh, reference_mesh,
                  variant_meshes)
 
 
@@ -222,7 +245,9 @@ def bones_weighted(mesh: Any, w_min: float) -> set[str]:
 def classify(scene: Scene, w_min: float) -> dict[str, list[str]]:
     """Split SRC bones into hand vs weapon by mesh weights; assert disjoint (§5)."""
     hand = bones_weighted(scene.original_mesh, w_min)
-    weapon = bones_weighted(scene.weapon_mesh, w_min)
+    weapon: set[str] = set()
+    for mesh in scene.weapon_meshes:
+        weapon |= bones_weighted(mesh, w_min)
     both = sorted(hand & weapon)
     if both:
         raise AssertionFailure(f"bones weighted by both hand and weapon meshes: {both}")
@@ -817,7 +842,8 @@ def build_unified(scene: Scene, corr: Correspondence, classes: dict[str, list[st
     # key_guns's euler keys would record dead values (guns frozen at rest).
     for name in ordered:
         ref.pose.bones[name].rotation_mode = "XYZ"
-    _rebind(scene.weapon_mesh, ref)
+    for mesh in scene.weapon_meshes:
+        _rebind(mesh, ref)
     return ordered
 
 
@@ -880,25 +906,31 @@ def _prepare_export(out_dir: str) -> None:
     bpy.app.debug_value = 2
 
 
-def export_mesh_smds(scene: Scene, out_dir: str, weapon_stem: str) -> dict[str, str]:
-    """Export the rest-pose mesh SMDs (§7.7): merged, or per-bodygroup.
+def export_mesh_smds(
+    scene: Scene, out_dir: str, weapon_stems: list[str]
+) -> dict[str, str]:
+    """Export the rest-pose mesh SMDs (§7.7): one per weapon part, per bodygroup.
 
-    Without hand variants: one merged reference-hands+weapon SMD, as before.
-    With variants: a weapon-only SMD plus one ``hands_<name>`` SMD per variant —
-    each in its own collection (BST names the SMD after the collection), all on
-    the same unified skeleton so their node tables are identical.
+    ``weapon_stems`` parallels ``scene.weapon_meshes`` (one stem per always-on
+    weapon studio). Each weapon part is its own collection/SMD so it stays a
+    separate submodel under the engine's 2048-vertex cap. With hand variants,
+    one ``hands_<name>`` SMD per variant is added; without them (``--hands
+    blank``) the reference hands merge into the FIRST weapon part's SMD.
 
     The armature is switched to REST so the emitted bind pose and single skeleton
     frame carry each bone's rest local transform.
     """
     ref = scene.reference
+    groups: dict[str, list[Any]] = {
+        stem: [mesh]
+        for stem, mesh in zip(weapon_stems, scene.weapon_meshes, strict=True)
+    }
     if scene.variant_meshes:
-        groups: dict[str, list[Any]] = {weapon_stem: [scene.weapon_mesh]}
         for name, mesh in scene.variant_meshes.items():
             groups[f"hands_{name}"] = [mesh]
         scene.reference_mesh.vs.export = False  # superseded by the variants
     else:
-        groups = {weapon_stem: [scene.reference_mesh, scene.weapon_mesh]}
+        groups[weapon_stems[0]] = [scene.reference_mesh, scene.weapon_meshes[0]]
 
     collections = {}
     for coll_name, objects in groups.items():
@@ -976,10 +1008,10 @@ def unify_and_export(
     bpy.data.objects.remove(scene.src, do_unlink=True)
 
     out_dir = job["out_dir"]
-    weapon_stem = job["weapon_stem"]
+    weapon_stems = job.get("weapon_stems") or [job["weapon_stem"]]
     result: dict[str, Any] = {"gun_bones": gun_names, "anim_smd": None, "mesh_smds": None}
     if job.get("export_mesh", False):
-        result["mesh_smds"] = export_mesh_smds(scene, out_dir, weapon_stem)
+        result["mesh_smds"] = export_mesh_smds(scene, out_dir, weapon_stems)
     result["anim_smd"] = export_anim_smd(scene, out_dir, job["sequence"]["name"])
     return result
 

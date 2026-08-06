@@ -36,8 +36,8 @@ default `uncategorized`) unless `--out` overrides it. It contains:
 
 | File | Content |
 |---|---|
-| `<weapon>.qc` | GoldSource-ready QC: `$bodygroup "weapon"` + `$bodygroup "hands"`, original sequences (fps + events), surviving `$attachment` lines |
-| `<weapon>.smd` | Weapon-only mesh on the unified skeleton |
+| `<weapon>.qc` | GoldSource-ready QC: one `$bodygroup "weapon"` per weapon part + `$bodygroup "hands"`, carried `$texrendermode` lines (additive/masked effects), original sequences (fps + events), surviving `$attachment` lines |
+| `<part>.smd` | One weapon mesh per part on the unified skeleton — a single-part weapon emits one (named after its studio); a multi-part weapon emits one per `$bodygroup "weapon"` studio (see below) |
 | `hands_<variant>.smd` | One mesh per hand variant (default `hands_female`, `hands_male`), all sharing the same skeleton and node table |
 | `anims/<sequence>.smd` | Every retargeted sequence |
 | `*.bmp` | Every referenced texture, staged next to the QC, validated 8-bit |
@@ -54,7 +54,10 @@ inside the output directory.
 
 The weapon's QC (found in `--weapon-dir`) is the manifest:
 
-- `$bodygroup "weapon" { studio "..." }` → the weapon mesh SMD,
+- every `$bodygroup "weapon" { studio "..." }` → a weapon mesh SMD. Most weapons
+  have one; a weapon whose geometry is split across several **always-on** weapon
+  bodyparts lists more than one (see "Multi-part weapons" below). The first is
+  the rig source.
 - `$bodygroup "hands" { studio "..." ... }` → the original hand meshes; the
   first entry is used as the grip-contact ground truth,
 - each `$sequence "name" { "dir\name" ... }` → an animation SMD (backslash
@@ -63,6 +66,19 @@ The weapon's QC (found in `--weapon-dir`) is the manifest:
 Overrides: `--weapon-pv`, `--original-hands`, `--anims <glob>`. Without a QC,
 the weapon mesh falls back to `*-PV.smd` and the hands to `f_*_hand_Low.smd`
 globs, and `--anims` becomes required.
+
+### Multi-part weapons
+
+Some viewmodels split the weapon mesh across several always-on `$bodygroup
+"weapon"` blocks — a pistol body plus a thrown projectile plus muzzle/effect
+meshes (e.g. `v_bloodhunter`, `v_vulcanus1`, `v_kingcobra`). All of them render
+at once; each is a separate submodel so it stays under the engine's 2048-vertex
+cap. The command retargets **every** part onto the one unified skeleton (all the
+parts' gun subtrees are discovered and attached together) and emits **one weapon
+SMD and one `$bodygroup "weapon"` per part**, preserving that structure — merging
+them into a single mesh would overflow the vertex cap. Nothing to configure: the
+parts are found and split automatically. The output QC/model is named after the
+weapon's `$modelname` (e.g. `v_bloodhunter.qc`), not the first part's studio.
 
 The reference hands default to `storage/hands/reference_hands.smd`; the hand
 bodygroup variants default to `storage/hands/{female,male}.smd`. Both can be
@@ -137,10 +153,14 @@ geometric path below runs on a size mismatch, i.e. under `--force`.
    hands are never renamed, reparented, rescaled or reshaped.
 6. **Weapon placement** — zero offset: the weapon stays exactly where its own
    animation puts it (attachments, dual-gun sync and screen framing preserved).
-7. **Unify & export** — the gun subtree is appended under the correct wrist on
-   the reference skeleton, the weapon animation is transferred verbatim, and
-   the mesh/animation SMDs are exported and normalised to the compile-proven
-   indented layout. Euler tracks are unwrapped in place for continuity.
+7. **Unify & export** — every gun subtree (one per weapon part) is appended
+   under the correct wrist on the reference skeleton, the weapon animation is
+   transferred verbatim, and the mesh/animation SMDs are exported and normalised
+   to the compile-proven indented layout. Each weapon part exports its own mesh
+   SMD on the shared unified skeleton, so a multi-part weapon stays split into
+   separate submodels. Euler tracks are unwrapped in place for continuity. The
+   regenerated QC emits one `$bodygroup "weapon"` per part and carries the
+   source's `$texrendermode` lines so additive/masked effect meshes render right.
 8. **Verification gate (12 checks)** — parses the emitted text and proves:
    node tables identical across every mesh and animation; reference bones,
    rest transforms and mesh geometry unchanged vs the input reference; hand

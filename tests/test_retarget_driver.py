@@ -205,3 +205,31 @@ def test_inputs_resolve_from_the_qc_manifest(tmp_path: Path) -> None:
     assert inputs.original_hands.name == "hands_mesh.smd"
     assert set(inputs.sequences) == {"idle", "fire"}
     assert inputs.sequences["fire"].name == "fire.smd"
+
+
+def test_inputs_collect_every_weapon_studio_part(tmp_path: Path) -> None:
+    # A weapon split across several always-on $bodygroup "weapon" blocks
+    # (bloodhunter: pistol body + blood projectile + effects) must surface ALL
+    # parts, not just the first — parse_bodygroups de-dups them to weapon,
+    # weapon_2, weapon_3. weapon_pv stays the first part (the rig source).
+    d = tmp_path / "weapon"
+    (d / "anims").mkdir(parents=True)
+    for name in ("gun_left", "gun_right01", "gun_right02", "hands_mesh"):
+        _write_smd(d / f"{name}.smd", _RIG, mesh=True)
+    _write_smd(d / "anims" / "idle.smd", _RIG, mesh=False)
+    (d / "v_gun.qc").write_text(
+        '$modelname "v_gun.mdl"\n'
+        '$bodygroup "weapon"\n{\n\tstudio "gun_left"\n}\n'
+        '$bodygroup "weapon"\n{\n\tstudio "gun_right01"\n}\n'
+        '$bodygroup "weapon"\n{\n\tstudio "gun_right02"\n}\n'
+        '$bodygroup "hands"\n{\n\tstudio "hands_mesh"\n}\n'
+        '$sequence "idle" {\n\t"anims\\idle"\n\tfps 16\n}\n'
+    )
+    ref = tmp_path / "reference_hands.smd"
+    _write_smd(ref, _BIP, mesh=True)
+
+    inputs = resolve_inputs(ref, d)
+    assert inputs.weapon_pv.name == "gun_left.smd"
+    assert [p.name for p in inputs.weapon_studios] == [
+        "gun_left.smd", "gun_right01.smd", "gun_right02.smd"
+    ]

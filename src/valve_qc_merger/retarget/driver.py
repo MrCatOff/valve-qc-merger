@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -24,6 +25,7 @@ from valve_qc_merger.retarget.euler_unwrap import unwrap_smd
 from valve_qc_merger.retarget.qc_build import (
     QcSequence,
     build_qc,
+    modelname,
     parse_bodygroups,
     parse_sequences,
 )
@@ -64,6 +66,13 @@ class Inputs:
     original_hands: Path
     sequences: dict[str, Path]  # name -> anim SMD
     hand_variants: dict[str, Path] = field(default_factory=dict)  # bodygroup name -> SMD
+    # Every ``$bodygroup "weapon"`` studio, in QC order (the first is ``weapon_pv``).
+    # A weapon whose mesh is split across several always-on bodyparts (bloodhunter
+    # = pistol body + blood projectile + effects) lists more than one; each is
+    # retargeted onto the same unified skeleton and emitted as its own weapon
+    # bodygroup, so every part stays a separate submodel under the 2048-vertex
+    # engine cap (merging them into one submodel would overflow it).
+    weapon_studios: tuple[Path, ...] = ()
 
 
 def _one(matches: list[str], what: str, where: Path) -> Path:
@@ -72,6 +81,12 @@ def _one(matches: list[str], what: str, where: Path) -> Path:
     if len(matches) > 1:
         raise DriverError(f"multiple {what} in {where}: {[Path(m).name for m in matches]}")
     return Path(matches[0])
+
+
+def _weapon_key_order(key: str) -> int:
+    """Sort weapon bodygroup keys in QC order: weapon (0), weapon_2 (2), ..."""
+    _, _, suffix = key.partition("_")
+    return int(suffix) if suffix.isdigit() else 0
 
 
 def _qc_smd(weapon_dir: Path, stem: str) -> Path:
@@ -110,10 +125,28 @@ def resolve_inputs(
         qc_sequences = parse_sequences(qc_text)
 
     pv = weapon_pv
+    studio_paths: tuple[Path, ...] = ()
     if pv is None:
-        weapon_studios = bodygroups.get("weapon", [])
+        # A weapon split across several always-on $bodygroup "weapon" blocks
+        # (bloodhunter: pistol body + blood projectile + effects) is de-duplicated
+        # by parse_bodygroups into keys weapon, weapon_2, weapon_3, ... — collect
+        # every studio across all of them, in QC order.
+        weapon_studios = [
+            stem
+            for key in sorted(
+                (k for k in bodygroups if re.fullmatch(r"weapon(_\d+)?", k)),
+                key=_weapon_key_order,
+            )
+            for stem in bodygroups[key]
+        ]
         if weapon_studios:
-            pv = _qc_smd(weapon_dir, weapon_studios[0])
+            studio_paths = tuple(_qc_smd(weapon_dir, s) for s in weapon_studios)
+            missing = [p for p in studio_paths if not p.exists()]
+            if missing:
+                raise DriverError(
+                    f"weapon mesh not found: {missing[0]}"
+                )
+            pv = studio_paths[0]
         else:
             pv = _one(sorted(glob(str(weapon_dir / "*-PV.smd"))),
                       "*-PV.smd weapon mesh", weapon_dir)
@@ -166,7 +199,7 @@ def resolve_inputs(
         if not path.exists():
             raise DriverError(f"hand variant {variant_name!r} not found: {path}")
         variants[variant_name] = path.resolve()
-    return Inputs(reference.resolve(), pv, hands, sequences, variants)
+    return Inputs(reference.resolve(), pv, hands, sequences, variants, studio_paths)
 
 
 def assert_identical_node_tables(inputs: Inputs) -> list[tuple[int, str, int]]:
@@ -273,9 +306,11 @@ def run_sequence(
     if report_path.exists():
         report_path.unlink()
 
+    studios = inputs.weapon_studios or (inputs.weapon_pv,)
     job = {
         "reference": str(inputs.reference),
         "weapon_pv": str(inputs.weapon_pv),
+        "weapon_studios": [str(p) for p in studios],
         "original_hands": str(inputs.original_hands),
         "sequence": {"name": name, "path": str(inputs.sequences[name])},
         "out_dir": str(out_dir),
@@ -284,6 +319,7 @@ def run_sequence(
         "export": export,
         "export_mesh": export_mesh,
         "weapon_stem": weapon_stem,
+        "weapon_stems": [p.stem for p in studios],
         "hand_variants": {n: str(p) for n, p in inputs.hand_variants.items()},
         "config": config.to_job_dict(),
     }
@@ -336,10 +372,13 @@ def finalize_export(
     node-bookkeeping (reference bones, anchors, gun bones) comes from any exported
     worker report, since every sequence shares the same unified skeleton.
     """
-    weapon_stem = inputs.weapon_pv.stem
-    # Expected mesh SMDs: hands+weapon merged when there are no variants;
-    # otherwise a weapon-only SMD plus one hands_<name> SMD per variant.
-    mesh_smds = {weapon_stem: out_dir / f"{weapon_stem}.smd"}
+    # One weapon SMD per always-on $bodygroup "weapon" studio (a multi-part
+    # weapon keeps each part a separate submodel); the first part is the primary.
+    weapon_stems = [p.stem for p in inputs.weapon_studios] or [inputs.weapon_pv.stem]
+    primary_stem = weapon_stems[0]
+    # Expected mesh SMDs: hands+weapon merged into the first part when there are
+    # no variants; otherwise weapon-only parts plus one hands_<name> per variant.
+    mesh_smds = {stem: out_dir / f"{stem}.smd" for stem in weapon_stems}
     mesh_sources: dict[str, Path] = {}
     if inputs.hand_variants:
         for variant, source in inputs.hand_variants.items():
@@ -347,7 +386,7 @@ def finalize_export(
             mesh_smds[exported_name] = out_dir / f"{exported_name}.smd"
             mesh_sources[exported_name] = source
     else:
-        mesh_sources[weapon_stem] = inputs.reference
+        mesh_sources[primary_stem] = inputs.reference
 
     def _has_export(result: SequenceResult) -> bool:
         block = result.report.get("export")
@@ -418,15 +457,22 @@ def finalize_export(
     qc_out: Path | None = None
     qc_src = qc_path or _find_qc(inputs.weapon_pv.parent)
     if qc_src is not None and qc_src.exists():
+        qc_text_src = qc_src.read_text()
+        model_stem = modelname(qc_text_src, primary_stem).removesuffix(".mdl") or primary_stem
         qc_text = build_qc(
-            qc_src.read_text(),
-            mesh_stem=weapon_stem,
+            qc_text_src,
+            mesh_stem=primary_stem,
             anims_subdir="anims",
             surviving_bones=reference_bones | gun_bones,
-            model_name=f"{weapon_stem}.mdl",
+            model_name=f"{model_stem}.mdl",
             hand_bodies=sorted(f"hands_{v}" for v in inputs.hand_variants) or None,
+            weapon_bodies=weapon_stems,
         )
-        qc_out = out_dir / f"{weapon_stem}.qc"
+        # Single-part: keep the studio-stem filename (unchanged output). Multi-part:
+        # name after the model ($modelname) so the folder isn't named after one
+        # part (v_bloodhunter.qc, not v_bloodhunter_left.qc).
+        qc_stem = primary_stem if len(weapon_stems) == 1 else model_stem
+        qc_out = out_dir / f"{qc_stem}.qc"
         qc_out.write_text(qc_text)
     return verify, qc_out
 

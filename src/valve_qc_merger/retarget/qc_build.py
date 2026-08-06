@@ -27,6 +27,9 @@ _ATTACH_RE = re.compile(
 )
 _MODELNAME_RE = re.compile(r'\$modelname\s+"(?P<name>[^"]+)"')
 _SEQ_SMD_RE = re.compile(r'"(?P<path>[^"{}]+)"')  # first quoted token outside events
+_TEXRENDERMODE_RE = re.compile(
+    r'\$texrendermode\s+"(?P<tex>[^"]+)"\s+(?P<mode>\w+)'
+)
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,19 @@ def modelname(qc_text: str, default: str) -> str:
     return m.group("name") if m else default
 
 
+def parse_texrendermodes(qc_text: str) -> list[str]:
+    """Return the source ``$texrendermode`` lines (additive/masked glow effects).
+
+    Effect meshes — a muzzle flash, blood glass, additive fx — render wrong
+    without their rendermode. Carried verbatim; the texture names studiomdl sees
+    match (:func:`finalize_textures` only sanitises spaces/extensions, which these
+    effect BMPs do not have)."""
+    return [
+        f'$texrendermode "{m.group("tex")}" {m.group("mode")}'
+        for m in _TEXRENDERMODE_RE.finditer(qc_text)
+    ]
+
+
 def build_qc(
     qc_text: str,
     *,
@@ -132,23 +148,28 @@ def build_qc(
     surviving_bones: set[str],
     model_name: str,
     hand_bodies: list[str] | None = None,
+    weapon_bodies: list[str] | None = None,
 ) -> str:
     """Render a QC that compiles the exported mesh SMDs + retargeted animations.
 
-    With ``hand_bodies`` (exported hand-variant SMD stems), the model gets a
-    ``$bodygroup "weapon"`` for the weapon-only mesh and a ``$bodygroup "hands"``
-    listing every variant — the in-game selectable hand meshes on one shared
-    skeleton. Without it, the single merged mesh compiles as one ``$body``.
+    ``weapon_bodies`` lists every weapon-part SMD stem (default: ``[mesh_stem]``).
+    A weapon split across always-on parts (bloodhunter: pistol + blood projectile
+    + effects) emits one ``$bodygroup "weapon"`` per part so each stays a separate
+    submodel. With ``hand_bodies`` (exported hand-variant SMD stems) a
+    ``$bodygroup "hands"`` lists every variant — the in-game selectable hand
+    meshes on one shared skeleton. Without hand variants the merged mesh (hands
+    folded into the first weapon part) compiles as one ``$body``.
     """
     sequences = parse_sequences(qc_text)
     attachments = parse_attachments(qc_text, surviving_bones)
+    texrendermodes = parse_texrendermodes(qc_text)
+    weapons = weapon_bodies or [mesh_stem]
 
     if hand_bodies:
-        body_lines = [
-            '$bodygroup "weapon"',
-            "{",
-            f'\tstudio "{mesh_stem}"',
-            "}",
+        body_lines = []
+        for weapon in weapons:
+            body_lines += ['$bodygroup "weapon"', "{", f'\tstudio "{weapon}"', "}"]
+        body_lines += [
             '$bodygroup "hands"',
             "{",
             *[f'\tstudio "{body}"' for body in hand_bodies],
@@ -156,7 +177,11 @@ def build_qc(
         ]
         header = "// unified skeleton; weapon and hand variants as bodygroups."
     else:
-        body_lines = [f'$body "studio" "{mesh_stem}"']
+        # No hand variants: the reference hands are merged into the first weapon
+        # part's SMD ($body); any further parts stay their own always-on bodygroup.
+        body_lines = [f'$body "studio" "{weapons[0]}"']
+        for weapon in weapons[1:]:
+            body_lines += ['$bodygroup "weapon"', "{", f'\tstudio "{weapon}"', "}"]
         header = "// unified skeleton. Hands and weapon are merged into one reference SMD."
 
     lines: list[str] = [
@@ -174,6 +199,10 @@ def build_qc(
         "$flags 0",
         "",
     ]
+    for mode in texrendermodes:
+        lines.append(mode)
+    if texrendermodes:
+        lines.append("")
     for attach in attachments:
         lines.append(attach)
     if attachments:
@@ -196,4 +225,4 @@ def build_qc(
 
 
 __all__ = ["QcSequence", "build_qc", "parse_sequences", "parse_attachments",
-           "parse_bodygroups", "modelname"]
+           "parse_bodygroups", "parse_texrendermodes", "modelname"]

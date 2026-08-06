@@ -7,6 +7,7 @@ from valve_qc_merger.retarget.qc_build import (
     parse_attachments,
     parse_bodygroups,
     parse_sequences,
+    parse_texrendermodes,
 )
 
 _QC = """
@@ -106,3 +107,76 @@ def test_bodygroup_render_lists_weapon_and_hand_variants() -> None:
     assert '\tstudio "hands_female"' in qc
     assert '\tstudio "hands_male"' in qc
     assert '$body "studio"' not in qc  # bodygroups replace the single body
+
+
+_MULTIPART_QC = """
+$modelname "v_bloodhunter.mdl"
+$bodygroup "hands"
+{
+	studio "CSO_Hand_Male_L_2009"
+}
+$bodygroup "weapon"
+{
+	studio "v_bloodhunter_left"
+}
+$bodygroup "weapon"
+{
+	studio "v_bloodhunter_right01"
+}
+$bodygroup "weapon"
+{
+	studio "v_bloodhunter_right02"
+}
+$texrendermode "bloodhunter_glass.bmp" additive
+$texrendermode "bloodhunter_ef01.bmp" additive
+$sequence "idle" {
+	"v_bloodhunter_anims\\idle"
+	fps 30
+}
+"""
+
+
+def test_multipart_weapon_emits_one_bodygroup_per_part() -> None:
+    # A weapon split across several always-on $bodygroup "weapon" studios keeps
+    # each part its own submodel (under the 2048-vertex engine cap): one
+    # $bodygroup "weapon" per part, in order, then the shared hands bodygroup.
+    qc = build_qc(
+        _MULTIPART_QC, mesh_stem="v_bloodhunter_left", anims_subdir="anims",
+        surviving_bones=set(), model_name="v_bloodhunter.mdl",
+        hand_bodies=["hands_female", "hands_male"],
+        weapon_bodies=["v_bloodhunter_left", "v_bloodhunter_right01",
+                       "v_bloodhunter_right02"],
+    )
+    assert qc.count('$bodygroup "weapon"') == 3
+    for part in ("v_bloodhunter_left", "v_bloodhunter_right01", "v_bloodhunter_right02"):
+        assert f'\tstudio "{part}"' in qc
+    assert qc.count('$bodygroup "hands"') == 1
+    # weapon groups precede the hands group
+    assert qc.rindex('$bodygroup "weapon"') < qc.index('$bodygroup "hands"')
+
+
+def test_build_qc_carries_texrendermodes() -> None:
+    # Effect meshes (additive muzzle flash / blood glass) render wrong without
+    # their $texrendermode; the regenerated QC must carry them.
+    qc = build_qc(
+        _MULTIPART_QC, mesh_stem="v_bloodhunter_left", anims_subdir="anims",
+        surviving_bones=set(), model_name="v_bloodhunter.mdl",
+        weapon_bodies=["v_bloodhunter_left"],
+    )
+    assert '$texrendermode "bloodhunter_glass.bmp" additive' in qc
+    assert '$texrendermode "bloodhunter_ef01.bmp" additive' in qc
+
+
+def test_parse_texrendermodes() -> None:
+    modes = parse_texrendermodes(_MULTIPART_QC)
+    assert modes == [
+        '$texrendermode "bloodhunter_glass.bmp" additive',
+        '$texrendermode "bloodhunter_ef01.bmp" additive',
+    ]
+
+
+def test_parse_bodygroups_keeps_duplicate_weapon_blocks() -> None:
+    groups = parse_bodygroups(_MULTIPART_QC)
+    assert groups["weapon"] == ["v_bloodhunter_left"]
+    assert groups["weapon_2"] == ["v_bloodhunter_right01"]
+    assert groups["weapon_3"] == ["v_bloodhunter_right02"]
