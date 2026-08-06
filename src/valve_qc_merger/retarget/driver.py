@@ -83,12 +83,6 @@ def _one(matches: list[str], what: str, where: Path) -> Path:
     return Path(matches[0])
 
 
-def _weapon_key_order(key: str) -> int:
-    """Sort weapon bodygroup keys in QC order: weapon (0), weapon_2 (2), ..."""
-    _, _, suffix = key.partition("_")
-    return int(suffix) if suffix.isdigit() else 0
-
-
 def _qc_smd(weapon_dir: Path, stem: str) -> Path:
     """Resolve a QC-referenced SMD stem/path (backslashes, optional extension)."""
     relative = stem.replace("\\", "/")
@@ -127,17 +121,19 @@ def resolve_inputs(
     pv = weapon_pv
     studio_paths: tuple[Path, ...] = ()
     if pv is None:
-        # A weapon split across several always-on $bodygroup "weapon" blocks
-        # (bloodhunter: pistol body + blood projectile + effects) is de-duplicated
-        # by parse_bodygroups into keys weapon, weapon_2, weapon_3, ... — collect
-        # every studio across all of them, in QC order.
+        # Weapon parts = every bodygroup that is NOT the hands group, in QC order.
+        # The weapon group's name varies across the corpus — "weapon", the
+        # decompiler's default "studio", even a "waepon" typo — and a weapon split
+        # across several always-on blocks (bloodhunter: pistol + projectile +
+        # effects; dual-wield: two "studio" blocks) has parse_bodygroups de-dup the
+        # repeats to name/name_2/... . Matching everything except hands collects
+        # them all (dict preserves QC order); a literal "blank" submodel is skipped.
         weapon_studios = [
             stem
-            for key in sorted(
-                (k for k in bodygroups if re.fullmatch(r"weapon(_\d+)?", k)),
-                key=_weapon_key_order,
-            )
-            for stem in bodygroups[key]
+            for key, stems in bodygroups.items()
+            if not re.fullmatch(r"hands(_\d+)?", key)
+            for stem in stems
+            if stem.lower() != "blank"
         ]
         if weapon_studios:
             studio_paths = tuple(_qc_smd(weapon_dir, s) for s in weapon_studios)

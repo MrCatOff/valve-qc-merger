@@ -233,3 +233,48 @@ def test_inputs_collect_every_weapon_studio_part(tmp_path: Path) -> None:
     assert [p.name for p in inputs.weapon_studios] == [
         "gun_left.smd", "gun_right01.smd", "gun_right02.smd"
     ]
+
+
+def test_inputs_weapon_bodygroup_name_need_not_be_weapon(tmp_path: Path) -> None:
+    # The weapon bodygroup is not always literally "weapon": the decompiler's
+    # default is "studio", and the corpus even has a "waepon" typo. Any non-hands
+    # bodygroup is a weapon part (here: one "studio" block = the whole weapon).
+    d = tmp_path / "weapon"
+    (d / "anims").mkdir(parents=True)
+    _write_smd(d / "v_uzi.smd", _RIG, mesh=True)
+    _write_smd(d / "hands_mesh.smd", _RIG, mesh=True)
+    _write_smd(d / "anims" / "idle.smd", _RIG, mesh=False)
+    (d / "v_uzi.qc").write_text(
+        '$modelname "v_uzi.mdl"\n'
+        '$bodygroup "studio"\n{\n\tstudio "v_uzi"\n}\n'
+        '$bodygroup "hands"\n{\n\tstudio "hands_mesh"\n}\n'
+        '$sequence "idle" {\n\t"anims\\idle"\n\tfps 16\n}\n'
+    )
+    ref = tmp_path / "reference_hands.smd"
+    _write_smd(ref, _BIP, mesh=True)
+
+    inputs = resolve_inputs(ref, d)
+    assert inputs.weapon_pv.name == "v_uzi.smd"
+    assert [p.name for p in inputs.weapon_studios] == ["v_uzi.smd"]
+
+
+def test_inputs_dual_wield_two_studio_blocks(tmp_path: Path) -> None:
+    # Dual-wield (dualuzi): two always-on "studio" blocks = two weapon parts,
+    # de-duped by parse_bodygroups to studio / studio_2.
+    d = tmp_path / "weapon"
+    (d / "anims").mkdir(parents=True)
+    for name in ("v_left", "v_right", "hands_mesh"):
+        _write_smd(d / f"{name}.smd", _RIG, mesh=True)
+    _write_smd(d / "anims" / "idle.smd", _RIG, mesh=False)
+    (d / "v_dual.qc").write_text(
+        '$modelname "v_dual.mdl"\n'
+        '$bodygroup "studio"\n{\n\tstudio "v_left"\n}\n'
+        '$bodygroup "studio"\n{\n\tstudio "v_right"\n}\n'
+        '$bodygroup "hands"\n{\n\tstudio "hands_mesh"\n}\n'
+        '$sequence "idle" {\n\t"anims\\idle"\n\tfps 16\n}\n'
+    )
+    ref = tmp_path / "reference_hands.smd"
+    _write_smd(ref, _BIP, mesh=True)
+
+    inputs = resolve_inputs(ref, d)
+    assert [p.name for p in inputs.weapon_studios] == ["v_left.smd", "v_right.smd"]
