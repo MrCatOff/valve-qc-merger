@@ -16,6 +16,7 @@ what lets us pair arms and order fingers without ever trusting a world-axis sign
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 
 from valve_qc_merger.models.geometry import Vector3
@@ -183,12 +184,32 @@ def _ancestors(rig: Rig, name: str) -> list[str]:
 
 
 def _side_of(name: str) -> str:
-    tokens = [t.lower() for t in name.replace("_", " ").replace("-", " ").split()]
+    # Split on '.' too, so dotted side suffixes (Hand.L, ForeFinger00.R — the
+    # CSO/handswap rig) are recognised, not just underscore/space tokens.
+    tokens = [t.lower() for t in
+              name.replace("_", " ").replace("-", " ").replace(".", " ").split()]
     if "l" in tokens or any("left" in t for t in tokens):
         return "L"
     if "r" in tokens or any("right" in t for t in tokens):
         return "R"
     return "?"
+
+
+# A finger chain whose ROOT bone is explicitly named a thumb — the CSO/handswap
+# rig calls it "BigFinger" (see handswap asset THUMB), "pollex" is the anatomical
+# synonym. This is authoritative: when present it overrules the geometric thumb
+# signals, which are ambiguous on a tightly-curled grip pose (the retarget output
+# poses the hand mid-grip). Generic "thumb" is deliberately NOT matched so the
+# synthetic geometric tests keep exercising the geometry path.
+_THUMB_NAME_RE = re.compile(r"bigfinger|pollex", re.IGNORECASE)
+
+
+def _thumb_by_name(arm: Arm) -> int | None:
+    """Index of the finger chain whose root name marks it the thumb, or None
+    when zero or more than one chain matches (fall back to geometry)."""
+    hits = [i for i, chain in enumerate(arm.fingers)
+            if _THUMB_NAME_RE.search(chain[0])]
+    return hits[0] if len(hits) == 1 else None
 
 
 # --------------------------------------------------------------------------- #
@@ -209,6 +230,13 @@ def _identify_thumb(rig: Rig, arm: Arm, warnings: list[str] | None = None) -> in
     decisive by a clear margin, in which case the fragile cross-check is
     overruled with a warning instead.
     """
+    # Authoritative name hint first: our own retarget output (CSO rig) names the
+    # thumb "BigFinger*". On its mid-grip rest pose the geometric signals below
+    # go ambiguous, so trust the explicit name when exactly one chain carries it.
+    named = _thumb_by_name(arm)
+    if named is not None:
+        return named
+
     # Base-segment direction = head-to-child-head, never bone.direction(): SMD
     # stores no bone tails, so Blender/BST invents them on import — on the
     # anaconda the fake tails made abduction pick the index as the left thumb

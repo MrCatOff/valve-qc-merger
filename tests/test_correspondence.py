@@ -202,6 +202,44 @@ def test_three_way_thumb_disagreement_still_aborts() -> None:
         build_correspondence(bones, {b.name for b in bones}, tgt)
 
 
+def test_thumb_name_hint_resolves_ambiguous_geometry() -> None:
+    # Same three-way-ambiguous geometry that aborts geometrically, but the
+    # thumb chain is explicitly named "BigFinger" (the CSO/handswap rig) — the
+    # authoritative name hint resolves it instead of raising.
+    bones = _stub_hand([
+        ("fa", (-0.4, 1.0, 0.0), (0.0, 0.4, 0.0)),
+        ("fb", (0.4, 1.05, 0.0), (0.0, 0.4, 0.0)),
+        ("abd1", (0.1, 0.6, 0.0), (0.5, 0.05, 0.0)),
+        ("abd2", (-0.1, 1.45, 0.0), (0.5, -0.05, 0.0)),
+        ("BigFinger00", (0.0, 1.0, 0.7), (0.0, 0.4, 0.0)),
+    ])
+    tgt, tgt_roles = _hand("Bip01 R", _xform(trans=Vector3(6, 0, 0)))
+    corr = build_correspondence(bones, {b.name for b in bones}, tgt)
+    assert corr.as_dict()[tgt_roles["thumb"]] == "S_BigFinger000"
+
+
+def test_generic_thumb_name_still_uses_geometry() -> None:
+    # Only "bigfinger"/"pollex" are authoritative; a chain merely named "thumb"
+    # must not short-circuit the geometric arbiter (keeps the abort test honest).
+    bones = _stub_hand([
+        ("fa", (-0.4, 1.0, 0.0), (0.0, 0.4, 0.0)),
+        ("fb", (0.4, 1.05, 0.0), (0.0, 0.4, 0.0)),
+        ("abd1", (0.1, 0.6, 0.0), (0.5, 0.05, 0.0)),
+        ("abd2", (-0.1, 1.45, 0.0), (0.5, -0.05, 0.0)),
+        ("thumb", (0.0, 1.0, 0.7), (0.0, 0.4, 0.0)),
+    ])
+    tgt, _ = _hand("Bip01 R", _xform(trans=Vector3(6, 0, 0)))
+    with pytest.raises(CorrespondenceError, match="thumb signals disagree"):
+        build_correspondence(bones, {b.name for b in bones}, tgt)
+
+
+def test_dotted_side_suffix_is_recognised() -> None:
+    from valve_qc_merger.retarget.correspondence import _side_of
+    assert _side_of("Hand.L") == "L"
+    assert _side_of("ForeFinger00.R") == "R"
+    assert _side_of("ValveBiped.Bip01_L_Hand") == "L"
+
+
 def test_decisive_abduction_overrules_planar_cross_check() -> None:
     # One clear thumb by abduction; a NON-thumb base nudged off the palm plane
     # makes the planar cross-check disagree. The decisive margin overrules it
