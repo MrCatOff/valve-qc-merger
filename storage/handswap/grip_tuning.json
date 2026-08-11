@@ -1,0 +1,6 @@
+{
+  "_comment": "Per-weapon grip tuning, keyed by weapon folder basename. grip_offset: palm-frame axes per side (X fingers-forward, Y toward thumb, Z palm normal), units. Calibrated against authored CSO models in examples/ (palm-to-weapon standoff 0.66-1.25). CLI --grip-offset overrides this.",
+  "v_deagle": {
+    "grip_offset": {"left": [0.0, 0.0, -0.6]}
+  }
+}

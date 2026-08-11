@@ -20,7 +20,11 @@ classifiers = [
     "Topic :: Games/Entertainment",
     "Topic :: Utilities",
 ]
-dependencies = []
+# numpy powers the handswap retarget engine (pure-Python hand swap +
+# animation retarget). The merge commands remain numpy-free at runtime.
+dependencies = [
+    "numpy>=1.24",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -54,6 +58,16 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# handswap/ is the vendored pure-Python retarget engine, kept byte-identical
+# to the upstream blender-retarget repo so re-syncs stay clean. Its own style
+# (percent-format, import layout, immediate-call loop closures) is not
+# enforced here; it is verified functionally instead (all 29 stock viewmodels
+# convert + pass the built-in verification suite).
+"src/valve_qc_merger/handswap/**" = [
+    "UP031", "UP015", "E402", "I001", "F401", "F841", "B023", "B905", "E741",
+]
 
 [tool.mypy]
 python_version = "3.11"

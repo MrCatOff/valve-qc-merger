@@ -151,10 +151,13 @@ def test_run_sequence_threads_dry_run_into_the_job(tmp_path: Path) -> None:
 def test_cli_registers_retarget_command() -> None:
     parser = build_parser()
     args = parser.parse_args(
-        ["retarget", "--reference", "r.smd", "--weapon-dir", "w", "--out", "o"]
+        ["retarget", "--weapon-dir", "w", "--out", "o", "--category", "pistols"]
     )
     assert args.command == "retarget"
-    assert args.dry_run is False
+    assert args.weapon_dir == Path("w")
+    assert args.category == "pistols"
+    assert args.compile is False
+    assert args.verify is True
 
 
 def test_variant_skeleton_mismatch_is_rejected(tmp_path: Path) -> None:

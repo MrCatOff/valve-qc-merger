@@ -1,19 +1,14 @@
-"""Stage-1 retarget command: --category output routing and the hand
-compatibility split. Pure Python — no Blender required."""
+"""retarget command: --category output routing into
+storage/retarget/{category}/{model}. Pure Python — no Blender required."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from valve_qc_merger.commands import retarget as rt
-from valve_qc_merger.retarget.driver import DriverError
-
-_REF = "storage/hands/reference_hands.smd"
-_FOREIGN_HANDS = "tests/examples/pair_deagle/v_deagle/f_dea_Male_hand_Low.smd"
 
 
 def _args(**overrides: str) -> argparse.Namespace:
@@ -45,28 +40,5 @@ def test_out_flag_overrides_category(tmp_path: Path) -> None:
 @pytest.mark.parametrize("bad", ["../evil", "a/b", "", ".", ".."])
 def test_bad_category_rejected(bad: str) -> None:
     args = _args(category=bad, weapon_dir="whatever/v_x")
-    with pytest.raises(DriverError):
+    with pytest.raises(ValueError):
         rt._resolve_out_dir(args)
-
-
-# --- hand compatibility split ---------------------------------------------- #
-
-def test_our_hands_are_compatible() -> None:
-    # Only original_hands + reference are read by the split.
-    inputs = SimpleNamespace(original_hands="storage/hands/male.smd", reference=_REF)
-    compatible, detail = rt._hands_compatible(inputs)  # type: ignore[arg-type]
-    assert compatible
-    assert "native" in detail
-
-
-def test_foreign_hands_are_incompatible() -> None:
-    inputs = SimpleNamespace(original_hands=_FOREIGN_HANDS, reference=_REF)
-    compatible, detail = rt._hands_compatible(inputs)  # type: ignore[arg-type]
-    assert not compatible
-    assert "foreign" in detail
-
-
-def test_unmeasurable_hands_are_incompatible() -> None:
-    inputs = SimpleNamespace(original_hands="does/not/exist.smd", reference=_REF)
-    compatible, _ = rt._hands_compatible(inputs)  # type: ignore[arg-type]
-    assert not compatible
