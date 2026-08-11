@@ -12,5 +12,9 @@ Project documentation lives here, one page per topic.
   models: shared Bip01 chain, one bone per held object.
 - [`merge-world`](merge-world.md) — merge decompiled w_ (dropped-weapon)
   models onto a single hitboxed weapon bone.
+- [Building the `tmp/wpn_unpacked` pack](wpn_unpacked-build.md) — a worked
+  end-to-end record: grouping a mixed CSO dump by `p_`/`w_`/`v_`, the merge
+  commands + exclusions, and the compile steps (LF + backslash fixups) that
+  produced 10 stock-compilable models.
 - Full example config with every attribute:
   [`configs/example_retarget.toml`](../configs/example_retarget.toml).
