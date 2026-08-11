@@ -46,13 +46,41 @@ valve-qc-merger merge-player build/p --out out/player --name p_all \
   --exclude p_linkgun --exclude p_dupstebgun --exclude p_m4a1g \
   --exclude p_balrogm4 --exclude p_charger7
 
-# view — 58 → 48 models, 6 parts
-valve-qc-merger merge-view build/v --out out/view --name v_all \
-  --exclude v_m134ex --exclude v_m4a1g \
-  --exclude v_ak47_beast --exclude v_ak47_dragon --exclude v_awpchimera \
-  --exclude v_cv47_long --exclude v_linkgun --exclude v_portal \
-  --exclude v_rpg_remapped --exclude v_stinger_frk14
 ```
+
+### View is a two-step pipeline: retarget → `merge-view --shared-hands`
+
+The view-models must first wear **our** CSO hands, then merge under a single
+shared hands bodygroup. Running `merge-view` on the raw dump instead would
+canonicalise each weapon's *own* hands and emit them per-weapon — not what we
+want. So:
+
+1. **Retarget** every `v_` weapon onto our hands (`handswap`), one output
+   folder each:
+
+   ```sh
+   for d in build/v/v_*/; do
+     valve-qc-merger retarget --weapon-dir "$d" --out "out/rt/$(basename "$d")"
+   done
+   ```
+
+   55/58 succeed; `v_ak47_beast`, `v_linkgun`, `v_stinger_frk14` have no
+   usable hand rig and are skipped.
+
+2. **Merge with `--shared-hands`** — emits ONE `hands` bodygroup (the retarget
+   hands) shared by every weapon, keeping `pev_body` at hand+weapon.
+   `--shared-hands` **rejects multi-part weapons** (>1 weapon submodel), whose
+   extra weapon bodygroup would multiply `pev_body` past the 255 ceiling —
+   they must ship on their own.
+
+   ```sh
+   valve-qc-merger merge-view out/rt --out out/view --name v_sh \
+     --shared-hands --skip-unmatched --exclude v_m134ex
+   ```
+
+   Of 54 retargeted inputs (minus `v_m134ex`): **29 merged** into 2 parts,
+   **20 multi-part weapons rejected**, 5 unmatched (one-handed / extra-arm
+   rigs). Each part carries one shared hands bodygroup + one weapon bodygroup.
 
 Each command auto-splits into numbered **parts** (`w_all_p1`, `w_all_p2`, …)
 because stock `studiomdl` caps one model at 32 submodels. Every part lands in
@@ -83,13 +111,13 @@ for qc in out/*/p*/*.qc; do
 done
 ```
 
-Result — **10 compiled models**:
+Result — **6 compiled models**:
 
 | Kind | Models | Parts (`.mdl`) |
 | --- | --- | --- |
 | world | 33 | `w_all_p1` (3.5M), `w_all_p2` (148K) |
 | player | 50 | `p_all_p1` (3.4M), `p_all_p2` (1.5M) |
-| view | 48 | `v_all_p1`…`v_all_p6` (0.96–8.6M) |
+| view (shared hands) | 29 | `v_sh_p1` (7.4M), `v_sh_p2` (4.0M) |
 
 ## 4. Excluded models, and why
 
@@ -100,7 +128,8 @@ non-standard rigs.
 **Broken / missing textures** — the decompile stored a mojibake (mis-encoded
 Cyrillic) BMP name the model can't reference:
 
-- `*_m4a1g` — texture `m4a1_…[…]_p.BMP` absent (all three kinds).
+- `*_m4a1g` — texture `m4a1_…[…]_p.BMP` absent (excluded from world +
+  player; in view it is also one of the multi-part rejects).
 - `p_dupstebgun` — texture `:REGA_DUPSTEBGUN1.bmp` absent.
 - `v_m134ex` — its `v_m134ex_set.smd` has a mojibake **material line** the
   SMD parser rejects outright (it aborts the whole batch, so it must be
@@ -124,16 +153,23 @@ stock-compilable.
   reproduce their original placement. (Which model trips depends on the
   32-submodel partition, so both are excluded together.)
 
-**Un-mergeable view rigs** (`merge-view` correspondence, structural):
+**View drop-outs** — the view pipeline (retarget → `--shared-hands`) sheds
+models at three points, none needing a manual `--exclude` except `v_m134ex`:
 
-- one hand: `v_linkgun`, `v_portal`, `v_rpg_remapped`
-- no hand fan / three arms / four fingers: `v_ak47_beast`,
-  `v_stinger_frk14`, `v_awpchimera`, `v_cv47_long`
-- foreign `BoneNN` rig with a geometrically ambiguous thumb:
-  `v_ak47_dragon`
+- **Retarget failed (3)** — no usable hand rig, so `handswap` can't wear our
+  hands: `v_ak47_beast`, `v_linkgun`, `v_stinger_frk14`.
+- **Multi-part rejected by `--shared-hands` (20)** — more than one weapon
+  submodel, which would push `pev_body` past 255 once merged:
+  `v_ak47chimera`, `v_ak47g`, `v_ak47lor`, `v_ancientjanus7`, `v_balbow`,
+  `v_balrogm4`, `v_buffm249`, `v_charger7`, `v_dupstebgun`, `v_laserminigun`,
+  `v_m32`, `v_m3dragon`, `v_m4a1g`, `v_m4a1s`, `v_plasmagun`, `v_rpg7`,
+  `v_skull6`, `v_spsmg`, `v_stunrifle`, `v_vulcanus7`.
+- **Correspondence unmatched (5)** — one-handed or extra-arm rigs
+  `--skip-unmatched` drops: `v_awp_kraken`, `v_janus7`, `v_portal`,
+  `v_rpg_remapped`, and `v_awpchimera` (rename collisions from a third arm).
 
-`merge-view --skip-unmatched` would skip these automatically; they are listed
-explicitly here so the build is deterministic and exits 0.
+Only `v_m134ex` (the mojibake-material parse crash above) needs an explicit
+`--exclude`; the rest fall out on their own, so the build is deterministic.
 
 ## See also
 
