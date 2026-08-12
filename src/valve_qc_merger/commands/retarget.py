@@ -76,6 +76,12 @@ class RetargetCommand(Command):
                                  "palm axes (X fingers-forward, Y toward "
                                  "thumb, Z palm normal), e.g. "
                                  "'left:0,0,-0.4' (repeatable)")
+        parser.add_argument("--arm-dir", action="append", default=[],
+                            metavar="side:x,y,z",
+                            help="pin the forearm/elbow direction (model space) "
+                                 "toward the player, for weapons whose arm would "
+                                 "otherwise reach into the barrel, e.g. "
+                                 "'left:0,-8,-6' (repeatable)")
 
     def run(self, args: argparse.Namespace) -> int:
         from valve_qc_merger.handswap import convert as convertmod
@@ -110,6 +116,7 @@ class RetargetCommand(Command):
             snug_max_deg=args.snug_max_deg,
             curl=args.curl,
             grip_offset=args.grip_offset,
+            arm_dir=args.arm_dir,
         )
 
         print(f"  output: {out_dir}")

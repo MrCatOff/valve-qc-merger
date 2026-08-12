@@ -112,6 +112,7 @@ def convert(args) -> dict:
     # explicit --grip-offset flags override it. Lives next to the CSO asset
     # (storage/handswap/grip_tuning.json).
     grip_offsets = {}
+    arm_dirs = {}
     tuning_path = os.path.join(os.path.dirname(os.path.abspath(
         args.asset)), "grip_tuning.json")
     if os.path.isfile(tuning_path):
@@ -120,14 +121,18 @@ def convert(args) -> dict:
         grip_offsets.update(tuning.get("grip_offset", {}))
         if grip_offsets:
             log("Grip tuning: %s" % grip_offsets)
+        arm_dirs.update(tuning.get("arm_dir", {}))
     for spec in args.grip_offset:
         side, _, xyz = spec.partition(":")
         grip_offsets[side.strip().lower()] = \
             [float(x) for x in xyz.split(",")]
+    for spec in getattr(args, "arm_dir", []) or []:
+        side, _, xyz = spec.partition(":")
+        arm_dirs[side.strip().lower()] = [float(x) for x in xyz.split(",")]
 
     log("Retarget plan (setup: %r frame 0):" % first_seq)
     plan = build_plan(asset, model.skel, model.hands, setup_world, log=log,
-                      grip_offsets=grip_offsets)
+                      grip_offsets=grip_offsets, arm_dirs=arm_dirs)
     if not plan.sides:
         raise RuntimeError("no hand could be retargeted")
 
