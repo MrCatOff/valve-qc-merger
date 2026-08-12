@@ -1,4 +1,4 @@
-"""Post-merge verification gate for merge-view (spec 3.13).
+"""Post-merge verification gate for merge-v (spec 3.13).
 
 Every claim the merge makes is re-proven from the EMITTED files of each part
 directory, against the pristine decompiled inputs:

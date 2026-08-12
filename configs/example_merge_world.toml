@@ -1,6 +1,6 @@
-# Example config for `merge-world` — every supported key with its default.
+# Example config for `merge-w` — every supported key with its default.
 # Usage:
-#   python -m valve_qc_merger merge-world <models_dir> --out <dir> \
+#   python -m valve_qc_merger merge-w <models_dir> --out <dir> \
 #       --config configs/example_merge_world.toml
 # Explicit command-line flags always win over config values.
 # `models_dir` and `--out` stay on the command line.

@@ -1,4 +1,4 @@
-"""Hand rig detection and canonical rename mapping (merge-view M2, spec §3.3).
+"""Hand rig detection and canonical rename mapping (merge-v M2, spec §3.3).
 
 Reuses the retarget correspondence engine — the same geometric machinery that
 already survived the corpus's pathologies (leaf stubs under wrists, reversed

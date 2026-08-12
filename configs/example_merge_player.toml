@@ -1,6 +1,6 @@
-# Example config for `merge-player` — every supported key with its default.
+# Example config for `merge-p` — every supported key with its default.
 # Usage:
-#   python -m valve_qc_merger merge-player <models_dir> --out <dir> \
+#   python -m valve_qc_merger merge-p <models_dir> --out <dir> \
 #       --config configs/example_merge_player.toml
 # Explicit command-line flags always win over config values.
 # `models_dir` and `--out` stay on the command line.

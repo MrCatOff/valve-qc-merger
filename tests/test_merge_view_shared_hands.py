@@ -1,4 +1,4 @@
-"""merge-view --shared-hands: one shared male/female hands bodygroup so pev_body
+"""merge-v --shared-hands: one shared male/female hands bodygroup so pev_body
 stays hand+weapon*2 (< 255) instead of weapon*hands."""
 
 from __future__ import annotations

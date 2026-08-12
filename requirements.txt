@@ -6,7 +6,7 @@
 #
 # The retarget pipeline additionally needs Blender (its worker runs inside
 # Blender's own bundled Python and imports bpy/mathutils from there — they
-# are NOT pip packages). merge-view / merge-player / merge-world need only
+# are NOT pip packages). merge-v / merge-p / merge-w need only
 # this package and, to compile the output, a studiomdl binary
 # (tools/build_studiomdl.sh builds one on macOS).
 

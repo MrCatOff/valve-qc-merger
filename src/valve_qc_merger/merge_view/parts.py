@@ -1,4 +1,4 @@
-"""Part splitting for merge-view (spec M5): respect studiomdl's hard budgets.
+"""Part splitting for merge-v (spec M5): respect studiomdl's hard budgets.
 
 HLSDK studiomdl stores submodels in fixed arrays of ``MAXSTUDIOMODELS`` (32)
 entries with NO bounds checks: a ``$bodygroup`` set exceeding 32 total

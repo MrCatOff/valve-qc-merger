@@ -1,4 +1,4 @@
-"""merge-player tests: bone collapse, merging, gate — over tests/examples/player.
+"""merge-p tests: bone collapse, merging, gate — over tests/examples/player.
 
 Fixture models cover the corpus's structure classes:
 
@@ -83,7 +83,7 @@ def test_full_merge_single_part(tmp_path: Path) -> None:
         shutil.copytree(_EXAMPLES / fixture, models_dir / fixture)
     out = tmp_path / "out"
     exit_code = main([
-        "merge-player", str(models_dir), "--out", str(out), "--name", "p_test",
+        "merge-p", str(models_dir), "--out", str(out), "--name", "p_test",
     ])
     assert exit_code == 0  # includes the verification gate on every part
 
@@ -124,7 +124,7 @@ def test_empty_submodels_dropped_with_warning(tmp_path: Path) -> None:
     shutil.copytree(_EXAMPLES / "p_luger", models_dir / "p_luger")
     out = tmp_path / "out"
     assert main([
-        "merge-player", str(models_dir), "--out", str(out), "--name", "p_one",
+        "merge-p", str(models_dir), "--out", str(out), "--name", "p_one",
     ]) == 0
     qc = (out / "p_one.qc").read_text(encoding="latin-1")
     # Only the real reference mesh became a submodel (upgrade/upgrade_2 empty).

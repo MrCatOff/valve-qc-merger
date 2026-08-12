@@ -1,4 +1,4 @@
-"""merge-view M1 tests: discovery, sanitisation, loading (spec §3.1–3.2)."""
+"""merge-v M1 tests: discovery, sanitisation, loading (spec §3.1–3.2)."""
 
 from __future__ import annotations
 

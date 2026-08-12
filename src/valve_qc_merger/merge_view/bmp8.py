@@ -1,4 +1,4 @@
-"""8-bit palettised BMP operations for merge-view textures, pure Python.
+"""8-bit palettised BMP operations for merge-v textures, pure Python.
 
 GoldSource textures are 8-bit indexed BMPs; masked textures keep their
 transparent colour at palette index 255. Everything here works on small

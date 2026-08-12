@@ -5,12 +5,12 @@ Project documentation lives here, one page per topic.
 - [`retarget`](retarget.md) — rebuild a GoldSource viewmodel on the reference
   hands: usage, discovery rules, output contract, pipeline overview,
   verification gate, troubleshooting.
-- [`merge-view`](merge-view.md) — merge a folder of decompiled view-models
+- [`merge-v`](merge-v.md) — merge a folder of decompiled view-models
   into combined models with canonical hand skeletons and per-weapon
   bodygroups.
-- [`merge-player`](merge-player.md) — merge decompiled p_ (player-held) weapon
+- [`merge-p`](merge-p.md) — merge decompiled p_ (player-held) weapon
   models: shared Bip01 chain, one bone per held object.
-- [`merge-world`](merge-world.md) — merge decompiled w_ (dropped-weapon)
+- [`merge-w`](merge-w.md) — merge decompiled w_ (dropped-weapon)
   models onto a single hitboxed weapon bone.
 - [Building the `tmp/wpn_unpacked` pack](wpn_unpacked-build.md) — a worked
   end-to-end record: grouping a mixed CSO dump by `p_`/`w_`/`v_`, the merge

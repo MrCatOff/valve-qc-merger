@@ -1,4 +1,4 @@
-# `merge-view` — merge decompiled view-models into combined GoldSource models
+# `merge-v` — merge decompiled view-models into combined GoldSource models
 
 Takes a folder of decompiled view-models (one weapon per subdirectory) and
 merges them into as few compilable `.mdl` files as studiomdl's hard limits
@@ -13,17 +13,17 @@ Every part is re-verified from the emitted files before the run reports success.
 ## Quick start
 
 ```bash
-python -m valve_qc_merger merge-view tmp/pistols/view \
+python -m valve_qc_merger merge-v tmp/pistols/view \
     --out tmp/merged_pistols --name v_pistols
 
 # With texture packing and rewritten sound paths:
-python -m valve_qc_merger merge-view tmp/pistols/view \
+python -m valve_qc_merger merge-v tmp/pistols/view \
     --out out --name v_pistols \
     --pack-textures --max-texture-size 512 \
     --sound-path 'csforce/pistols/${fileBasename}'
 
 # Everything from a config file:
-python -m valve_qc_merger merge-view tmp/pistols/view --out out \
+python -m valve_qc_merger merge-v tmp/pistols/view --out out \
     --config configs/example_merge_view.toml
 ```
 

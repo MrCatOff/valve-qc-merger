@@ -1,4 +1,4 @@
-"""CLI wiring for merge-world.
+"""CLI wiring for merge-w.
 
 Merges a folder of decompiled w_ (dropped-weapon) models into as few
 compilable .mdl files as studiomdl's hard limits allow. A w_ model renders at
@@ -48,7 +48,7 @@ EXIT_DISCOVERY = 3
 class MergeWorldCommand(Command):
     """Merge decompiled w_ weapon models into combined bodygrouped models."""
 
-    name = "merge-world"
+    name = "merge-w"
     help = "merge a folder of decompiled w_ (world) weapon models into combined models"
 
     def configure(self, parser: argparse.ArgumentParser) -> None:

@@ -1,4 +1,4 @@
-"""Texture downscale and 2x2 atlas packing for merge-view (spec 3.11-3.12).
+"""Texture downscale and 2x2 atlas packing for merge-v (spec 3.11-3.12).
 
 GoldSource caps textures per model (studiomdl degrades far earlier), so four
 256x256 textures can share one 512x512 BMP: each participating texture is

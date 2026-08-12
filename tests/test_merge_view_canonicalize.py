@@ -1,4 +1,4 @@
-"""merge-view M2 canonicalisation on a real reversed-hierarchy model (spec §3.4-3.5)."""
+"""merge-v M2 canonicalisation on a real reversed-hierarchy model (spec §3.4-3.5)."""
 
 from __future__ import annotations
 

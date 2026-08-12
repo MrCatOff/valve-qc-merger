@@ -40,7 +40,7 @@ and uploads `valve-qc-merger-windows` / `-macos` / `-linux` artifacts, each
 smoke-tested with a real merge. The exe runs from any directory:
 
 ```bat
-valve-qc-merger.exe merge-player C:\work\player_pistols --out merged --name p_pistols
+valve-qc-merger.exe merge-p C:\work\player_pistols --out merged --name p_pistols
 ```
 
 ## Usage

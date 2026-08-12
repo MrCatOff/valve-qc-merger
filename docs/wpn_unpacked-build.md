@@ -6,9 +6,9 @@ set per model kind:
 
 | Prefix | Command | Role |
 | --- | --- | --- |
-| `p_*` | `merge-player` | player-held (3rd-person) weapons |
-| `w_*` | `merge-world` | dropped-weapon world models |
-| `v_*` | `merge-view` | first-person view-models |
+| `p_*` | `merge-p` | player-held (3rd-person) weapons |
+| `w_*` | `merge-w` | dropped-weapon world models |
+| `v_*` | `merge-v` | first-person view-models |
 
 The dump held **58 `p_`, 37 `w_`, 58 `v_`** model folders (each a
 Crowbar-style decompile: one `.qc`, reference + animation SMDs, textures).
@@ -36,22 +36,22 @@ passes every verification gate (`--dry-run` first to preview matches):
 
 ```sh
 # world — 37 → 33 models, 2 parts
-valve-qc-merger merge-world build/w --out out/world --name w_all \
+valve-qc-merger merge-w build/w --out out/world --name w_all \
   --exclude w_ak47_beast --exclude w_balbow --exclude w_buffm249 \
   --exclude w_m4a1g
 
 # player — 58 → 50 models, 2 parts
-valve-qc-merger merge-player build/p --out out/player --name p_all \
+valve-qc-merger merge-p build/p --out out/player --name p_all \
   --exclude p_ak47_beast --exclude p_buffm249 --exclude p_m3dragon \
   --exclude p_linkgun --exclude p_dupstebgun --exclude p_m4a1g \
   --exclude p_balrogm4 --exclude p_charger7
 
 ```
 
-### View is a two-step pipeline: retarget → `merge-view --shared-hands`
+### View is a two-step pipeline: retarget → `merge-v --shared-hands`
 
 The view-models must first wear **our** CSO hands, then merge under a single
-shared hands bodygroup. Running `merge-view` on the raw dump instead would
+shared hands bodygroup. Running `merge-v` on the raw dump instead would
 canonicalise each weapon's *own* hands and emit them per-weapon — not what we
 want. So:
 
@@ -74,7 +74,7 @@ want. So:
    they must ship on their own.
 
    ```sh
-   valve-qc-merger merge-view out/rt --out out/view --name v_sh \
+   valve-qc-merger merge-v out/rt --out out/view --name v_sh \
      --shared-hands --skip-unmatched --exclude v_m134ex
    ```
 
@@ -173,5 +173,5 @@ Only `v_m134ex` (the mojibake-material parse crash above) needs an explicit
 
 ## See also
 
-- [`merge-view`](merge-view.md), [`merge-player`](merge-player.md),
-  [`merge-world`](merge-world.md) — per-command reference.
+- [`merge-v`](merge-v.md), [`merge-p`](merge-p.md),
+  [`merge-w`](merge-w.md) — per-command reference.

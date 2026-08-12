@@ -1,4 +1,4 @@
-# `merge-player` — merge decompiled p_ weapon models into combined GoldSource models
+# `merge-p` — merge decompiled p_ weapon models into combined GoldSource models
 
 Takes a folder of decompiled p_ (player-held) weapon models and merges them
 into as few compilable `.mdl` files as studiomdl's hard limits allow. The
@@ -13,7 +13,7 @@ reports success.
 ## Quick start
 
 ```bash
-python -m valve_qc_merger merge-player tmp/player_pistols \
+python -m valve_qc_merger merge-p tmp/player_pistols \
     --out tmp/merged_p_pistols --name p_pistols
 ```
 
@@ -65,7 +65,7 @@ idle animation.
   merged column-wise into one `skinfamilies` block; models with fewer rows
   repeat their last row. Only one weapon is visible at a time, so a global
   skin row is safe. `models.ini` records `skins = N` plus one `skin_<i> = <texture>` line per row for those weapons, so a plugin can identify each variant and select it with `pev_skin = i`.
-- `$texrendermode` entries are carried per staged texture, as in merge-view.
+- `$texrendermode` entries are carried per staged texture, as in merge-v.
 - Per-weapon `$attachment` entries are **dropped** (with a warning): GoldSrc
   caps a model at 4 attachments, so 30 per-weapon muzzle-flash points cannot
   survive a merge. The classic community weapons.mdl ships the same way.
@@ -102,7 +102,7 @@ Any failed check fails the run (exit 2). `--no-verify` skips the gate.
 
 ## Hard limits this exists to respect
 
-Same unchecked studiomdl arrays as merge-view (see `docs/merge-view.md`): a
+Same unchecked studiomdl arrays as merge-v (see `docs/merge-v.md`): a
 part holds at most 32 submodels (the leading `blank` + 31 weapons), 127 bones
 and 100 textures. With one bone per weapon a part exhausts submodels long
 before bones — 31 single-hand pistols cost 11 shared + 31 weapon bones.

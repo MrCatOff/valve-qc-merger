@@ -1,4 +1,4 @@
-"""merge-view skeleton operations: every edit must be FK-exact (spec §3.4-3.5)."""
+"""merge-v skeleton operations: every edit must be FK-exact (spec §3.4-3.5)."""
 
 from __future__ import annotations
 

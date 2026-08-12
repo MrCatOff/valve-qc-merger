@@ -1,4 +1,4 @@
-"""Exact structural skeleton operations for merge-view (spec §3.4–3.5).
+"""Exact structural skeleton operations for merge-v (spec §3.4–3.5).
 
 Every operation here rewrites SMD data without moving anything: world
 transforms of surviving bones are preserved per frame, exactly (verified by

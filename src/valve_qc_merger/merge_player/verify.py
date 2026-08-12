@@ -1,4 +1,4 @@
-"""Post-merge verification gate for merge-player.
+"""Post-merge verification gate for merge-p.
 
 Every claim is re-proven from the EMITTED part files against the pristine
 decompiled inputs:

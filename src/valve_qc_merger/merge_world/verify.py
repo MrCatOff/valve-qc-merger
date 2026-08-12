@@ -1,4 +1,4 @@
-"""Post-merge verification gate for merge-world.
+"""Post-merge verification gate for merge-w.
 
 Every claim is re-proven from the EMITTED part files against the pristine
 decompiled inputs:

@@ -1,4 +1,4 @@
-"""Greedy part splitting for merge-player.
+"""Greedy part splitting for merge-p.
 
 The binding budget is studiomdl's hard 32-submodel array (one leading
 ``blank`` + one submodel per weapon = 31 weapons per part); textures and the

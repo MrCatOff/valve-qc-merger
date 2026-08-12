@@ -1,4 +1,4 @@
-"""merge-view texture stage tests: BMP8 ops, downscale, atlas packing."""
+"""merge-v texture stage tests: BMP8 ops, downscale, atlas packing."""
 
 from __future__ import annotations
 

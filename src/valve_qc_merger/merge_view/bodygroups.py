@@ -1,4 +1,4 @@
-"""Bodygroup collapse for merge-view (spec §3.6).
+"""Bodygroup collapse for merge-v (spec §3.6).
 
 Per model: switchable bodygroups collapse to their first entry (every kept
 group costs one of GoldSource's 32 bodyparts and multiplies ``pev_body``), the

@@ -39,7 +39,7 @@ jobs:
       - name: Smoke test
         run: |
           ${{ matrix.binary }} --version
-          ${{ matrix.binary }} merge-player tests/examples/player --out smoke_out --name p_smoke
+          ${{ matrix.binary }} merge-p tests/examples/player --out smoke_out --name p_smoke
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

@@ -1,4 +1,4 @@
-"""merge-view M2 hand matching tests (spec §3.3)."""
+"""merge-v M2 hand matching tests (spec §3.3)."""
 
 from __future__ import annotations
 

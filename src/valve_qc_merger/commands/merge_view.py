@@ -1,4 +1,4 @@
-"""CLI wiring for merge-view (docs/merge-view.md).
+"""CLI wiring for merge-v (docs/merge-v.md).
 
 Milestone 1: discovery + sanitisation + loading with a ``--dry-run`` inventory.
 Later milestones add hand canonicalisation, pooling, merging and textures; the
@@ -64,7 +64,7 @@ EXIT_DISCOVERY = 3
 class MergeViewCommand(Command):
     """Merge decompiled view-models onto one canonical hand skeleton."""
 
-    name = "merge-view"
+    name = "merge-v"
     help = "merge a folder of decompiled view-models into combined models (spec draft)"
 
     def configure(self, parser: argparse.ArgumentParser) -> None:

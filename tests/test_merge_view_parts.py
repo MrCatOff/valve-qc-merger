@@ -1,4 +1,4 @@
-"""merge-view part splitting tests (spec M5): studiomdl's 32-submodel cap."""
+"""merge-v part splitting tests (spec M5): studiomdl's 32-submodel cap."""
 
 from __future__ import annotations
 

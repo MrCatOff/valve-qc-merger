@@ -1,4 +1,4 @@
-"""Bone pooling for merge-view (spec §3.7): beat the 127-bone budget.
+"""Bone pooling for merge-v (spec §3.7): beat the 127-bone budget.
 
 Only one weapon draws at a time, so unrelated weapons share bone slots named
 ``Bone_WPNJ{n}_TYPE1``; canonical hand bones (the shared set) keep their names.

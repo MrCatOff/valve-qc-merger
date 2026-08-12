@@ -1,4 +1,4 @@
-"""merge-world tests: rendered-pose bake, merging, gate — over tests/examples/world.
+"""merge-w tests: rendered-pose bake, merging, gate — over tests/examples/world.
 
 Fixture models cover the corpus's structure classes:
 
@@ -38,7 +38,7 @@ def test_full_merge_single_part(tmp_path: Path) -> None:
         shutil.copytree(_EXAMPLES / fixture, models_dir / fixture)
     out = tmp_path / "out"
     exit_code = main([
-        "merge-world", str(models_dir), "--out", str(out), "--name", "w_test",
+        "merge-w", str(models_dir), "--out", str(out), "--name", "w_test",
     ])
     assert exit_code == 0  # includes the verification gate
 

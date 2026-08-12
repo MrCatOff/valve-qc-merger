@@ -1,4 +1,4 @@
-# `merge-world` — merge decompiled w_ weapon models into combined GoldSource models
+# `merge-w` — merge decompiled w_ weapon models into combined GoldSource models
 
 Takes a folder of decompiled w_ (dropped-weapon) models and merges them into
 as few compilable `.mdl` files as studiomdl's hard limits allow. A w_ model
@@ -13,7 +13,7 @@ a weapon; `pev_body 0` shows nothing.
 ## Quick start
 
 ```bash
-python -m valve_qc_merger merge-world tmp/pistols_world \
+python -m valve_qc_merger merge-w tmp/pistols_world \
     --out tmp/merged_w_pistols --name w_pistols
 ```
 
@@ -37,7 +37,7 @@ out/
 
 A w_ model draws every vertex at `idle_world · bind_world⁻¹ · v`. Those two
 poses usually coincide, but not always — the infinity series' idle sits 9+
-units from its bind. `merge-world` bakes that per-bone rigid transform into
+units from its bind. `merge-w` bakes that per-bone rigid transform into
 the vertices first (identity for most models, so their vertices stay
 bit-identical), after which all meshes genuinely live in their on-screen
 space and can share one identity bone with zero loss. The gate re-derives
@@ -70,7 +70,7 @@ Any failed check fails the run (exit 2). `--no-verify` skips the gate.
 
 ## Flags
 
-Same surface as `merge-player` (see `docs/merge-player.md`): `--out`,
+Same surface as `merge-p` (see `docs/merge-p.md`): `--out`,
 `--name` (default `w_merged`), `--exclude`, `--manifest-format`,
 `--texture-budget`, `--max-texture-size`, `--pack-textures`,
 `--no-pack-texture`, `--config`, `--no-verify`, `--dry-run`.

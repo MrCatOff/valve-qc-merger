@@ -1,4 +1,4 @@
-"""Rendered-pose baking for merge-world.
+"""Rendered-pose baking for merge-w.
 
 A w_ model draws at ``anim_world . bind_world⁻¹ . vertex`` (per bone). The
 corpus idles are static poses (often padded to 101 identical frames) that do

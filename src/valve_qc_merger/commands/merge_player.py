@@ -1,4 +1,4 @@
-"""CLI wiring for merge-player.
+"""CLI wiring for merge-p.
 
 Merges a folder of decompiled p_ (player-held) weapon models into as few
 compilable .mdl files as studiomdl's hard limits allow. The engine bone-merges
@@ -74,7 +74,7 @@ def _load_player_model(model_dir: Path) -> ModelInput:
 class MergePlayerCommand(Command):
     """Merge decompiled p_ weapon models into combined bodygrouped models."""
 
-    name = "merge-player"
+    name = "merge-p"
     help = "merge a folder of decompiled p_ (player) weapon models into combined models"
 
     def configure(self, parser: argparse.ArgumentParser) -> None:

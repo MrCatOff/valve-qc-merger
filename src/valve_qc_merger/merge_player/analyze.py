@@ -1,4 +1,4 @@
-"""Weapon-bone analysis and chain collapse for merge-player.
+"""Weapon-bone analysis and chain collapse for merge-p.
 
 A decompiled p_ model carries the shared ``Bip01`` chain plus a small
 non-shared subtree per held object, usually ``flash -> weapon`` hanging off a

@@ -1,4 +1,4 @@
-"""merge-view bone pooling and bodygroup collapse tests (spec §3.6-3.7)."""
+"""merge-v bone pooling and bodygroup collapse tests (spec §3.6-3.7)."""
 
 from __future__ import annotations
 

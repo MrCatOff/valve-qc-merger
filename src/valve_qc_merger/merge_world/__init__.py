@@ -1,4 +1,4 @@
-"""merge-world: merge decompiled w_ (dropped-weapon) models into one.
+"""merge-w: merge decompiled w_ (dropped-weapon) models into one.
 
 A w_ model renders at its entity origin with its idle pose; no player skeleton
 is involved. The merged model therefore needs only TWO bones total — a

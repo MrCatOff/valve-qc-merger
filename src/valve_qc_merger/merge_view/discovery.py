@@ -1,4 +1,4 @@
-"""Model discovery, filename sanitisation and loading (merge-view M1, spec §3.1–3.2).
+"""Model discovery, filename sanitisation and loading (merge-v M1, spec §3.1–3.2).
 
 Pure Python over the typed QC/SMD layer. A *model* is a directory containing
 exactly one ``.qc``; its manifest (bodygroups, sequences with SMD paths,
@@ -19,7 +19,7 @@ from valve_qc_merger.retarget.qc_build import QcSequence, parse_bodygroups, pars
 
 
 class MergeViewError(RuntimeError):
-    """A merge-view failure with a model-level diagnostic."""
+    """A merge-v failure with a model-level diagnostic."""
 
 
 # --------------------------------------------------------------------------- #
