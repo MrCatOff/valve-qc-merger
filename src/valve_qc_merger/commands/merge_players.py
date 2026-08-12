@@ -57,7 +57,7 @@ class MergePlayersCommand(Command):
                             help="parent directory; each subdir with one .qc is a model")
         parser.add_argument("--out", type=Path, required=True, help="output directory")
         parser.add_argument("--name", default="players", help="output model name stem")
-        parser.add_argument("--base", type=Path, default=Path("tmp/ORIGINAL_CS_MODEL"),
+        parser.add_argument("--base", type=Path, default=Path("storage/players_donor"),
                             help="donor rig directory (skeleton + canonical animations)")
         parser.add_argument("--group-by", choices=("size", "team", "sex"),
                             default="size", help="how to partition models into merges")

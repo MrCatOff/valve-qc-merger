@@ -2,7 +2,7 @@
 
 Unlike merge-p (p_ *weapon* models), this merges third-person *player body*
 models: many Counter-Strike Nexon (CSO) skins onto ONE canonical CS 1.6 rig.
-A donor model (``tmp/ORIGINAL_CS_MODEL``, arctic) supplies the skeleton, the
+A donor model (``storage/players_donor``, arctic) supplies the skeleton, the
 canonical ~111-sequence animation set (voiding unneeded slots with the
 ``I_am_a_stupid_placeholder`` trick), hitboxes, attachments and controller; each
 CSO body becomes one entry of a single ``skin`` bodygroup, selected by pev_body.

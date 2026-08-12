@@ -8,13 +8,13 @@ onto ONE canonical CS 1.6 rig. Each source body becomes an entry of a single
 
 ```sh
 python -m valve_qc_merger merge-players tmp/nexon_models \
-    --base tmp/ORIGINAL_CS_MODEL --out out/players --name pl \
+    --base storage/players_donor --out out/players --name pl \
     --group-by size --pack-textures
 ```
 
 ## How it works
 
-A **donor** model (`--base`, default `tmp/ORIGINAL_CS_MODEL` — arctic) supplies the
+A **donor** model (`--base`, default `storage/players_donor` — arctic) supplies the
 skeleton, the canonical ~111-sequence animation set, the hitboxes, attachments and
 mouth controller. CSO player skeletons are *bind-compatible* with CS 1.6 — the core
 `ValveBiped Bip01` joint rotations match the donor exactly — so no per-vertex
@@ -82,7 +82,7 @@ the texture budget, or `--max-skins`.
 
 ## Flags
 
-- `--base DIR` — donor rig (default `tmp/ORIGINAL_CS_MODEL`).
+- `--base DIR` — donor rig (default `storage/players_donor`).
 - `--group-by {size,team,sex}`, `--proportion-tolerance UNITS`, `--labels TOML`.
 - `--placeholder-seq GLOB` (repeatable) — void matching sequence slots.
 - `--include-base` — add the donor body as skin 0 (pulls in the full donor rig).

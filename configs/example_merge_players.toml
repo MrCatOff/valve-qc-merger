@@ -9,7 +9,7 @@ name = "players"
 # Donor rig: supplies the skeleton, the canonical CS 1.6 animation set,
 # hitboxes, attachments and controller. Its animations are the ONLY ones the
 # merged models play (every CSO model's own animations are discarded).
-base = "tmp/ORIGINAL_CS_MODEL"
+base = "storage/players_donor"
 
 # How to partition source models into merges:
 #   size  - cluster by skeleton proportion (bone lengths within proportion_tolerance)
