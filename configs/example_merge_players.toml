@@ -1,0 +1,43 @@
+# Example config for `merge-players` — every supported key with its default.
+# Run with:
+#   python -m valve_qc_merger merge-players <models_dir> --out <dir> \
+#       --config configs/example_merge_players.toml
+# Explicit command-line values always override the config.
+
+name = "players"
+
+# Donor rig: supplies the skeleton, the canonical CS 1.6 animation set,
+# hitboxes, attachments and controller. Its animations are the ONLY ones the
+# merged models play (every CSO model's own animations are discarded).
+base = "tmp/ORIGINAL_CS_MODEL"
+
+# How to partition source models into merges:
+#   size  - cluster by hitbox signature + mesh height (band = height-tolerance)
+#   team  - split by team label (ct / t), from names + the --labels override
+#   sex   - split by female / male, from names + the --labels override
+group_by = "size"
+height_tolerance = 0.25
+
+# Void unneeded sequence slots with the "I_am_a_stupid_placeholder" trick: the
+# slot (and its index) survives, but the heavy blend data is dropped. Default
+# voids the shield sequences (no shields on the target server). Repeatable globs.
+placeholder_seq = ["*shield*"]
+
+# Include the donor body itself as skin 0 (default: CSO bodies only).
+include_base = false
+
+# Skins per output part. Default splits only at the per-bodypart submodel limit
+# (32 for stock studiomdl). Raise submodel_limit for a patched compiler.
+# max_skins = 0            # 0/unset = no extra cap
+submodel_limit = 32
+
+exclude = []
+manifest_format = "ini"
+
+# Textures
+texture_budget = 80        # per part; hard engine cap is 100
+# max_texture_size = 256   # downscale larger textures (8-bit re-quantised)
+pack_textures = false      # atlas eligible textures four-to-a-file
+no_pack_texture = []       # globs kept out of atlases
+
+no_verify = false

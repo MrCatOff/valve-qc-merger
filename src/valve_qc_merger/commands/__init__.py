@@ -10,6 +10,7 @@ from collections.abc import Iterator
 
 from valve_qc_merger.commands.base import Command
 from valve_qc_merger.commands.merge_player import MergePlayerCommand
+from valve_qc_merger.commands.merge_players import MergePlayersCommand
 from valve_qc_merger.commands.merge_view import MergeViewCommand
 from valve_qc_merger.commands.merge_world import MergeWorldCommand
 from valve_qc_merger.commands.retarget import RetargetCommand
@@ -19,6 +20,7 @@ _COMMAND_CLASSES: list[type[Command]] = [
     RetargetCommand,
     MergeViewCommand,
     MergePlayerCommand,
+    MergePlayersCommand,
     MergeWorldCommand,
 ]
 
