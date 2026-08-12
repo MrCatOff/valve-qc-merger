@@ -12,11 +12,13 @@ name = "players"
 base = "tmp/ORIGINAL_CS_MODEL"
 
 # How to partition source models into merges:
-#   size  - cluster by hitbox signature + mesh height (band = height-tolerance)
+#   size  - cluster by skeleton proportion (bone lengths within proportion_tolerance)
 #   team  - split by team label (ct / t), from names + the --labels override
 #   sex   - split by female / male, from names + the --labels override
 group_by = "size"
-height_tolerance = 0.25
+# Max per-bone length difference (units) for two rigs to share a group. Larger =
+# fewer, broader groups (more residual stretch); smaller = more, tighter groups.
+proportion_tolerance = 2.0
 
 # Void unneeded sequence slots with the "I_am_a_stupid_placeholder" trick: the
 # slot (and its index) survives, but the heavy blend data is dropped. Default

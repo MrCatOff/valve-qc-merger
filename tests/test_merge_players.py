@@ -163,7 +163,8 @@ def test_build_sequences_voids_shields_keeps_order(tmp_path):
 def test_group_by_sex_splits_female_male(tmp_path):
     def pm(name: str) -> PlayerModel:
         return PlayerModel(name, tmp_path, tmp_path / "x.qc", "", [], [],
-                           hitbox_sig="sig", proportion_sig="p", height=69.0)
+                           hitbox_sig="sig", proportions=(), proportion_sig="p",
+                           height=69.0)
 
     groups = dict(group_models(
         [pm("gign"), pm("marinegirl"), pm("terror")], mode="sex"))

@@ -61,8 +61,10 @@ class MergePlayersCommand(Command):
                             help="donor rig directory (skeleton + canonical animations)")
         parser.add_argument("--group-by", choices=("size", "team", "sex"),
                             default="size", help="how to partition models into merges")
-        parser.add_argument("--height-tolerance", type=float, default=0.25,
-                            help="size mode: relative mesh-height band within a hitbox")
+        parser.add_argument("--proportion-tolerance", type=float, default=2.0,
+                            metavar="UNITS",
+                            help="size mode: max per-bone length difference (units) "
+                                 "for two rigs to share a group (default 2.0)")
         parser.add_argument("--labels", type=Path, metavar="TOML",
                             help="override team/sex labels: {model = \"ct\"|\"t\"|...}")
         parser.add_argument("--placeholder-seq", action="append", default=[],
@@ -138,7 +140,8 @@ class MergePlayersCommand(Command):
             return EXIT_FAIL
 
         groups = group_models(models, mode=args.group_by,
-                              height_tolerance=args.height_tolerance, labels=labels)
+                              proportion_tolerance=args.proportion_tolerance,
+                              labels=labels)
         print(f"  group-by {args.group_by}: {len(groups)} group(s)")
         for key, members in groups:
             parts = split_parts(members, submodel_limit=args.submodel_limit,
@@ -213,7 +216,7 @@ def _load_labels(path: Path | None) -> dict[str, str]:
 
 
 _CONFIG_DEFAULTS: dict[str, object] = {
-    "name": "players", "group_by": "size", "height_tolerance": 0.25,
+    "name": "players", "group_by": "size", "proportion_tolerance": 2.0,
     "placeholder_seq": [], "include_base": False, "max_skins": None,
     "submodel_limit": DEFAULT_SUBMODEL_LIMIT, "exclude": [],
     "manifest_format": "ini", "texture_budget": TEXTURE_BUDGET,

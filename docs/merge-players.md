@@ -60,14 +60,17 @@ plausible:
 
 | Mode | Key |
 | --- | --- |
-| `size` (default) | skeleton proportion (quantised core-bone lengths) |
+| `size` (default) | skeleton proportion — bone lengths clustered within `--proportion-tolerance` |
 | `team` | `ct` / `t` label |
 | `sex` | `female` / `male` label |
 
-`size` groups by the actual skeleton proportions — the axis the stretch lives on.
-Rigs with the same proportion signature share one (rebased) animation set with no
-stretch, so the CSO female skeleton, the male one, tankers, monsters and chibi
-models each form their own group automatically. Team and sex are **not** encoded in
+`size` clusters by the actual skeleton proportions — the axis the stretch lives
+on — grouping rigs whose every core-bone length is within `--proportion-tolerance`
+units (default 2.0). The rebased animations use a cluster representative, so a
+within-tolerance difference (e.g. a foot 1 unit longer) leaves only a small,
+bounded residual instead of splitting the class. The CSO female skeleton, the
+male one, tankers, monsters and chibi models still separate automatically. Raise
+the tolerance for fewer/broader groups, lower it for tighter ones. Team and sex are **not** encoded in
 the model data, so those modes classify by a built-in name-keyword table plus an
 optional `--labels file.toml` override (`model = "ct"`); unlabeled models group as
 `unknown` and are logged, never guessed.
@@ -80,7 +83,7 @@ the texture budget, or `--max-skins`.
 ## Flags
 
 - `--base DIR` — donor rig (default `tmp/ORIGINAL_CS_MODEL`).
-- `--group-by {size,team,sex}`, `--height-tolerance F`, `--labels TOML`.
+- `--group-by {size,team,sex}`, `--proportion-tolerance UNITS`, `--labels TOML`.
 - `--placeholder-seq GLOB` (repeatable) — void matching sequence slots.
 - `--include-base` — add the donor body as skin 0 (pulls in the full donor rig).
 - `--max-skins N`, `--submodel-limit N` (default 32).

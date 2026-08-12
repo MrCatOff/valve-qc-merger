@@ -16,7 +16,7 @@ set safely, so they can be merged into one skin-bodygrouped model. Modes:
 
 from __future__ import annotations
 
-from valve_qc_merger.merge_players.discovery import PlayerModel
+from valve_qc_merger.merge_players.discovery import PlayerModel, proportion_label
 
 # Name-keyword → label tables. Substring match, case-insensitive, first hit wins.
 _TEAM_KEYWORDS: list[tuple[str, str]] = [
@@ -49,11 +49,47 @@ def classify_sex(name: str) -> str:
     return "male"
 
 
+def _cluster_by_proportion(
+    models: list[PlayerModel], tolerance: float,
+) -> dict[str, list[PlayerModel]]:
+    """Greedy-cluster rigs whose bone lengths are all within ``tolerance`` units.
+
+    A single foot bone differing by ~1 unit must NOT split a class (exact-match
+    over-fragments); the rebased animations use a cluster representative, so
+    within-tolerance differences leave only a small, bounded residual. Ordered
+    by proportion vector for determinism; the representative (first joiner) names
+    the group via its rounded label.
+    """
+    clusters: list[tuple[tuple[float, ...], str, list[PlayerModel]]] = []
+    for model in sorted(models, key=lambda m: (m.proportions, m.name)):
+        placed = False
+        for rep_vec, _key, members in clusters:
+            if all(abs(a - b) <= tolerance
+                   for a, b in zip(model.proportions, rep_vec, strict=False)):
+                members.append(model)
+                placed = True
+                break
+        if not placed:
+            clusters.append(
+                (model.proportions, proportion_label(model.proportions), [model])
+            )
+    # Disambiguate any key collisions (two reps rounding to the same label).
+    out: dict[str, list[PlayerModel]] = {}
+    for _vec, key, members in clusters:
+        unique = key
+        n = 2
+        while unique in out:
+            unique = f"{key}#{n}"
+            n += 1
+        out[unique] = members
+    return out
+
+
 def group_models(
     models: list[PlayerModel],
     *,
     mode: str = "size",
-    height_tolerance: float = 0.25,  # kept for CLI/back-compat; unused by size mode
+    proportion_tolerance: float = 2.0,
     labels: dict[str, str] | None = None,
 ) -> list[tuple[str, list[PlayerModel]]]:
     """Partition models into merge groups; returns ``(group_key, members)`` sorted.
@@ -61,17 +97,18 @@ def group_models(
     ``labels`` (from ``--labels``) overrides the keyword classifier for team/sex.
     """
     overrides = {k.lower(): v.lower() for k, v in (labels or {}).items()}
-    groups: dict[str, list[PlayerModel]] = {}
-    for model in models:
-        if mode == "size":
-            key = model.proportion_sig  # same skeleton proportions == one group
-        elif mode == "team":
-            key = overrides.get(model.name.lower()) or classify_team(model.name)
-        elif mode == "sex":
-            key = overrides.get(model.name.lower()) or classify_sex(model.name)
-        else:  # pragma: no cover - argparse restricts choices
-            raise ValueError(f"unknown group-by mode: {mode!r}")
-        groups.setdefault(key, []).append(model)
+    if mode == "size":
+        groups = _cluster_by_proportion(models, proportion_tolerance)
+    else:
+        groups = {}
+        for model in models:
+            if mode == "team":
+                key = overrides.get(model.name.lower()) or classify_team(model.name)
+            elif mode == "sex":
+                key = overrides.get(model.name.lower()) or classify_sex(model.name)
+            else:  # pragma: no cover - argparse restricts choices
+                raise ValueError(f"unknown group-by mode: {mode!r}")
+            groups.setdefault(key, []).append(model)
 
     return [(key, sorted(groups[key], key=lambda m: m.name)) for key in sorted(groups)]
 

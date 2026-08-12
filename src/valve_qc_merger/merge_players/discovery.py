@@ -50,7 +50,8 @@ class PlayerModel:
     body_meshes: list[Smd]  # the primary body studio SMD(s), concatenated at emit
     body_stems: list[str]
     hitbox_sig: str  # hash of the $hbox block
-    proportion_sig: str  # quantised core-bone lengths — the stretch/size class
+    proportions: tuple[float, ...]  # raw core-bone lengths — clustered by tolerance
+    proportion_sig: str  # rounded label of `proportions` (readable group key)
     height: float  # vertical extent of the body mesh (z), informational
     warnings: list[str] = field(default_factory=list)
 
@@ -86,20 +87,19 @@ def bind_positions(mesh: Smd) -> dict[str, Vector3]:
     return {name_of[p.bone]: p.position for p in mesh.frames[0].poses}
 
 
-def _proportion_sig(mesh: Smd) -> str:
-    """Quantised core-bone lengths — models with the same value share a skeleton.
-
-    The stretch is a proportion (bone-length) mismatch, so this is the correct
-    axis to group on: two rigs with the same signature can share one animation
-    set with no stretch; different signatures must not.
-    """
+def _proportion_vector(mesh: Smd) -> tuple[float, ...]:
+    """Raw core-bone lengths — the axis the stretch lives on."""
     bp = bind_positions(mesh)
-    parts: list[str] = []
+    out: list[float] = []
     for bone in _SIG_BONES:
         p = bp.get(bone)
-        length = round((p.x * p.x + p.y * p.y + p.z * p.z) ** 0.5) if p else 0
-        parts.append(str(length))
-    return "-".join(parts)
+        out.append((p.x * p.x + p.y * p.y + p.z * p.z) ** 0.5 if p else 0.0)
+    return tuple(out)
+
+
+def proportion_label(vector: tuple[float, ...]) -> str:
+    """Readable rounded label of a proportion vector (used as a group key)."""
+    return "-".join(str(round(v)) for v in vector)
 
 
 def _body_stems(bodygroups: dict[str, list[str]]) -> list[str]:
@@ -206,10 +206,12 @@ def load_player_body(model_dir: Path) -> PlayerModel:
     if accessories:
         warnings.append(f"dropped accessory bodygroups: {', '.join(accessories)}")
     fullest = max(meshes, key=lambda m: len(m.nodes))
+    vector = _proportion_vector(fullest)
     return PlayerModel(
         name=model_dir.name, directory=model_dir, qc_path=qc_path, qc_text=qc_text,
         body_meshes=meshes, body_stems=stems,
-        hitbox_sig=_hitbox_sig(qc_text), proportion_sig=_proportion_sig(fullest),
+        hitbox_sig=_hitbox_sig(qc_text), proportions=vector,
+        proportion_sig=proportion_label(vector),
         height=round(_mesh_height(meshes[0]), 2), warnings=warnings,
     )
 
@@ -252,4 +254,5 @@ def donor_body_mesh(donor: Donor) -> Smd:
                frames=list(ref.frames), triangles=list(ref.triangles))
 
 
-__all__ = ["PlayerModel", "Donor", "load_player_body", "load_donor", "donor_body_mesh"]
+__all__ = ["PlayerModel", "Donor", "load_player_body", "load_donor",
+           "donor_body_mesh", "bind_positions", "proportion_label"]
