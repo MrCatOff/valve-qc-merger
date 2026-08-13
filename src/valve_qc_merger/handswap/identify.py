@@ -129,6 +129,10 @@ def _finger_chains_of(skel: OrigSkeleton, bone: str, weighted: set[str],
                     if skel.subtree(k) & weighted] or skel.children[cur]
             cur = kids[0]
             chain.append(cur)
+        # fingers are 3 bones; anything past that is a prop riding the
+        # fingertip (m1887: the shotgun shell is parented to the thumb
+        # tip) and must be measured as WEAPON, not finger
+        chain = chain[:3]
         if len(chain) >= 2:
             chains.append(chain)
     if len(chains) < 3 or total_weight is None:
@@ -137,12 +141,13 @@ def _finger_chains_of(skel: OrigSkeleton, bone: str, weighted: set[str],
     origin = skel.bind_world[bone][:3, 3]
 
     def extent(ch):
-        sub = skel.subtree(ch[0])
+        # chain bones only — a prop below the fingertip must not make
+        # the finger itself look like a weapon subtree
         return max(np.linalg.norm(skel.bind_world[b][:3, 3] - origin)
-                   for b in sub)
+                   for b in ch)
 
     def weight(ch):
-        return sum(total_weight.get(b, 0.0) for b in skel.subtree(ch[0]))
+        return sum(total_weight.get(b, 0.0) for b in ch)
 
     exts = sorted(extent(c) for c in chains)
     wts = sorted(weight(c) for c in chains)
@@ -167,11 +172,27 @@ def find_hands(skel: OrigSkeleton, refs: dict[str, Smd],
             total_weight[b] = total_weight.get(b, 0.0) + x
 
     # --- palm fans: >=4 finger chains (fall back to 3) -------------------
+    # geometric sanity gates run BEFORE the two-fan cap, or a fake fan
+    # (stacked effect dummies, kart wheels) can displace a real hand
+    def plausible(fan, chains):
+        roots = [skel.bind_world[ch[0]][:3, 3] for ch in chains]
+        width = max(np.linalg.norm(a - b)
+                    for i, a in enumerate(roots) for b in roots[i + 1:])
+        if width > 8.0:
+            log("  fan %r rejected: %.1f units across — not a hand"
+                % (fan, width))
+            return False
+        if width < 0.5:
+            log("  fan %r rejected: chain roots are coincident (%.2f) — "
+                "effect bones, not fingers" % (fan, width))
+            return False
+        return True
+
     fans = []
     for min_chains in (4, 3):
         for b in skel.names:
             chains = _finger_chains_of(skel, b, weighted, total_weight)
-            if len(chains) >= min_chains:
+            if len(chains) >= min_chains and plausible(b, chains):
                 fans.append((b, chains))
         if fans:
             break
@@ -181,8 +202,12 @@ def find_hands(skel: OrigSkeleton, refs: dict[str, Smd],
             if not any(a in fan_names for a in _descendant_fans(skel, f,
                                                                 fan_names))]
     if len(fans) > 2:
-        # keep the two with the most chains / deepest
-        fans.sort(key=lambda fc: -len(fc[1]))
+        # keep two: name-confirmed hands outrank chain count — a kart
+        # body with five part-chains must not displace a real hand
+        def confirmed(fan):
+            t = fan.lower()
+            return _name_side(fan) is not None or "hand" in t
+        fans.sort(key=lambda fc: (not confirmed(fc[0]), -len(fc[1])))
         fans = fans[:2]
 
     hands = []
@@ -192,15 +217,7 @@ def find_hands(skel: OrigSkeleton, refs: dict[str, Smd],
             wrist = skel.parent[wrist]
         if wrist is None:
             wrist = fan
-        # the hand CORE is fan + finger chains + path to the wrist — NOT
-        # the whole fan subtree: weapon bones may hang off the wrist too
-        core = {fan, wrist}
-        for ch in chains:
-            core |= skel.subtree(ch[0])
-        for a in skel.ancestors(fan):
-            core.add(a)
-            if a == wrist:
-                break
+        core = rebuild_core(skel, fan, wrist, chains)
         tip_dirs = _tip_directions(skel, refs, chains)
         srcs = {m for m, w in weights_by_mesh.items()
                 if sum(w.get(b, 0.0) for b in core) > 0.5}
@@ -225,6 +242,21 @@ def find_hands(skel: OrigSkeleton, refs: dict[str, Smd],
 
     _resolve_sides(skel, hands, weights_by_mesh, log)
     return hands
+
+
+def rebuild_core(skel: OrigSkeleton, fan: str, wrist: str,
+                 chains: list[list[str]]) -> set[str]:
+    """The hand CORE is fan + finger chain bones + path to the wrist —
+    NOT whole subtrees: weapon bones hang off wrists (famas STOCK) and
+    even fingertips (m1887 shell), and must survive to re-root."""
+    core = {fan, wrist}
+    for ch in chains:
+        core |= set(ch)
+    for a in skel.ancestors(fan):
+        core.add(a)
+        if a == wrist:
+            break
+    return core
 
 
 def _descendant_fans(skel, fan, fan_names):

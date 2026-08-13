@@ -145,6 +145,51 @@ def hand_bone_set(model: WeaponModel, log=print) -> set[str]:
     for wmap in model.weights.values():
         for b, x in wmap.items():
             total[b] = total.get(b, 0.0) + x
+
+    # a weapon subtree can slip into the finger chains with low weight
+    # and small extent (nexon f2000: the receiver bone became a 'thumb').
+    # Its TEXTURE gives it away: finger skin is hand-textured.
+    mats = _bone_materials(model)
+    from .identify import rebuild_core
+    # anchor the material census on NAME-CONFIRMED hands when any exist:
+    # a fake fan (kart body) in the union would launder its own texture
+    # into a 'hand material'
+    anchor = [h for h in model.hands
+              if "hand" in h.wrist.lower() or "hand" in h.fan.lower()]
+    hand_mats0 = hand_materials(
+        model, set().union(*(h.core for h in (anchor or model.hands))),
+        mats)
+    if hand_mats0:
+        real_hands = []
+        for h in model.hands:
+            kept_chains = []
+            for ch in h.chains:
+                tot = on = 0
+                for b in ch:
+                    for m, n in mats.get(b, {}).items():
+                        tot += n
+                        if m in hand_mats0:
+                            on += n
+                if tot == 0 or on / tot < 0.5:
+                    log("  chain %r rejected: %s, not a finger"
+                        % (ch[0], "weapon-textured" if tot else "no skin"))
+                    continue
+                kept_chains.append(ch)
+            if len(kept_chains) < 3:
+                # nearly every 'finger' was weapon-textured: this fan is
+                # a weapon structure, not a hand (kart body, dummy stack)
+                log("  hand at fan %r discarded: %d real fingers left"
+                    % (h.fan, len(kept_chains)))
+                continue
+            if len(kept_chains) != len(h.chains):
+                h.chains = kept_chains
+                h.core = rebuild_core(skel, h.fan, h.wrist, kept_chains)
+            real_hands.append(h)
+        if not real_hands:
+            raise RuntimeError("no hands found in the original model "
+                               "(all candidate fans were weapon parts)")
+        model.hands = real_hands
+
     ext: set[str] = set()
     for h in model.hands:
         ext |= h.core
@@ -169,35 +214,82 @@ def hand_bone_set(model: WeaponModel, log=print) -> set[str]:
                 break
             ext.add(a)
             a = skel.parent.get(a)
+
+    # sleeves: CSO-style models skin the forearm sleeve to its own bone
+    # under the wrist ('Bone_Se_Hand-R'). It is not a finger chain, but
+    # its TEXTURES are the hand's — absorb any subtree hanging off a hand
+    # bone whose skin is >=90% hand-material (a shell prop on a fingertip
+    # or a famas STOCK uses weapon textures and stays).
+    hand_mats = hand_materials(model, ext, mats)
+    grew = True
+    while grew:
+        grew = False
+        for b in list(skel.names):
+            if b in ext or skel.parent.get(b) not in ext:
+                continue
+            sub = skel.subtree(b)
+            counts: dict[str, int] = {}
+            for s in sub:
+                for m, n in mats.get(s, {}).items():
+                    counts[m] = counts.get(m, 0) + n
+            total_n = sum(counts.values())
+            if not total_n:
+                continue
+            on_hand = sum(n for m, n in counts.items() if m in hand_mats)
+            if on_hand / total_n >= 0.9:
+                ext |= sub
+                grew = True
+                log("  sleeve subtree %r absorbed into the hand (%d%% "
+                    "hand-textured)" % (b, 100 * on_hand // total_n))
+
     log("Hand bones to remove: %d of %d" % (len(ext), len(skel.names)))
     return ext
 
 
-HAND_LABEL_FRACTION = 0.5     # a QC-labelled hand mesh is dropped if at least
-                              # this much of its weight is on hand bones
+def _bone_materials(model: WeaponModel) -> dict[str, dict[str, int]]:
+    """bone name -> {material: corner count} over all reference meshes."""
+    out: dict[str, dict[str, int]] = {}
+    for smd in model.refs.values():
+        n_of = smd.name_of()
+        for tri in smd.triangles:
+            for v in tri.verts:
+                d = out.setdefault(n_of[v.dominant_bone()], {})
+                d[tri.material] = d.get(tri.material, 0) + 1
+    return out
 
 
-def classify_meshes(model: WeaponModel, hand_bones: set[str], log=print):
+def hand_materials(model: WeaponModel, core: set[str],
+                   mats: dict[str, dict[str, int]] | None = None) -> set[str]:
+    """Materials that BELONG to the hands: the majority of their corners
+    sit on hand-core bones. Majority matters — a gauntlet weapon
+    (balrog1) puts weapon-textured triangles ON finger bones, and that
+    texture must stay a weapon material."""
+    mats = mats or _bone_materials(model)
+    per_mat: dict[str, list] = {}
+    for bone, counts in mats.items():
+        for m, n in counts.items():
+            rec = per_mat.setdefault(m, [0, 0, set()])
+            rec[0] += n
+            if bone in core:
+                rec[1] += n
+                rec[2].add(bone)
+    # the load-bearing signal is SPREAD: skin textures touch many finger
+    # bones (knife glove: 7, hands: 17-31) while weapon textures touch
+    # 0-2 core bones even when skinned to the hand (balrog gauntlet: 2,
+    # knife blade riding the wrist: 1). The fraction guard is deliberately
+    # low — with only one detectable hand anchoring the census, a genuine
+    # hand texture can drop to ~0.32 of corners on core (cartblue).
+    return {m for m, (tot, on, bones) in per_mat.items()
+            if tot and on / tot > 0.25 and len(bones) >= 5}
+
+
+def classify_meshes(model: WeaponModel, hand_bones: set[str],
+                    hand_mats: set[str] | None = None, log=print):
     """-> (dropped mesh names, kept mesh names).
 
-    A mesh is an original hand mesh when the identified hand bones dominate
-    its skin weights. CSO template rigs ship a DEDICATED hand mesh that also
-    skins forearm / secondary-hand helper bones the strict hand set misses,
-    dragging its fraction below the threshold — so a mesh the QC itself files
-    under a ``$bodygroup "hands"`` is trusted as hands as long as the hand
-    bones are still its majority contributor."""
-    hand_labeled = set()
-    for group, studio in model.qc.references:
-        if re.search("hand", group, re.IGNORECASE):
-            hand_labeled.add(studio.replace("\\", "/").split("/")[-1])
-    # Bones a NON-hand (weapon) mesh skins are weapon bones; everything else a
-    # QC-labelled hand mesh touches is the hand+ARM region (forearm and
-    # secondary-hand helper bones the strict hand set misses but which belong
-    # to the hands and are removed with them).
-    weapon_bones: set[str] = set()
-    for name, wmap in model.weights.items():
-        if name not in hand_labeled:
-            weapon_bones |= set(wmap)
+    A mesh is dropped as 'the old hands' only if BOTH its weights sit on
+    hand bones AND its textures are hand textures — a gauntlet weapon is
+    skinned to hand bones but weapon-textured, and must be kept."""
     dropped, kept = [], []
     for name, wmap in model.weights.items():
         total = sum(wmap.values())
@@ -205,14 +297,16 @@ def classify_meshes(model: WeaponModel, hand_bones: set[str], log=print):
             kept.append(name)
             continue
         on_hand = sum(x for b, x in wmap.items() if b in hand_bones)
-        if name in hand_labeled:
-            # weight on the hand+arm region = anything not claimed by a weapon
-            region = sum(x for b, x in wmap.items()
-                         if b in hand_bones or b not in weapon_bones)
-            is_hand = region / total >= HAND_LABEL_FRACTION
-        else:
-            is_hand = on_hand / total >= HAND_WEIGHT_FRACTION
-        if is_hand:
+        mat_frac = 1.0
+        if hand_mats is not None:
+            counts: dict[str, int] = {}
+            for tri in model.refs[name].triangles:
+                counts[tri.material] = counts.get(tri.material, 0) + 1
+            n = sum(counts.values())
+            mat_frac = sum(c for m, c in counts.items()
+                           if m in hand_mats) / n if n else 0.0
+        if total > 0 and on_hand / total >= HAND_WEIGHT_FRACTION \
+                and mat_frac >= 0.5:
             dropped.append(name)
         else:
             kept.append(name)
@@ -369,21 +463,34 @@ def rebuild_weapon_reference(asm: Assembly, model: WeaponModel,
     smd = model.refs[mesh]
     n_of = smd.name_of()
     hand_bones = model._hand_bones
-    wrist_of_side = {sp.hand.side: sp for sp in plan.sides}
+    hand_mats = getattr(model, "_hand_mats", None)
+
+    # deleted-bone -> CSO bone: paired fingers map finger-to-finger so a
+    # gauntlet plate riding a finger keeps riding the matching CSO finger
+    anchor_map: dict[str, str] = {}
     side_of_bone: dict[str, str] = {}
+    wrist_of_side = {sp.hand.side: sp for sp in plan.sides}
     for h in model.hands:
         for b in h.core:
             side_of_bone[b] = h.side
+    for sp in plan.sides:
+        anchor_map[sp.hand.wrist] = sp.rig.wrist
+        anchor_map[sp.hand.fan] = sp.rig.wrist
+        for oc, cc in sp.pairs:
+            for i in range(min(len(oc), len(cc))):
+                anchor_map[oc[i]] = cc[i]
 
     def cso_anchor(old_bone: str):
-        side = side_of_bone.get(old_bone)
-        sp = wrist_of_side.get(side)
+        if old_bone in anchor_map:
+            return anchor_map[old_bone]
+        sp = wrist_of_side.get(side_of_bone.get(old_bone))
         return sp.rig.wrist if sp else None
 
     tris, cut, reattached = [], 0, 0
     for tri in smd.triangles:
         doms = [n_of[v.dominant_bone()] for v in tri.verts]
-        if all(d in hand_bones for d in doms):
+        if all(d in hand_bones for d in doms) \
+                and (hand_mats is None or tri.material in hand_mats):
             cut += 1
             continue
         verts = []

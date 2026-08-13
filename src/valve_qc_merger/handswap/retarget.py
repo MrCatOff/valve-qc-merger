@@ -113,7 +113,14 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
     old_roots = [setup_world[ch[0]][:3, 3] for ch in hand.chains]
     hand_rest = asset.bones[rig.wrist].rest_world
 
+    # The CSO thumb is chains[0] (FINGERS ordering). The search is
+    # anatomically constrained: the candidate thumb ALWAYS pairs to the
+    # CSO thumb, and the remaining fingers map in order along the knuckle
+    # line — fingers cannot cross. A free permutation search can win on
+    # cloud cost with an impossible assignment (f2000: thumb paired to
+    # the index, folding the CSO thumb invisibly along it).
     n = min(len(hand.chains), len(rig.chains))
+    cso_thumb = 0
     best = None
     for thumb_i in range(len(hand.chains)):
         anchor_pts = old_clouds[thumb_i]
@@ -133,13 +140,24 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
                     m = min(len(oc), len(pc))
                     cost[i, j] = np.mean([np.linalg.norm(oc[k] - pc[k])
                                           for k in range(m)])
-            for perm in itertools.permutations(range(len(pred)), n):
-                total = sum(cost[i, perm[i]] for i in range(n))
+            y_axis = a_old[:3, 1]
+            old_rest = sorted(
+                (i for i in range(len(hand.chains)) if i != thumb_i),
+                key=lambda i: float(np.dot(old_roots[i], y_axis)))
+            cso_rest = sorted(
+                (j for j in range(len(rig.chains)) if j != cso_thumb),
+                key=lambda j: float(np.dot(pred[j][0], y_axis)))
+            k = min(len(old_rest), len(cso_rest))
+            for pick in itertools.combinations(range(len(cso_rest)),
+                                               k):
+                assign = [(thumb_i, cso_thumb)] + \
+                    [(old_rest[a], cso_rest[pick[a]]) for a in range(k)]
+                total = sum(cost[i, j] for i, j in assign)
                 if best is None or total < best[0]:
-                    best = (total, thumb_i, perm, desired, a_old)
+                    best = (total, thumb_i, assign, desired, a_old)
 
-    total, thumb_i, perm, desired, a_old = best
-    pairs = [(hand.chains[i], rig.chains[perm[i]]) for i in range(n)]
+    total, thumb_i, assign, desired, a_old = best
+    pairs = [(hand.chains[i], rig.chains[j]) for i, j in assign]
     log("  %s: thumb %r (fit %.2f), pairing %s"
         % (hand.side, hand.chains[thumb_i][0], total / max(n, 1),
            ", ".join("%s->%s" % (o[0], c[0]) for o, c in pairs)))

@@ -142,44 +142,43 @@ def rewrite(qc: QcInfo, *, drop_studios: set[str],
     hands_block = '$bodygroup "hands"\n{\n\tstudio "%s"\n}\n' % hands_studio
     state = {"replaced": False}
 
-    def swap_or_drop(studio_tok, whole):
-        studio = _unq(studio_tok).replace("\\", "/").split("/")[-1].lower()
-        if studio in drop_studios:
-            if not state["replaced"]:
-                state["replaced"] = True
-                return hands_block
-            return ""
-        return whole
+    def _norm(studio_tok):
+        return _unq(studio_tok).replace("\\", "/").split("/")[-1].lower()
 
-    # A hands bodygroup may hold SEVERAL studio lines (a male/female submodel
-    # switch, e.g. the pair_deagle fixture), so operate on the whole
-    # $bodygroup { ... } block rather than a single studio line.
-    def bodygroup_block_sub(m):
-        studios = [_unq(s.group("studio")).replace("\\", "/").split("/")[-1]
-                   .lower() for s in _STUDIO.finditer(m.group("inner"))]
-        if not studios:
+    def _swap():
+        if not state["replaced"]:
+            state["replaced"] = True
+            return hands_block
+        return ""
+
+    def bodygroup_sub(m):
+        """A bodygroup may hold SEVERAL studio variants (male + female
+        hands): swap the whole block if every variant is a dropped hand,
+        strip just the dropped variants otherwise."""
+        inner = m.group("inner")
+        studios = _STUDIO.findall(inner)
+        if not studios or not any(_norm(s) in drop_studios
+                                  for s in studios):
             return m.group(0)
-        if all(s in drop_studios for s in studios):
-            # every submodel is an original hand mesh -> our hands, once
-            if not state["replaced"]:
-                state["replaced"] = True
-                return hands_block
-            return ""
-        if any(s in drop_studios for s in studios):
-            # mixed block: keep the non-hand studio lines, drop the hand ones
-            kept = "\n".join(
-                line for line in m.group("inner").splitlines()
-                if line.strip()
-                and not any(d in line.lower() for d in drop_studios))
-            return '$bodygroup %s\n{\n%s\n}\n' % (m.group("name"), kept)
-        return m.group(0)
+        if all(_norm(s) in drop_studios for s in studios):
+            return _swap()
+        kept_lines = [ln for ln in inner.splitlines()
+                      if not (_STUDIO.search(ln)
+                              and _norm(_STUDIO.search(ln).group("studio"))
+                              in drop_studios)]
+        block = '$bodygroup %s\n{%s\n}\n' % (m.group("name"),
+                                             "\n".join(kept_lines))
+        return block + _swap()
+
     text = re.sub(
         r'\$bodygroup\s+(?P<name>"[^"]+"|\S+)\s*\{(?P<inner>[^}]*)\}\s*\n?',
-        bodygroup_block_sub, text)
+        bodygroup_sub, text)
 
     def body_sub(m):
-        return swap_or_drop(m.group("studio"), m.group(0))
-    text = re.sub(r'(?im)^\s*\$body\s+(?:"[^"]+"|\S+)?\s*studio\s+'
+        if _norm(m.group("studio")) in drop_studios:
+            return _swap()
+        return m.group(0)
+    text = re.sub(r'(?im)^[ \t]*\$body\s+(?:"[^"]+"|\S+)?\s*studio\s+'
                   r'(?P<studio>"[^"]+"|\S+)\s*\n?', body_sub, text)
 
     if not state["replaced"]:

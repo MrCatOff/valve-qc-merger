@@ -50,10 +50,12 @@ def test_sides_split_by_mesh_name_stock_style() -> None:
 
 # --- mesh classification --------------------------------------------------- #
 
-def test_labeled_hand_mesh_dropped_despite_forearm_weight() -> None:
-    # 0.4 strict-hand fraction, but the rest sits on forearm/secondary bones no
-    # weapon mesh claims -> hand+arm region ~1.0 -> dropped
-    hand_bones = {"Wrist", "F0"}
+def test_hand_mesh_with_forearm_weight_dropped() -> None:
+    # A dedicated CSO hands mesh also skins forearm / secondary-hand helper
+    # bones; hand_bone_set covers that whole hand+arm region, so the mesh sits
+    # entirely on hand bones (>= 0.95) and is dropped. (No hand_mats given, so
+    # the material census is skipped and classification is weight-only.)
+    hand_bones = {"Wrist", "F0", "Forearm", "SeHand"}
     weights = {
         "gun": {"Gun0": 10.0, "Gun1": 5.0},
         "cso_hands": {"Wrist": 3.0, "F0": 1.0, "Forearm": 4.0, "SeHand": 2.0},

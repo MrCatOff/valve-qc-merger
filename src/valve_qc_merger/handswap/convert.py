@@ -91,7 +91,10 @@ def convert(args) -> dict:
 
     # bones / meshes owned by the original hands
     hand_bones = buildmod.hand_bone_set(model, log=log)
-    dropped, kept = buildmod.classify_meshes(model, hand_bones, log=log)
+    hand_mats = buildmod.hand_materials(model, hand_bones)
+    model._hand_mats = hand_mats
+    dropped, kept = buildmod.classify_meshes(model, hand_bones, hand_mats,
+                                             log=log)
     if not dropped and all(
             not (set(w) & hand_bones) for w in model.weights.values()):
         raise RuntimeError("hand bones found but no geometry uses them")

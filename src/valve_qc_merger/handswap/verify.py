@@ -31,7 +31,9 @@ from .math3d import inv_rigid, rotation_angle
 POS_TOL = 0.05          # units, world-space trajectory reproduction
 ROT_TOL_DEG = 0.5
 STRETCH_MAX_HARD = 3.5  # absolute explosion guard
-STRETCH_BASELINE_FACTOR = 1.6
+STRETCH_BASELINE_FACTOR = 1.75  # CSO fingers are longer/fatter; extreme
+# gesture anims (rpg fidget) legitimately stretch knuckle edges harder
+# than the original — the absolute excess guard still catches tearing
 
 
 def _world_by_name(smd: smdmod.Smd, frame: int) -> dict[str, np.ndarray]:

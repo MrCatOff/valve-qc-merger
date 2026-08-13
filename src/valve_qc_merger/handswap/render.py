@@ -110,7 +110,10 @@ def main(argv=None):
     wanted = []
     if args.frames:
         for spec in args.frames:
-            seq, _, fr = spec.partition(":")
+            # rpartition: sequence names may contain colons themselves
+            seq, _, fr = spec.rpartition(":")
+            if not seq:
+                seq, fr = fr, "0"
             wanted.append((seq, int(fr or 0)))
     else:
         for name, smd in anims.items():

@@ -130,7 +130,9 @@ def parse(path: str) -> Smd:
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for raw in f:
             line = raw.strip()
-            if not line or line.startswith("//") or line.startswith("#"):
+            # NOTE: '#' is NOT a comment — GoldSrc texture names may start
+            # with it ('#512512CSO_Girl_Hand_long.bmp')
+            if not line or line.startswith("//") or line.startswith(";"):
                 continue
             low = line.lower()
             if low.startswith("version"):
@@ -243,7 +245,7 @@ def write(path: str, smd: Smd) -> None:
         if smd.triangles:
             f.write("triangles\n")
             for tri in smd.triangles:
-                f.write("%s\n" % tri.material)
+                f.write("%s\n" % (tri.material or "default.bmp"))
                 for v in tri.verts:
                     f.write("%d  %.6f %.6f %.6f  %.6f %.6f %.6f  %.6f %.6f\n"
                             % (v.bone, v.pos[0], v.pos[1], v.pos[2],
