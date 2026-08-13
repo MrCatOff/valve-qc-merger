@@ -50,7 +50,6 @@ class SidePlan:
     finger_k: list[tuple[str, str, np.ndarray]]
     elbow_ref: str | None                      # original forearm bone
     fit_cost: float = 0.0
-    arm_override: np.ndarray | None = None     # fixed arm dir off the weapon
     _prev_dir: np.ndarray | None = None
 
 
@@ -202,24 +201,15 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
 
 def build_plan(asset: HandsAsset, skel: OrigSkeleton, hands: list[HandInfo],
                setup_world: dict[str, np.ndarray], log=print,
-               grip_offsets: dict | None = None,
-               arm_dirs: dict | None = None) -> RetargetPlan:
-    """``arm_dirs`` {side: [x,y,z]} pins the forearm/elbow direction for a side —
-    used to point the arm toward the player on weapons whose original wrist-parent
-    bone runs along the barrel (the arm would otherwise reach into the muzzle)."""
+               grip_offsets: dict | None = None) -> RetargetPlan:
     plan = RetargetPlan(asset=asset)
     for hand in hands:
         if hand.side not in asset.sides:
             log("  WARNING: no CSO rig for side %r — skipped" % hand.side)
             continue
         off = (grip_offsets or {}).get(hand.side)
-        sp = build_side_plan(asset, skel, hand, setup_world, log, grip_offset=off)
-        ov = (arm_dirs or {}).get(hand.side)
-        if ov is not None:
-            sp.arm_override = normalized(np.asarray(ov, dtype=float))
-            log("  %s: arm direction pinned to %s (toward the player)"
-                % (hand.side, np.round(sp.arm_override, 2)))
-        plan.sides.append(sp)
+        plan.sides.append(build_side_plan(asset, skel, hand, setup_world,
+                                          log, grip_offset=off))
     return plan
 
 
@@ -361,9 +351,7 @@ def solve_frame(plan: RetargetPlan,
 
         # original forearm direction (wrist -> elbow), per frame
         w_orig = world[sp.hand.wrist][:3, 3]
-        if sp.arm_override is not None:
-            d = sp.arm_override            # arm would pierce the weapon: fixed off it
-        elif sp.elbow_ref is not None:
+        if sp.elbow_ref is not None:
             d = world[sp.elbow_ref][:3, 3] - w_orig
         else:
             d = FALLBACK_ARM_DIR.copy()

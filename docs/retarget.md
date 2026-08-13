@@ -180,13 +180,10 @@ geometric path below runs on a size mismatch, i.e. under `--force`.
   `swap_arms = true` in the config.
 - **Hands sit too far forward/back on the grip** — tune `hand_center_fraction`
   (0 = wrist-anchored, 1 = fingertip-aligned) or set an explicit `hand_offset`.
-- **The elbow/shoulder reaches into the barrel** (some two-handed CSO guns,
-  e.g. `v_m1887`, `v_f2000`) — the original wrist-parent bone runs along the
-  weapon, so the arm follows it into the muzzle. Pin the arm toward the player
-  with `--arm-dir left:0,-8,-6 --arm-dir right:0,-8,-6` (model space; CSO guns
-  are Y-flipped vs Valve, so their player direction is -Y and down), or add an
-  `arm_dir` entry for the weapon in `storage/handswap/grip_tuning.json`. The
-  grip (wrist + fingers) is unchanged — only the off-screen forearm is redirected.
+- **The elbow/shoulder appears to run along the barrel** — this is by design: the
+  shoulder continues off-screen along the original forearm line, and the game
+  camera crops it. On a long two-handed gun the near part of that line overlaps
+  the weapon in a debug render, but it is not visible in game.
 - **Texture errors** — the gate lists the missing/invalid file and where it
   searched; textures must be 8-bit indexed BMPs.
 - **`verify FAIL` with outputs on disk** — deliberate: files are kept for

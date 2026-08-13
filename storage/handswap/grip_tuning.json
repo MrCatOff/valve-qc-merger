@@ -1,12 +1,6 @@
 {
-  "_comment": "Per-weapon grip tuning, keyed by weapon folder basename. grip_offset: palm-frame axes per side (X fingers-forward, Y toward thumb, Z palm normal), units; CLI --grip-offset overrides. arm_dir: forearm/elbow direction in MODEL space per side, toward the player — pins the arm for weapons whose original wrist-parent bone runs along the barrel (arm would otherwise reach into the muzzle); CLI --arm-dir overrides. CSO two-handed guns are Y-flipped vs Valve viewmodels, so their player direction is -Y (down -Z).",
+  "_comment": "Per-weapon grip tuning, keyed by weapon folder basename. grip_offset: palm-frame axes per side (X fingers-forward, Y toward thumb, Z palm normal), units. Calibrated against authored CSO models in examples/ (palm-to-weapon standoff 0.66-1.25). CLI --grip-offset overrides this.",
   "v_deagle": {
     "grip_offset": {"left": [0.0, 0.0, -0.6]}
-  },
-  "v_m1887": {
-    "arm_dir": {"left": [0.0, -8.0, -6.0], "right": [0.0, -8.0, -6.0]}
-  },
-  "v_f2000": {
-    "arm_dir": {"left": [0.0, -8.0, -6.0], "right": [0.0, -8.0, -6.0]}
   }
 }
