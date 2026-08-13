@@ -28,6 +28,11 @@ FrustumPolicy = str  # "warn" | "fail" | "trim"
 # Delivery defaults: the canonical reference hands and the default $bodygroup
 # hand variants, used unless the config (or CLI) says otherwise.
 DEFAULT_REFERENCE = "storage/hands/reference_hands.smd"
+# Reference used by merge-v --shared-hands: the CSO hands carry the full
+# 4-bone arm (UpperArm->Arm0->Arm1->Hand) the retarget output wears, so the
+# upper-arm mesh keeps its own bones instead of collapsing onto the forearm
+# (the elbow-deformation fix). See storage/handswap/cso_reference_hands.smd.
+DEFAULT_SHARED_HANDS_REFERENCE = "storage/handswap/cso_reference_hands.smd"
 DEFAULT_HAND_VARIANTS = {
     "female": "storage/hands/female.smd",
     "male": "storage/hands/male.smd",

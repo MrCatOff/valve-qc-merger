@@ -52,7 +52,10 @@ from valve_qc_merger.merge_view.parts import (
 from valve_qc_merger.merge_view.verify import verify_part
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.resources import resource_path
-from valve_qc_merger.retarget.config import DEFAULT_REFERENCE
+from valve_qc_merger.retarget.config import (
+    DEFAULT_REFERENCE,
+    DEFAULT_SHARED_HANDS_REFERENCE,
+)
 from valve_qc_merger.retarget.correspondence import CorrespondenceError
 from valve_qc_merger.writers.smd import write_smd_file
 
@@ -74,8 +77,11 @@ class MergeViewCommand(Command):
         parser.add_argument("--name", default="v_merged", help="output model name stem")
         parser.add_argument("--exclude", action="append", default=[],
                             metavar="NAME", help="skip a model directory (repeatable)")
-        parser.add_argument("--reference", type=Path, default=Path(DEFAULT_REFERENCE),
-                            help="canonical hand skeleton SMD")
+        parser.add_argument("--reference", type=Path, default=None,
+                            help="canonical hand skeleton SMD (default: "
+                                 f"{DEFAULT_REFERENCE}; with --shared-hands the "
+                                 f"CSO hands {DEFAULT_SHARED_HANDS_REFERENCE}, "
+                                 "which carry the full arm so the elbow is kept)")
         parser.add_argument("--skip-unmatched", action="store_true",
                             help="continue past models whose rig cannot be matched")
         parser.add_argument("--shared-hands", action="store_true",
@@ -123,6 +129,9 @@ class MergeViewCommand(Command):
     def run(self, args: argparse.Namespace) -> int:
         if args.config is not None:
             _apply_config(args)
+        if args.reference is None:
+            args.reference = Path(DEFAULT_SHARED_HANDS_REFERENCE
+                                  if args.shared_hands else DEFAULT_REFERENCE)
         args.reference = resource_path(args.reference)
         try:
             model_dirs = discover_models(args.models_dir, exclude=set(args.exclude))
@@ -377,7 +386,7 @@ class MergeViewCommand(Command):
 _CONFIG_DEFAULTS: dict[str, object] = {
     "name": "v_merged",
     "exclude": [],
-    "reference": Path(DEFAULT_REFERENCE),
+    "reference": None,
     "skip_unmatched": False,
     "shared_hands": False,
     "prune": False,

@@ -70,6 +70,16 @@ byte is therefore `2N − 1` (well under 255; 42 pistols → max 47) instead of
 than one always-on weapon submodel) is rejected — each extra weapon bodygroup
 would multiply the byte, so ship such a weapon on its own.
 
+With `--shared-hands` the reference defaults to the CSO hands
+(`storage/handswap/cso_reference_hands.smd`) instead of the ValveBiped
+`reference_hands.smd`. The retarget output wears the CSO hands, whose arm is a
+full four-bone chain (`UpperArm -> Arm0 -> Arm1 -> Hand`); the ValveBiped
+reference has only a two-bone arm (`Forearm -> Hand`), so matching against it
+drops `UpperArm`/`Arm0` and rebinds the upper-arm mesh onto the forearm — the
+elbow then deforms as the arm animates. The CSO reference keeps the full chain
+(`Bip01 -> UpperArm -> Arm0 -> Arm1 -> Hand`), so the upper arm keeps its own
+bones. Pass `--reference` to override.
+
 `models.ini` gives the ready-made `pev_body` value per weapon and the merged
 sequence index for every original animation name — identical animations are
 deduped within a part, so recolour variants share sequence indices.
@@ -116,7 +126,7 @@ deduped within a part, so recolour variants share sequence indices.
 | `--out DIR` (required) | output directory |
 | `--name STEM` | output model name stem (default `v_merged`) |
 | `--exclude NAME` | skip a model directory (repeatable) |
-| `--reference SMD` | canonical hand skeleton (default `storage/hands/reference_hands.smd`) |
+| `--reference SMD` | canonical hand skeleton (default `storage/hands/reference_hands.smd`; with `--shared-hands`, `storage/handswap/cso_reference_hands.smd` — the CSO hands with the full arm, so the elbow is preserved) |
 | `--skip-unmatched` | continue past models whose rig cannot be matched |
 | `--shared-hands` | inputs already wear our male/female hands (e.g. the `retarget` output): emit ONE shared hands bodygroup (`pev_body = weapon × 2 + hand`) instead of per-weapon hands; multi-part weapons (>1 weapon submodel) are rejected |
 | `--prune` | also fold away vertex-less unreferenced bones (default keeps everything except `Finger*Nub`) |
