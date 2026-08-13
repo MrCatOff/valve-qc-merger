@@ -63,9 +63,20 @@ def collapse_bodygroups(
         resolved = [s for s in stems if s in model.meshes]
         if not resolved:
             continue
-        is_hand_group = "hand" in group.lower() or (
-            _hand_fraction(model.meshes[resolved[0]]) > 0.5
-        )
+        # The bodygroup NAME is authoritative when it names a role. An
+        # explicit "weapon" group is never hands, even when most of its verts
+        # sit on "Bip01 ..."-named bones: CSO weapon rigs reuse the Bip01
+        # prefix for creature/prop bones (e.g. v_heavyzg's "Bip01 Head",
+        # "Bip01 Spine2"), which the vertex-fraction fallback would otherwise
+        # mistake for hands. Fall back to the fraction test only when the name
+        # gives no signal.
+        lname = group.lower()
+        if "weapon" in lname:
+            is_hand_group = False
+        elif "hand" in lname:
+            is_hand_group = True
+        else:
+            is_hand_group = _hand_fraction(model.meshes[resolved[0]]) > 0.5
         if is_hand_group:
             if parts.hands_stem is None:
                 parts.hands_stem = resolved[0]

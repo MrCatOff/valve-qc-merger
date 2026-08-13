@@ -83,6 +83,35 @@ def test_collapse_keeps_hand_variants(tmp_path: Path) -> None:
     assert parts.hands_stem == "hands_female"
 
 
+def test_weapon_group_on_bip01_named_bones_stays_weapon(tmp_path: Path) -> None:
+    # v_heavyzg: the weapon mesh is bound to CSO creature/prop bones that reuse
+    # the "Bip01 ..." prefix (Bip01 Head, Bip01 Spine2), so _hand_fraction reads
+    # high — but the group is explicitly named "weapon" and must NOT collapse
+    # into the hands group (that emptied weapon_stems and crashed the merge).
+    zero = Vector3(0.0, 0.0, 0.0)
+
+    def mesh(bone_name: str) -> Smd:
+        v = Vertex(bone=1, position=zero, normal=Vector3(0.0, 0.0, 1.0),
+                   uv=Vector2(0.0, 0.0))
+        return Smd(nodes=[Node(0, "root", -1), Node(1, bone_name, 0)],
+                   frames=[Frame(0, (BonePose(0, zero, zero),
+                                     BonePose(1, zero, zero)))],
+                   triangles=[Triangle("t.bmp", (v, v, v))])
+
+    directory = tmp_path / "v_heavyzg"
+    directory.mkdir()
+    model = ModelInput(
+        name="v_heavyzg", directory=directory,
+        qc_path=directory / "v_heavyzg.qc", qc_text="", sequences=[],
+        bodygroups={"hands": ["hands"], "weapon": ["v_ref"]},
+        meshes={"hands": mesh("Hand.L"),          # real hands: no "Bip01"
+                "v_ref": mesh("Bip01 Head")},     # weapon on a Bip01-named bone
+    )
+    parts = collapse_bodygroups(model)
+    assert parts.hands_stem == "hands"
+    assert parts.weapon_stems == [["v_ref"]]      # weapon kept, not emptied
+
+
 def _big_mesh(material: str, verts: int) -> Smd:
     """A weapon mesh with ``verts`` distinct positions (weighted to the gun bone)."""
     tris = [

@@ -151,6 +151,15 @@ def rewrite(qc: QcInfo, *, drop_studios: set[str],
             return hands_block
         return ""
 
+    def _kept_name(name):
+        """Output name for a bodygroup that KEEPS geometry. We inject the new
+        hands under ``$bodygroup "hands"``, so a surviving group whose own name
+        contains "hand" (a gauntlet/claw whose weapon shell lived under a
+        "hands" bodygroup, e.g. v_balrog9's ``balrog9_hand_*``) must be
+        renamed — two same-named bodygroups both confuse the merge and are a
+        duplicate-``$bodygroup`` studiomdl rejects."""
+        return '"weapon"' if "hand" in _unq(name).lower() else name
+
     def bodygroup_sub(m):
         """A bodygroup may hold SEVERAL studio variants (male + female
         hands): swap the whole block if every variant is a dropped hand,
@@ -159,6 +168,10 @@ def rewrite(qc: QcInfo, *, drop_studios: set[str],
         studios = _STUDIO.findall(inner)
         if not studios or not any(_norm(s) in drop_studios
                                   for s in studios):
+            name = m.group("name")
+            kept = _kept_name(name)
+            if kept != name:
+                return '$bodygroup %s\n{%s}\n' % (kept, inner)
             return m.group(0)
         if all(_norm(s) in drop_studios for s in studios):
             return _swap()
@@ -166,7 +179,7 @@ def rewrite(qc: QcInfo, *, drop_studios: set[str],
                       if not (_STUDIO.search(ln)
                               and _norm(_STUDIO.search(ln).group("studio"))
                               in drop_studios)]
-        block = '$bodygroup %s\n{%s\n}\n' % (m.group("name"),
+        block = '$bodygroup %s\n{%s\n}\n' % (_kept_name(m.group("name")),
                                              "\n".join(kept_lines))
         return block + _swap()
 
