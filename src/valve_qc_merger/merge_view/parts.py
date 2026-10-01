@@ -8,7 +8,7 @@ the 32-model arrays, so they crash or corrupt exactly the same way). Textures
 cap at ``MAXSTUDIOSKINS`` (100) and degrade in tools well before that.
 
 So the merge is split into parts: each part compiles to its own .mdl whose
-submodel count (weapon groups + blanks + unique hand meshes) and texture count
+submodel count (weapon groups + blanks + hand meshes) and texture count
 stay inside the budget. Models are packed greedily in input order.
 """
 
@@ -27,7 +27,13 @@ from valve_qc_merger.writers.smd import write_smd_text
 SUBMODEL_LIMIT = 32
 TEXTURE_BUDGET = 80
 BONE_BUDGET = 127
+# Per-weapon hands (default): parts are submodel-bound (~16 weapons) and a
+# looser sequence budget only packs more reparent-heavy models together.
 SEQUENCE_BUDGET = 111
+# --shared-hands: 31 weapons fit the submodel cap, so sequences bind instead.
+# The game picks a viewmodel animation by a BYTE (SendWeaponAnim ->
+# WRITE_BYTE): one v_ model addresses 256 sequences; 255 keeps a margin.
+SHARED_HANDS_SEQUENCE_BUDGET = 255
 
 Pair = tuple[ModelInput, ModelParts]
 
@@ -82,18 +88,27 @@ def _part_counts(
     part: list[Pair],
     textures: dict[str, set[tuple[str, str]]],
     seq_keys: dict[str, list[tuple[str, float | None, tuple[str, ...]]]],
+    *,
+    shared_hands: bool = False,
 ) -> tuple[int, int, int]:
-    """(submodels, textures) a part would compile to.
+    """(submodels, textures, sequences) a part would compile to.
 
     Hands are one submodel per model (kept per-model so every hands SMD pairs
     with its own weapon's bind; models without hands get a "blank" entry, and
-    a blank still occupies one of studiomdl's model slots).
+    a blank still occupies one of studiomdl's model slots). With
+    ``shared_hands`` the merger emits ONE hands group holding the first
+    model's variants (male/female), whatever the part size -- counting a
+    hands entry per model capped shared-hands parts at ~15 weapons instead
+    of 31.
     """
     groups = [len(parts.weapon_stems) for _, parts in part]
     max_groups = max(groups)
     blanks = max_groups - 1 if max_groups > 1 else 0
     any_hands = any(parts.hands_stem is not None for _, parts in part)
-    hands = len(part) if any_hands else 0
+    if shared_hands:
+        hands = len(part[0][1].hand_variants)
+    else:
+        hands = len(part) if any_hands else 0
     submodels = sum(groups) + blanks + hands
     materials: set[tuple[str, str]] = set()
     sequences: set[tuple[str, float | None, tuple[str, ...]]] = set()
@@ -109,6 +124,7 @@ def split_parts(
     *,
     model_bones: dict[str, dict[str, str | None]] | None = None,
     shared: set[str] | None = None,
+    shared_hands: bool = False,
 ) -> list[list[Pair]]:
     """Greedily pack models into parts that fit the budget.
 
@@ -144,7 +160,8 @@ def split_parts(
     current: list[Pair] = []
     for pair in pairs:
         trial = current + [pair]
-        submodels, texcount, seqcount = _part_counts(trial, textures, seq_keys)
+        submodels, texcount, seqcount = _part_counts(
+            trial, textures, seq_keys, shared_hands=shared_hands)
         if current and (submodels > budget.submodels
                         or texcount > budget.textures
                         or seqcount > budget.sequences
@@ -158,5 +175,6 @@ def split_parts(
     return out
 
 
-__all__ = ["PartBudget", "SEQUENCE_BUDGET", "SUBMODEL_LIMIT",
+__all__ = ["PartBudget", "SEQUENCE_BUDGET", "SHARED_HANDS_SEQUENCE_BUDGET",
+           "SUBMODEL_LIMIT",
            "TEXTURE_BUDGET", "split_parts"]

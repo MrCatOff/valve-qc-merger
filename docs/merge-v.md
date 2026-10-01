@@ -160,7 +160,7 @@ deduped within a part, so recolour variants share sequence indices.
 | `--no-pool-bones` | skip bone pooling (merged table may exceed 127) |
 | `--manifest-format ini\|json\|toml` | manifest format (default ini) |
 | `--texture-budget N` | max textures per part (default 80; hard engine cap 100) |
-| `--sequence-budget N` | max sequences per part after dedupe (default 111) |
+| `--sequence-budget N` | max sequences per part after dedupe (default 111; 255 with `--shared-hands`, where 31 weapons fit the submodel cap — the game selects a viewmodel animation by a byte) |
 | `--max-texture-size N` | downscale staged textures larger than N on either axis |
 | `--pack-textures` | pack eligible textures four-to-a-file into 512×512 atlases |
 | `--no-pack-texture GLOB` | keep matching textures out of atlases (repeatable) |

@@ -46,6 +46,7 @@ from valve_qc_merger.merge_view.merger import (
 )
 from valve_qc_merger.merge_view.parts import (
     SEQUENCE_BUDGET,
+    SHARED_HANDS_SEQUENCE_BUDGET,
     TEXTURE_BUDGET,
     PartBudget,
     split_parts,
@@ -101,9 +102,11 @@ class MergeViewCommand(Command):
         parser.add_argument("--texture-budget", type=int, default=TEXTURE_BUDGET,
                             help="max textures per compiled part (default "
                                  f"{TEXTURE_BUDGET}; hard engine cap is 100)")
-        parser.add_argument("--sequence-budget", type=int, default=SEQUENCE_BUDGET,
+        parser.add_argument("--sequence-budget", type=int, default=None,
                             help="max sequences per compiled part after "
-                                 f"dedupe (default {SEQUENCE_BUDGET})")
+                                 f"dedupe (default {SEQUENCE_BUDGET}; "
+                                 f"{SHARED_HANDS_SEQUENCE_BUDGET} with "
+                                 "--shared-hands)")
         parser.add_argument("--max-texture-size", type=int, metavar="N",
                             help="downscale staged textures larger than N on "
                                  "either axis (8-bit re-quantised)")
@@ -134,6 +137,9 @@ class MergeViewCommand(Command):
             args.reference = Path(DEFAULT_SHARED_HANDS_REFERENCE
                                   if args.shared_hands else DEFAULT_REFERENCE)
         args.reference = resource_path(args.reference)
+        if args.sequence_budget is None:
+            args.sequence_budget = (SHARED_HANDS_SEQUENCE_BUDGET
+                                    if args.shared_hands else SEQUENCE_BUDGET)
         try:
             model_dirs = discover_models(args.models_dir, exclude=set(args.exclude))
         except MergeViewError as exc:
@@ -273,6 +279,7 @@ class MergeViewCommand(Command):
                 PartBudget(textures=args.texture_budget,
                            sequences=args.sequence_budget),
                 model_bones=all_bones, shared=shared,
+                shared_hands=args.shared_hands,
             )
 
             # Resolve each part's pooling BEFORE writing anything: prefer
@@ -314,6 +321,7 @@ class MergeViewCommand(Command):
                         PartBudget(textures=args.texture_budget,
                                    sequences=args.sequence_budget),
                         model_bones=all_bones, shared=shared,
+                        shared_hands=args.shared_hands,
                     )
                     spill = []
                 part_pairs = queue.pop(0)
@@ -430,7 +438,7 @@ _CONFIG_DEFAULTS: dict[str, object] = {
     "no_pool_bones": False,
     "manifest_format": "ini",
     "texture_budget": TEXTURE_BUDGET,
-    "sequence_budget": SEQUENCE_BUDGET,
+    "sequence_budget": None,
     "max_texture_size": None,
     "pack_textures": False,
     "no_pack_texture": [],

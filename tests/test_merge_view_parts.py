@@ -64,3 +64,16 @@ def test_split_distinct_hands_count_separately(tmp_path: Path) -> None:
     parts = split_parts(pairs, PartBudget(submodels=4, textures=80))
     # Each model brings weapon + own hands = 2 submodels; 4 fits two models.
     assert [len(p) for p in parts] == [2, 2]
+
+
+def test_split_shared_hands_counts_one_hands_group(tmp_path: Path) -> None:
+    # --shared-hands: ONE hands group (male/female) for the whole part, so a
+    # part takes 30 weapons + 2 hand variants = 32 submodels, not 16 + 16.
+    pairs = []
+    for i in range(40):
+        model, parts = _model(f"m{i:02d}", tmp_path, "tex.bmp")
+        parts.hand_variants = ["hands_female", "hands_male"]
+        pairs.append((model, parts))
+    parts = split_parts(pairs, PartBudget(submodels=32, textures=80),
+                        shared_hands=True)
+    assert [len(p) for p in parts] == [30, 10]
