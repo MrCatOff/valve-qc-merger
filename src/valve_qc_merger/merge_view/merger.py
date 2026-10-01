@@ -14,11 +14,11 @@ import dataclasses
 import hashlib
 import json
 import re
-import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from valve_qc_merger.merge_view.attachments import share_attachments
 from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
 from valve_qc_merger.merge_view.atlas import (
     TextureOptions,
@@ -58,6 +58,7 @@ class MergeReport:
     sequences: int = 0
     sequences_deduped: int = 0
     textures: int = 0
+    attachments: int = 0
     pev_body: dict[str, int] = field(default_factory=dict)
     atlas: dict[str, str] = field(default_factory=dict)
     manifest: dict[str, dict[str, int | str]] = field(default_factory=dict)
@@ -335,6 +336,15 @@ def merge_models(
     skeleton = merged_skeleton(models)
     report.bones = len(skeleton)
     unify_skeletons(models, skeleton)
+    # Shared muzzle/shell slots: each weapon's sequences drive them to its own
+    # attachment points (GoldSrc keeps 4 per model, not 4 per weapon).
+    first_model, first_parts = pairs[0]
+    shared = share_attachments(
+        models, first_model.meshes[first_parts.weapon_stems[0][0]],
+    )
+    report.attachments = shared.slots
+    report.bones += shared.slots
+    report.warnings.extend(shared.warnings)
     _sequence_size_warnings(models, report)
     if report.bones > BONE_LIMIT:
         report.warnings.append(
@@ -578,40 +588,8 @@ def merge_models(
     lines.append("$flags 0")
     lines.append("")
 
-    # studiomdl's compiled bone table keeps only vertex-used bones and their
-    # ancestors; an attachment naming any other bone is a hard compile error.
-    surviving: set[str] = set()
-    for smds in written.values():
-        for smd in smds:
-            names = {n.index: n.name for n in smd.nodes}
-            parents = {n.name: names.get(n.parent) for n in smd.nodes}
-            for triangle in smd.triangles:
-                for vertex in triangle.vertices:
-                    bone: str | None = names[vertex.bone]
-                    while bone is not None and bone not in surviving:
-                        surviving.add(bone)
-                        bone = parents.get(bone)
-    used_attachment_ids: set[int] = set()
-    for model in models:
-        for raw in model.qc_text.splitlines():
-            stripped = raw.strip()
-            if stripped.startswith("$attachment"):
-                try:
-                    attachment_id = int(stripped.split()[1])
-                    attachment_bone = shlex.split(stripped)[2]
-                except (IndexError, ValueError):
-                    continue
-                if attachment_id in used_attachment_ids or attachment_id > 3:
-                    continue
-                if attachment_bone not in surviving:
-                    report.warnings.append(
-                        f"{model.name}: attachment {attachment_id} dropped - "
-                        f"bone {attachment_bone!r} carries no vertices and is "
-                        "not in the compiled bone table"
-                    )
-                    continue
-                used_attachment_ids.add(attachment_id)
-                lines.append(stripped)
+    # One shared set of slot bones; every weapon's sequences move them.
+    lines.extend(shared.qc_lines)
     lines.append("")
 
     for _model_name, final, smd_path, seq_meta in sequence_order:

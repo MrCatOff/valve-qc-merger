@@ -70,6 +70,18 @@ byte is therefore `2N − 1` (well under 255; 42 pistols → max 47) instead of
 than one always-on weapon submodel) is rejected — each extra weapon bodygroup
 would multiply the byte, so ship such a weapon on its own.
 
+**Attachments (muzzle flash, shell eject).** GoldSrc keeps 4 attachments per
+*model*, each a fixed offset from one bone, so per-weapon `$attachment` lines
+cannot be copied over. The merge instead emits shared slot bones
+`attachment0..3` (children of `Bip01`, only up to the highest index any weapon
+uses) and `$attachment N "attachmentN" 0 0 0`. Every sequence of every weapon
+animates slot N to that weapon's own attachment N (its bone's pose composed
+with the QC offset), so `5001`-style muzzle events and shell ejects fire from
+the active weapon's points. A weapon without slot N parks it at `Bip01`;
+indices ≥ 4 are dropped with a warning. Each slot bone carries one zero-area
+anchor triangle (an existing weapon vertex, tripled): studiomdl drops
+vertex-less bones, and an attachment on a dropped bone fails to compile.
+
 With `--shared-hands` the reference defaults to the CSO hands
 (`storage/handswap/cso_reference_hands.smd`) instead of the ValveBiped
 `reference_hands.smd`. The retarget output wears the CSO hands, whose arm is a
