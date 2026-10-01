@@ -67,9 +67,10 @@ def test_knife_and_grenade_share_hands_and_one_grenade(tmp_path: Path) -> None:
     assert "\tloop" in qc
     ini = configparser.ConfigParser()
     ini.read(out / "models.ini")
+    assert qc.index('$bodygroup "grenade"') < qc.index('$bodygroup "hands"')
     assert ini["v_alpha_knife"]["pev_body"] == "0"
-    assert ini["v_alpha_grenade"]["pev_body"] == "2"  # hands 0 + 2 * grenade
-    assert ini["v_alpha_knife_invisible"]["pev_body"] == "1"
+    assert ini["v_alpha_grenade"]["pev_body"] == "1"  # grenade is the low bit
+    assert ini["v_alpha_knife_invisible"]["pev_body"] == "2"  # hands 1 * 2
     # the grenade subtree is namespaced so it can't collide with hand roots
     grenade = parse_smd_file(out / "grenade" / "grenade.smd")
     assert "gren_root" in {n.name for n in grenade.nodes}

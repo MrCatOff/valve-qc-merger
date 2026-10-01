@@ -32,14 +32,16 @@ into `maps_8bit/` under the name the SMDs use before merging.
 
 ```
 out/zhands/
-  v_zhands.qc      $bodygroup "hands" { ... } + $bodygroup "grenade" { blank, grenade }
+  v_zhands.qc      $bodygroup "grenade" { blank, grenade } + $bodygroup "hands" { ... }
   hands/<entry>.smd   one per distinct hand mesh
   grenade/grenade.smd the shared grenade
   v_<zombie>_<role>/  that model's sequences
   *.bmp, models.ini
 ```
 
-`pev_body = hands_index + n_hands * grenade_on`. `models.ini` gives each
+`pev_body = grenade_on + 2 * hands_index`: the grenade group comes first, so
+it is the low bit — a zombie's knife and grenade are `n` and `n | 1` (the
+merge-v `--shared-hands` convention). `models.ini` gives each
 input model its `pev_body`, its `hands` entry and every `anim_<name>` index;
 the knife and grenade weapons of one zombie use the same .mdl with different
 `pev_body` values.

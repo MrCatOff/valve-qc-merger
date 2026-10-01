@@ -3,7 +3,7 @@
 Merges a folder of decompiled CSO zombie hand view models
 (``v_<zombie>_knife[_variant]`` and ``v_<zombie>_grenade``) into ONE model:
 a ``hands`` bodygroup with every distinct hand mesh and a shared ``grenade``
-bodygroup, so ``pev_body = hands + n_hands * grenade_on``. Inputs must already
+bodygroup, so ``pev_body = grenade_on + 2 * hands``. Inputs must already
 be decompiled (one subdirectory with one .qc per model).
 """
 
