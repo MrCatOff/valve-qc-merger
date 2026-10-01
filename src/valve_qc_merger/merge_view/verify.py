@@ -65,12 +65,15 @@ def verify_part(
     manifest_anim: dict[str, dict[str, int]],
     reference: Path,
     original_anims: dict[str, dict[str, str]],
+    original_meshes: dict[str, list[str]] | None = None,
 ) -> list[GateResult]:
     """Run every gate check for one emitted part; returns one row per check.
 
     ``bone_maps``: per model, original bone name -> merged bone name (absent
     for removed Nubs). ``original_anims``: per model, original sequence name
-    -> path of the pristine decompiled animation SMD.
+    -> path of the pristine decompiled animation SMD. ``original_meshes``:
+    per model, the pristine mesh SMD paths (default: every SMD under
+    ``models_dir/<model>``).
     """
     results: list[GateResult] = []
     qc_text = (part_dir / qc_name).read_text(encoding="latin-1")
@@ -164,12 +167,21 @@ def verify_part(
     ))
 
     # -- geometry_preserved ------------------------------------------------
+    # Every emitted mesh vertex position must exist in its owner's pristine
+    # mesh SMDs. The owner is the first QC path segment (``v_deagle/weapon``);
+    # the shared ``hands/`` folder may come from any model. A mesh with no
+    # resolvable owner FAILS — it used to be skipped silently, which made the
+    # check vacuous ("0 mesh vertices").
     bad_verts = 0
     total_verts = 0
+    unowned: list[str] = []
     original_positions: dict[str, set[tuple[float, float, float]]] = {}
     for model in model_names:
+        sources = (original_meshes or {}).get(model)
+        files = ([Path(f) for f in sources] if sources is not None
+                 else sorted((models_dir / model).rglob("*.smd")))
         positions: set[tuple[float, float, float]] = set()
-        for smd_path in sorted((models_dir / model).glob("*.smd")):
+        for smd_path in files:
             source_smd = parse_smd_file(smd_path)
             for t in source_smd.triangles:
                 for v in t.vertices:
@@ -177,10 +189,14 @@ def verify_part(
                                    round(v.position.y, 4),
                                    round(v.position.z, 4)))
         original_positions[model] = positions
+    every_position = set().union(*original_positions.values())
     for path, smd in meshes.items():
-        owner = path.split("\\")[0]
+        owner = re.split(r"[\\/]", path)[0]
         pool = original_positions.get(owner)
+        if pool is None and owner == "hands":
+            pool = every_position
         if pool is None:
+            unowned.append(path)
             continue
         for t in smd.triangles:
             for v in t.vertices:
@@ -189,11 +205,16 @@ def verify_part(
                        round(v.position.z, 4))
                 if key not in pool:
                     bad_verts += 1
-    results.append(GateResult(
-        "geometry_preserved", bad_verts == 0,
-        f"{total_verts} mesh vertices bit-match their originals"
-        if bad_verts == 0 else f"{bad_verts}/{total_verts} vertices moved",
-    ))
+    geometry_ok = bad_verts == 0 and not unowned and total_verts > 0
+    if unowned:
+        detail = f"meshes with no source model: {unowned[:3]}"
+    elif total_verts == 0:
+        detail = "no mesh vertices checked"
+    elif bad_verts:
+        detail = f"{bad_verts}/{total_verts} vertices moved"
+    else:
+        detail = f"{total_verts} mesh vertices bit-match their originals"
+    results.append(GateResult("geometry_preserved", geometry_ok, detail))
 
     # -- budgets -----------------------------------------------------------
     problems: list[str] = []

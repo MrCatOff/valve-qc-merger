@@ -150,6 +150,7 @@ class MergeViewCommand(Command):
         merged_pairs: list[tuple[ModelInput, ModelParts]] = []
         hand_renames: dict[str, dict[str, str]] = {}
         original_anims: dict[str, dict[str, str]] = {}
+        original_meshes: dict[str, list[str]] = {}
         for model_dir in model_dirs:
             sanitised = sanitize_model_dir(model_dir)
             try:
@@ -212,6 +213,9 @@ class MergeViewCommand(Command):
                     continue
                 merged_pairs.append((model, parts))
                 hand_renames[model.name] = dict(match.renames)
+                original_meshes[model.name] = [
+                    str(_resolve_smd(model_dir, stem)) for stem in model.meshes
+                ]
                 original_anims[model.name] = {
                     seq.name: str(_resolve_smd(model_dir, seq.smd))
                     for seq in model.sequences
@@ -372,6 +376,7 @@ class MergeViewCommand(Command):
                         part_out, f"{part_name}.qc", args.models_dir,
                         [m.name for m, _ in part_pairs], bone_maps,
                         manifest_anim, args.reference, original_anims,
+                        original_meshes,
                     )
                     for row in gate:
                         mark = "PASS" if row.passed else "FAIL"
