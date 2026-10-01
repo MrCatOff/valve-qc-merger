@@ -78,7 +78,18 @@ def test_parse_decompiled_dialect() -> None:
     assert seqs[1].fps == 40
     assert seqs[1].events == ('{ event 5011 0 "11" }',)
     assert parse_attachments(_DECOMPILED_QC, {"Bone63"}) == ['$attachment 0 "Bone63" 0 -5.75 0']
-    assert parse_bodygroups(_DECOMPILED_QC) == {"hands": ["hands_female", "hands_male"]}
+    # ``$body studio "x"`` is a one-entry bodygroup (it carries the weapon mesh)
+    assert parse_bodygroups(_DECOMPILED_QC) == {
+        "studio": ["v_elite-pv"], "hands": ["hands_female", "hands_male"],
+    }
+
+
+def test_parse_sequence_loop_flag() -> None:
+    qc = ('$sequence idle "./anims/idle" fps 30 loop\n'
+          '$sequence a {\n "./anims/loop_a"\n fps 30\n'
+          ' { event 5004 1 "loop.wav" }\n}\n'
+          '$sequence b {\n "./anims/b"\n loop\n}\n')
+    assert [s.loop for s in parse_sequences(qc)] == [True, False, True]
 
 
 def test_build_qc_points_at_merged_mesh_and_anims() -> None:

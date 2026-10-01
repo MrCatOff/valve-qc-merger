@@ -21,6 +21,7 @@ _SEQ_KW_RE = re.compile(r"\$sequence\b")
 _TOKEN_RE = re.compile(r'\s*(?:"(?P<q>[^"]+)"|(?P<w>[^\s{}"]+))')
 _FPS_RE = re.compile(r"\bfps\s+(?P<fps>[0-9.]+)")
 _EVENT_RE = re.compile(r"\{\s*event\b[^}]*\}")
+_LOOP_RE = re.compile(r"(?<![\w\"./\\])loop(?![\w\"])")
 _ATTACH_RE = re.compile(
     r'\$attachment\s+(?P<idx>\d+)\s+"(?P<bone>[^"]+)"\s+'
     r"(?P<x>\S+)\s+(?P<y>\S+)\s+(?P<z>\S+)"
@@ -38,6 +39,7 @@ class QcSequence:
     fps: float | None
     events: tuple[str, ...]
     smd: str | None = None  # animation SMD path as parsed from the QC (either separator)
+    loop: bool = False  # ``loop`` flag (STUDIO_LOOPING): idles wrap instead of clamping
 
 
 def _matching_brace(text: str, open_index: int) -> int:
@@ -80,12 +82,17 @@ def parse_sequences(qc_text: str) -> list[QcSequence]:
         events = tuple(e.strip() for e in _EVENT_RE.findall(body))
         smd_m = _SEQ_SMD_RE.search(_EVENT_RE.sub("", body))
         smd = smd_m.group("path") if smd_m else None
-        out.append(QcSequence(name, fps, events, smd))
+        loop = _LOOP_RE.search(_EVENT_RE.sub("", body)) is not None
+        out.append(QcSequence(name, fps, events, smd, loop))
     return out
 
 
 _BODYGROUP_RE = re.compile(r'\$bodygroup\s+(?:"(?P<name>[^"]+)"|(?P<bare>[^\s{}"]+))\s*\{')
 _STUDIO_RE = re.compile(r'studio\s+"(?P<stem>[^"]+)"')
+# Single-submodel form: ``$body <name> "<smd>"`` (decompmdl: ``$body studio "x"``).
+_BODY_RE = re.compile(
+    r'\$body\s+(?:"(?P<name>[^"]+)"|(?P<bare>[^\s{}"]+))\s+"(?P<stem>[^"]+)"'
+)
 
 
 def parse_bodygroups(qc_text: str) -> dict[str, list[str]]:
@@ -95,18 +102,25 @@ def parse_bodygroups(qc_text: str) -> dict[str, list[str]]:
     submodel split); those are kept as ``name``, ``name_2``, ``name_3``, ... —
     a dict keyed by raw name would silently drop all but the last block.
     """
-    out: dict[str, list[str]] = {}
+    found: list[tuple[int, str, list[str]]] = []
     for m in _BODYGROUP_RE.finditer(qc_text):
         open_index = m.end() - 1
         close_index = _matching_brace(qc_text, open_index)
         body = qc_text[open_index + 1:close_index]
-        raw = m.group("name") or m.group("bare")
+        found.append((m.start(), m.group("name") or m.group("bare"),
+                      [s.group("stem") for s in _STUDIO_RE.finditer(body)]))
+    # ``$body`` is a one-entry bodygroup; keep both forms in file order.
+    for m in _BODY_RE.finditer(qc_text):
+        found.append((m.start(), m.group("name") or m.group("bare"),
+                      [m.group("stem")]))
+    out: dict[str, list[str]] = {}
+    for _pos, raw, stems in sorted(found, key=lambda item: item[0]):
         name = raw
         counter = 2
         while name in out:
             name = f"{raw}_{counter}"
             counter += 1
-        out[name] = [s.group("stem") for s in _STUDIO_RE.finditer(body)]
+        out[name] = stems
     return out
 
 

@@ -601,6 +601,8 @@ def merge_models(
             if seq_meta.fps is not None:
                 fps = int(seq_meta.fps) if seq_meta.fps == int(seq_meta.fps) else seq_meta.fps
                 lines.append(f"\tfps {fps}")
+            if seq_meta.loop:
+                lines.append("\tloop")
         lines.append("}")
     (out_dir / f"{name}.qc").write_text("\n".join(lines) + "\n", encoding="latin-1")
 
