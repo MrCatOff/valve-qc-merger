@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from valve_qc_merger.merge_view.attachments import attachment_slots
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.bonepool import plan_pool
 from valve_qc_merger.merge_view.discovery import ModelInput
@@ -131,11 +132,13 @@ def split_parts(
     def bones_fit(part: list[Pair]) -> bool:
         if model_bones is None or shared is None:
             return True
+        # Shared attachment slot bones are appended at merge time.
+        reserved = len(shared) + attachment_slots([m for m, _ in part])
         plan = plan_pool(
             {m.name: model_bones[m.name] for m, _ in part}, shared,
-            max_slots=budget.bones - len(shared),
+            max_slots=budget.bones - reserved,
         )
-        return len(shared) + plan.size <= budget.bones
+        return reserved + plan.size <= budget.bones
 
     out: list[list[Pair]] = []
     current: list[Pair] = []

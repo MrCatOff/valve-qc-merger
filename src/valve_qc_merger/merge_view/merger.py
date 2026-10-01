@@ -18,13 +18,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from valve_qc_merger.merge_view.attachments import share_attachments
 from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
 from valve_qc_merger.merge_view.atlas import (
     TextureOptions,
     downscale_textures,
     pack_textures,
 )
+from valve_qc_merger.merge_view.attachments import share_attachments
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.skeleton_ops import (
@@ -343,7 +343,7 @@ def merge_models(
         models, first_model.meshes[first_parts.weapon_stems[0][0]],
     )
     report.attachments = shared.slots
-    report.bones += shared.slots
+    report.bones += shared.bones
     report.warnings.extend(shared.warnings)
     _sequence_size_warnings(models, report)
     if report.bones > BONE_LIMIT:

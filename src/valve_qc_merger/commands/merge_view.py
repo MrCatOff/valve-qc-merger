@@ -15,6 +15,7 @@ from pathlib import Path
 from valve_qc_merger.commands.base import Command
 from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT
 from valve_qc_merger.merge_view.atlas import TextureOptions
+from valve_qc_merger.merge_view.attachments import attachment_slots
 from valve_qc_merger.merge_view.bodygroups import ModelParts, collapse_bodygroups
 from valve_qc_merger.merge_view.bonepool import (
     PoolPlan,
@@ -278,32 +279,63 @@ class MergeViewCommand(Command):
             # structure-matched pooling (prior-art; ~90 slots for a dozen
             # weapons), but preview the pooled sequence sizes with the exact
             # studiomdl replica — if a reparent would blow the 64K cap, fall
-            # back to reparent-free pooling, halving the part if that then
-            # exceeds the bone budget.
-            resolved: list[tuple[list[tuple[ModelInput, ModelParts]],
-                                 PoolPlan | None, str]] = []
-            queue = list(part_split)
-            while queue:
-                part_pairs = queue.pop(0)
-                if args.no_pool_bones:
-                    resolved.append((part_pairs, None, "unpooled"))
-                    continue
+            # back to reparent-free pooling. A part that fits neither keeps
+            # its longest fitting prefix (binary search) and spills the rest,
+            # re-packed once the queue drains (halving stranded small parts:
+            # 5 parts became 8 once attachment slots tightened the budget).
+            def resolve_pool(
+                part_pairs: list[tuple[ModelInput, ModelParts]],
+            ) -> tuple[PoolPlan, str] | None:
                 model_bones = {
                     model.name: all_bones[model.name]
                     for model, _parts in part_pairs
                 }
+                # Shared attachment slot bones are appended at merge time.
+                reserved = len(shared) + attachment_slots(
+                    [model for model, _parts in part_pairs])
                 plan = plan_pool(model_bones, shared,
-                                 max_slots=BONE_LIMIT - len(shared))
+                                 max_slots=BONE_LIMIT - reserved)
                 sizes = preview_pool_sizes(part_pairs, plan)
                 if max(sizes.values(), default=0) <= SEQ_DATA_LIMIT:
-                    resolved.append((part_pairs, plan, "pooled"))
-                    continue
+                    return plan, "pooled"
                 plan = plan_pool(model_bones, shared, allow_reparent=False)
-                if len(shared) + plan.size <= BONE_LIMIT or len(part_pairs) == 1:
-                    resolved.append((part_pairs, plan, "rename-only"))
+                if reserved + plan.size <= BONE_LIMIT or len(part_pairs) == 1:
+                    return plan, "rename-only"
+                return None
+
+            resolved: list[tuple[list[tuple[ModelInput, ModelParts]],
+                                 PoolPlan | None, str]] = []
+            queue = list(part_split)
+            spill: list[tuple[ModelInput, ModelParts]] = []
+            while queue or spill:
+                if not queue:
+                    queue = split_parts(
+                        spill,
+                        PartBudget(textures=args.texture_budget,
+                                   sequences=args.sequence_budget),
+                        model_bones=all_bones, shared=shared,
+                    )
+                    spill = []
+                part_pairs = queue.pop(0)
+                if args.no_pool_bones:
+                    resolved.append((part_pairs, None, "unpooled"))
                     continue
-                mid = len(part_pairs) // 2
-                queue = [part_pairs[:mid], part_pairs[mid:]] + queue
+                found = resolve_pool(part_pairs)
+                if found is None:
+                    # Longest fitting prefix; a single model always fits.
+                    low, high = 1, len(part_pairs) - 1
+                    found = resolve_pool(part_pairs[:1])
+                    while low < high:
+                        mid = (low + high + 1) // 2
+                        trial = resolve_pool(part_pairs[:mid])
+                        if trial is not None:
+                            low, found = mid, trial
+                        else:
+                            high = mid - 1
+                    spill = part_pairs[low:] + spill
+                    part_pairs = part_pairs[:low]
+                assert found is not None
+                resolved.append((part_pairs, found[0], found[1]))
 
             multi = len(resolved) > 1
             if multi:

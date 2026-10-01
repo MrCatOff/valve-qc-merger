@@ -73,14 +73,29 @@ would multiply the byte, so ship such a weapon on its own.
 **Attachments (muzzle flash, shell eject).** GoldSrc keeps 4 attachments per
 *model*, each a fixed offset from one bone, so per-weapon `$attachment` lines
 cannot be copied over. The merge instead emits shared slot bones
-`attachment0..3` (children of `Bip01`, only up to the highest index any weapon
-uses) and `$attachment N "attachmentN" 0 0 0`. Every sequence of every weapon
-animates slot N to that weapon's own attachment N (its bone's pose composed
-with the QC offset), so `5001`-style muzzle events and shell ejects fire from
-the active weapon's points. A weapon without slot N parks it at `Bip01`;
-indices ≥ 4 are dropped with a warning. Each slot bone carries one zero-area
-anchor triangle (an existing weapon vertex, tripled): studiomdl drops
-vertex-less bones, and an attachment on a dropped bone fails to compile.
+`attachment0..3` (only up to the highest index any weapon uses) and
+`$attachment N "attachmentN" 0 0 0`. Indices keep their source meaning (game
+code reads them: deagle 0 = flash / 1 = shell; elite 0/1 = left/right flash,
+2/3 = left/right shell). Every sequence of every weapon animates slot N to
+that weapon's own attachment N (its bone's pose composed with the QC offset),
+so muzzle events and shell ejects fire from the active weapon's points.
+
+- Each slot hangs off the **wrist** (`Hand.L`/`Hand.R`, or the ValveBiped
+  hands) its points stay closest to across all weapons — relative to the
+  gripping hand a muzzle barely moves, so the channels are near-constant
+  (small quantisation steps, RLE-cheap streams; ~50-80 KB smaller parts).
+  `Bip01` when no wrist bone exists.
+- A weapon that parks a slot off-map (CSO hides unused shell ejects at
+  `-1000000`) gets that slot a carrier `attachmentN_base`: the carrier holds
+  near poses, the leaf only far ones. studiomdl quantises each bone channel
+  with ONE scale over every sequence, so a shared channel would coarsen every
+  other weapon's muzzle to ~30u steps.
+- A weapon without slot N parks it at the slot's parent; indices ≥ 4 are
+  dropped with a warning.
+- Slot bones are reserved in the 127-bone budget before pooling, and each
+  carries one zero-area anchor triangle (an existing weapon vertex, tripled):
+  studiomdl drops vertex-less bones, and an attachment on a dropped bone
+  fails to compile.
 
 With `--shared-hands` the reference defaults to the CSO hands
 (`storage/handswap/cso_reference_hands.smd`) instead of the ValveBiped

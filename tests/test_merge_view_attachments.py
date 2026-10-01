@@ -73,3 +73,78 @@ def test_each_weapon_drives_the_shared_slots_to_its_own_muzzle(tmp_path: Path) -
     slot_bones = {n.index for n in weapon.nodes if n.name.startswith("attachment")}
     anchored = {v.bone for t in weapon.triangles for v in t.vertices}
     assert slot_bones <= anchored
+
+
+def test_off_map_slot_gets_its_own_carrier_so_near_poses_stay_precise(
+        tmp_path: Path) -> None:
+    # v_far hides its shell eject a million units away (CSO idiom); studiomdl
+    # quantises a bone channel with ONE scale over all sequences, so that
+    # value must not share a channel with v_near's real muzzle.
+    near = _model("v_near", "gun_n", '$attachment 0 "gun_n" 0 0 0\n'
+                  '$attachment 1 "gun_n" 0 -2 0\n',
+                  [Vector3(10.0, 0.0, 0.0)], tmp_path)
+    far = _model("v_far", "gun_f", '$attachment 0 "gun_f" 0 0 0\n'
+                 '$attachment 1 "gun_f" -1000000 0 -50\n',
+                 [Vector3(0.0, 5.0, 0.0)], tmp_path)
+    out = tmp_path / "out"
+    report = merge_models([near, far], out, "v_m")
+
+    assert report.attachments == 2
+    anim_n = parse_smd_file(out / "v_near" / "shoot.smd")
+    anim_f = parse_smd_file(out / "v_far" / "v_far__shoot.smd")
+    names = [n.name for n in anim_n.nodes]
+    assert "attachment1_base" in names and "attachment0_base" not in names
+    leaf = next(n for n in anim_n.nodes if n.name == "attachment1")
+    assert anim_n.nodes[leaf.parent].name == "attachment1_base"
+
+    def local(smd: Smd, name: str) -> Vector3:
+        index = next(n.index for n in smd.nodes if n.name == name)
+        return smd.frames[0].pose_for(index).position
+
+    # near weapon: carrier holds the muzzle, leaf channel stays exactly 0
+    assert local(anim_n, "attachment1") == ZERO
+    assert _slot_world(anim_n, 1, 0) == Vector3(10.0, -2.0, 0.0)
+    # far weapon: carrier at rest, leaf holds the off-map point
+    assert local(anim_f, "attachment1_base") == ZERO
+    assert _slot_world(anim_f, 1, 0) == Vector3(-1000000.0, 5.0, -50.0)
+
+
+def _two_hand_smd(gun_pos: list[Vector3], *, mesh: bool) -> Smd:
+    # Bip01 -> Hand.L (x=-10), Hand.R (x=+10); a gun bone in each hand.
+    v = Vertex(bone=3, position=Vector3(1.0, 2.0, 3.0),
+               normal=Vector3(0.0, 0.0, 1.0), uv=Vector2(0.0, 0.0))
+    left, right = Vector3(-10.0, 0.0, 0.0), Vector3(10.0, 0.0, 0.0)
+    return Smd(
+        nodes=[Node(0, "Bip01", -1), Node(1, "Hand.L", 0),
+               Node(2, "Hand.R", 0), Node(3, "gun_l", 1), Node(4, "gun_r", 2)],
+        frames=[Frame(i, (BonePose(0, ZERO, ZERO), BonePose(1, left, ZERO),
+                          BonePose(2, right, ZERO), BonePose(3, p, ZERO),
+                          BonePose(4, p, ZERO)))
+                for i, p in enumerate(gun_pos)],
+        triangles=[Triangle("tex.bmp", (v, v, v))] if mesh else [],
+    )
+
+
+def test_slots_hang_off_the_wrist_they_stay_closest_to(tmp_path: Path) -> None:
+    # Elite-style: slot 0 = left muzzle, slot 1 = right muzzle.
+    directory = tmp_path / "v_dual"
+    directory.mkdir()
+    (directory / "tex.bmp").write_bytes(b"BM" + b"\0" * 10)
+    model = ModelInput(
+        name="v_dual", directory=directory, qc_path=directory / "v_dual.qc",
+        qc_text='$attachment 0 "gun_l" 0 -5 0\n$attachment 1 "gun_r" 0 -5 0\n',
+        bodygroups={}, sequences=[],
+        meshes={"weapon": _two_hand_smd([ZERO], mesh=True)},
+        anims={"shoot": _two_hand_smd([ZERO, Vector3(0.0, 1.0, 0.0)],
+                                      mesh=False)},
+    )
+    out = tmp_path / "out"
+    merge_models([(model, ModelParts(weapon_stems=[["weapon"]]))], out, "v_m")
+
+    anim = parse_smd_file(out / "v_dual" / "shoot.smd")
+    name_of = {n.index: n.name for n in anim.nodes}
+    parent = {n.name: name_of.get(n.parent) for n in anim.nodes}
+    assert parent["attachment0"] == "Hand.L"
+    assert parent["attachment1"] == "Hand.R"
+    assert _slot_world(anim, 0, 1) == Vector3(-10.0, -4.0, 0.0)
+    assert _slot_world(anim, 1, 1) == Vector3(10.0, -4.0, 0.0)
