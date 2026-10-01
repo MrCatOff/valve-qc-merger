@@ -253,9 +253,12 @@ def conform_to_table(
     for name, parent in table:
         if name in present:
             continue
-        if parent is None or parent not in present:
+        if parent is not None and parent not in present:
             raise ValueError(f"cannot graft {name!r}: parent {parent!r} missing")
-        parent_index = next(n.index for n in smd.nodes if n.name == parent)
+        # A parentless bone is grafted as one more root (rigs with several
+        # roots, e.g. merged zombie hands); its bind local is its world.
+        parent_index = (next(n.index for n in smd.nodes if n.name == parent)
+                        if parent is not None else -1)
         index = max((n.index for n in smd.nodes), default=-1) + 1
         smd.nodes = [*smd.nodes, Node(index, name, parent_index)]
         pos, rot = bind_locals[name]

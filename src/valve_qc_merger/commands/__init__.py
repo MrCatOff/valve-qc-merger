@@ -13,6 +13,7 @@ from valve_qc_merger.commands.merge_player import MergePlayerCommand
 from valve_qc_merger.commands.merge_players import MergePlayersCommand
 from valve_qc_merger.commands.merge_view import MergeViewCommand
 from valve_qc_merger.commands.merge_world import MergeWorldCommand
+from valve_qc_merger.commands.merge_zhands import MergeZhandsCommand
 from valve_qc_merger.commands.retarget import RetargetCommand
 
 # Command classes exposed by the CLI, in display order.
@@ -22,6 +23,7 @@ _COMMAND_CLASSES: list[type[Command]] = [
     MergePlayerCommand,
     MergePlayersCommand,
     MergeWorldCommand,
+    MergeZhandsCommand,
 ]
 
 

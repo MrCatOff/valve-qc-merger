@@ -15,6 +15,8 @@ Project documentation lives here, one page per topic.
   donor's animations (unneeded slots voided with a placeholder).
 - [`merge-w`](merge-w.md) — merge decompiled w_ (dropped-weapon)
   models onto a single hitboxed weapon bone.
+- [`merge-zhands`](merge-zhands.md) — merge CSO zombie hand view models
+  (knife + grenade per zombie) into one model with a shared grenade bodygroup.
 - [Building the `tmp/wpn_unpacked` pack](wpn_unpacked-build.md) — a worked
   end-to-end record: grouping a mixed CSO dump by `p_`/`w_`/`v_`, the merge
   commands + exclusions, and the compile steps (LF + backslash fixups) that
