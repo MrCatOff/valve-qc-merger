@@ -12,7 +12,7 @@ since the exe cannot ship one).
 | M1 | pure-Python `.mdl` importer | done |
 | M2 | GUI shell: projects, import, explorer, inspector, log | done |
 | M3 | OpenGL viewport: textures, sequences, bodygroups, bone/attachment overlay | done |
-| M4 | builds in the GUI: options forms, budgets, gates, compile, manifest | planned |
+| M4 | builds in the GUI: options forms, budgets, gates, compile, manifest | done |
 | M5 | bone tools: rename / reparent / delete, attachments, weapon seating | planned |
 | M6 | packaging: windowed PyInstaller exe + CI | planned |
 
@@ -190,3 +190,25 @@ Design:
   object (tests, thumbnails); it needs a platform with OpenGL — Qt's
   `offscreen` plugin has none, the native one works without showing a
   window.
+
+## Builds in the GUI (M4)
+
+- **Build ▸ New build…** (Ctrl+B): pick the merge kind (the dialog counts the
+  matching assets) and a name; merge-v builds can retarget every asset first.
+- Selecting a build shows the **build panel** (right):
+  - **Settings**: every asset of the accepted kinds, or only checked ones;
+    the service options as a form generated from its options dataclass
+    (tooltips = the CLI `--help`, `choices=` flags become drop-downs; only
+    values differing from the defaults are saved to `project.toml`); for
+    merge-v the retarget options. **Save**, **Save & Run**, **Compile**.
+  - **Results**: status, per-part budgets (bones, bodyparts, submodels,
+    sequences, textures, largest sequence stream vs studiomdl's 64K — red
+    when over), every verification gate, failures.
+  - **Manifest**: the per-model table (`pev_body`, hands, `anim_*`).
+    **Double-click a row** to load the merged part in the viewport with that
+    model's bodygroups decoded from its `pev_body` and its idle playing.
+  - **Outputs**: the emitted QCs (✓ once compiled): preview in the viewport,
+    open the .mdl in the configured viewer, show the folder.
+- **Run** (F5) and **Compile** (F7) are background jobs; after a run the
+  part figures are measured in the same job and stored in `last_run.json`
+  (`studio.build_report`, Qt-free), so the panel opens instantly.

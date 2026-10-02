@@ -161,6 +161,17 @@ class ModelScene:
             stems.add(entries[index])
         return [b for b in self.batches if b.stem in stems]
 
+    def decode_body(self, value: int) -> dict[str, int]:
+        """``pev->body`` -> the entry chosen in every bodygroup (studiomdl
+        numbers groups in QC order; each one's stride is the product of the
+        sizes before it)."""
+        choice: dict[str, int] = {}
+        for group, entries in self.groups.items():
+            count = max(len(entries), 1)
+            choice[group] = value % count
+            value //= count
+        return choice
+
     def bounds(self) -> tuple[np.ndarray, np.ndarray]:
         rot, trans = self.world(*self.local_pose(0 if self.sequences else None, 0))
         points = [self.skin(b, rot, trans)[0] for b in self.batches if len(b.bones)]

@@ -49,6 +49,9 @@ class Explorer(QTreeWidget):
     remove_requested = Signal(str)
     kind_change_requested = Signal(str, str)
     reveal_requested = Signal(str)
+    build_run_requested = Signal(str)
+    build_compile_requested = Signal(str)
+    build_delete_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -60,6 +63,7 @@ class Explorer(QTreeWidget):
 
     def show_project(self, project: Project | None) -> None:
         selected = self.current_asset()
+        selected_build = self.current_build()
         self.clear()
         if project is None:
             return
@@ -83,6 +87,8 @@ class Explorer(QTreeWidget):
             item = QTreeWidgetItem(builds, [f"{name}  ·  {build.kind}"])
             item.setData(0, ROLE_KIND, "build")
             item.setData(0, ROLE_NAME, name)
+            if name == selected_build:
+                self.setCurrentItem(item)
         self.expandAll()
 
     def current_asset(self) -> str:
@@ -98,8 +104,40 @@ class Explorer(QTreeWidget):
         else:
             self.asset_selected.emit(self.current_asset())
 
+    def current_build(self) -> str:
+        item = self.currentItem()
+        if item is not None and item.data(0, ROLE_KIND) == "build":
+            return str(item.data(0, ROLE_NAME))
+        return ""
+
+    def select(self, kind: str, name: str) -> bool:
+        """Make the asset/build item ``name`` current."""
+        def walk(item: QTreeWidgetItem) -> QTreeWidgetItem | None:
+            if item.data(0, ROLE_KIND) == kind and item.data(0, ROLE_NAME) == name:
+                return item
+            for i in range(item.childCount()):
+                hit = walk(item.child(i))
+                if hit is not None:
+                    return hit
+            return None
+        for i in range(self.topLevelItemCount()):
+            hit = walk(self.topLevelItem(i))
+            if hit is not None:
+                self.setCurrentItem(hit)
+                return True
+        return False
+
     def _context_menu(self, pos) -> None:  # noqa: ANN001 - QPoint
         item = self.itemAt(pos)
+        if item is not None and item.data(0, ROLE_KIND) == "build":
+            name = str(item.data(0, ROLE_NAME))
+            menu = QMenu(self)
+            menu.addAction("Run", lambda: self.build_run_requested.emit(name))
+            menu.addAction("Compile", lambda: self.build_compile_requested.emit(name))
+            menu.addSeparator()
+            menu.addAction("Delete build…", lambda: self.build_delete_requested.emit(name))
+            menu.exec(self.viewport().mapToGlobal(pos))
+            return
         if item is None or item.data(0, ROLE_KIND) != "asset":
             return
         name = str(item.data(0, ROLE_NAME))

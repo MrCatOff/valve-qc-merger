@@ -53,6 +53,11 @@ class Viewport(QOpenGLWidget):
         self.renderer.shutdown()
         self.doneCurrent()
 
+    def release_gl(self) -> None:
+        """Free GL objects now (window closing) if the context ever existed."""
+        if self.context() is not None and self.renderer._ready:
+            self._cleanup()
+
     def paintGL(self) -> None:  # noqa: N802 - Qt override
         if self.gl_error:
             return
@@ -222,6 +227,21 @@ class ViewportPanel(QWidget):
         for widget in (self.sequence_box, self.play_button, self.slider, self.speed_box):
             widget.setEnabled(has)
         self._sequence_changed(0)
+
+    def show_body(self, value: int, sequence: int | None = None) -> None:
+        """Select every bodygroup entry ``pev->body = value`` picks, and
+        optionally a sequence."""
+        scene = self.viewport.scene
+        if scene is None:
+            return
+        for group, index in scene.decode_body(value).items():
+            box = self.group_boxes.get(group)
+            if box is not None:
+                box.setCurrentIndex(index)
+            self.viewport.state.bodygroups[group] = index
+        if sequence is not None and 0 <= sequence < self.sequence_box.count():
+            self.sequence_box.setCurrentIndex(sequence)
+        self.viewport.update()
 
     def _group_changed(self, group: str, index: int) -> None:
         self.viewport.state.bodygroups[group] = index

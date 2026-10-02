@@ -309,6 +309,14 @@ class Project:
         self.builds[build.name] = build
         self.save()
 
+    def update_build(self, build: Build) -> None:
+        """Replace an existing build's definition (validated, then saved)."""
+        if build.name not in self.builds:
+            raise ProjectError(f"no build {build.name!r}")
+        self._validate_build(build)
+        self.builds[build.name] = build
+        self.save()
+
     def remove_build(self, name: str) -> None:
         del self.builds[name]
         shutil.rmtree(self.root / "builds" / name, ignore_errors=True)
