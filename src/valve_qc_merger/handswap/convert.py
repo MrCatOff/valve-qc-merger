@@ -77,7 +77,7 @@ def parse_args(argv=None):
     return ap.parse_args(argv)
 
 
-def convert(args) -> dict:
+def convert(args, log=log) -> dict:
     weapon_dir = os.path.abspath(args.weapon_dir)
     out_dir = os.path.abspath(args.out)
     os.makedirs(out_dir, exist_ok=True)

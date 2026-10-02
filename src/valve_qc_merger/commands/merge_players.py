@@ -4,46 +4,23 @@ Merges decompiled CSO player-character models into skin-bodygrouped CS 1.6
 models: a donor rig (arctic) supplies the skeleton, the canonical animation set
 (unneeded slots voided with a placeholder) and hitboxes; each source body is one
 entry of a single ``skin`` bodygroup. Models are grouped by size / team / sex and
-each group split into parts under the per-bodypart submodel limit.
+each group split into parts under the per-bodypart submodel limit. The work
+lives in :mod:`valve_qc_merger.services.merge_players`.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import re
 from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
-from valve_qc_merger.merge_players.discovery import (
-    PlayerModel,
-    load_donor,
-    load_player_body,
-)
-from valve_qc_merger.merge_players.grouping import group_models
-from valve_qc_merger.merge_players.merger import merge_players_part
-from valve_qc_merger.merge_players.parts import (
-    DEFAULT_SUBMODEL_LIMIT,
-    TEXTURE_BUDGET,
-    split_parts,
-)
+from valve_qc_merger.merge_players.parts import DEFAULT_SUBMODEL_LIMIT, TEXTURE_BUDGET
 from valve_qc_merger.merge_players.sequences import DEFAULT_PLACEHOLDER_GLOBS
-from valve_qc_merger.merge_players.verify import verify_players_part
-from valve_qc_merger.merge_view.atlas import TextureOptions
-from valve_qc_merger.merge_view.discovery import (
-    MergeViewError,
-    discover_models,
-    sanitize_model_dir,
+from valve_qc_merger.services.base import options_from
+from valve_qc_merger.services.merge_players import (
+    MergePlayersOptions,
+    run_merge_players,
 )
-from valve_qc_merger.merge_view.merger import MergeError, write_manifest_data
-
-EXIT_OK = 0
-EXIT_FAIL = 2
-EXIT_DISCOVERY = 3
-
-
-def _slug(text: str) -> str:
-    return re.sub(r"[^0-9A-Za-z]+", "_", text).strip("_") or "group"
 
 
 class MergePlayersCommand(Command):
@@ -97,123 +74,10 @@ class MergePlayersCommand(Command):
         parser.add_argument("--dry-run", action="store_true",
                             help="discover and group only; print the plan")
 
-    def run(self, args: argparse.Namespace) -> int:  # noqa: C901 - orchestration
+    def run(self, args: argparse.Namespace) -> int:
         if args.config is not None:
             _apply_config(args)
-        globs = tuple(args.placeholder_seq) or DEFAULT_PLACEHOLDER_GLOBS
-        labels = _load_labels(args.labels)
-
-        try:
-            donor = load_donor(args.base)
-        except MergeViewError as exc:
-            print(f"error: donor: {exc}")
-            return EXIT_DISCOVERY
-        try:
-            model_dirs = discover_models(args.models_dir, exclude=set(args.exclude))
-        except MergeViewError as exc:
-            print(f"error: {exc}")
-            return EXIT_DISCOVERY
-
-        models: list[PlayerModel] = []
-        failures: list[str] = []
-        inventory: list[dict[str, object]] = []
-        for model_dir in model_dirs:
-            sanitize_model_dir(model_dir)
-            try:
-                model = load_player_body(model_dir)
-            except (MergeViewError, ValueError) as exc:
-                failures.append(str(exc))
-                print(f"  {model_dir.name:<24} FAIL  {exc}")
-                continue
-            models.append(model)
-            inventory.append({"name": model.name, "hitbox_sig": model.hitbox_sig,
-                              "height": model.height, "warnings": model.warnings})
-
-        print(f"  {'-' * 62}")
-        print(f"  {len(models)} models loaded, {len(failures)} failed; "
-              f"donor {args.base.name} ({len(donor.table)} bones)")
-        args.out.mkdir(parents=True, exist_ok=True)
-        (args.out / "inventory.json").write_text(
-            json.dumps({"models": inventory, "failures": failures}, indent=1)
-        )
-        if not models:
-            return EXIT_FAIL
-
-        groups = group_models(models, mode=args.group_by,
-                              proportion_tolerance=args.proportion_tolerance,
-                              labels=labels)
-        print(f"  group-by {args.group_by}: {len(groups)} group(s)")
-        for key, members in groups:
-            parts = split_parts(members, submodel_limit=args.submodel_limit,
-                                texture_budget=args.texture_budget,
-                                max_skins=args.max_skins,
-                                reserve_submodels=1 if args.include_base else 0)
-            suffix = f" -> {len(parts)} parts" if len(parts) > 1 else ""
-            print(f"    {key:<20} {len(members)} skins{suffix}: "
-                  f"{', '.join(m.name for m in members[:6])}"
-                  f"{'...' if len(members) > 6 else ''}")
-        if args.dry_run:
-            return EXIT_FAIL if failures else EXIT_OK
-
-        textures = TextureOptions(max_size=args.max_texture_size,
-                                  pack=args.pack_textures, no_pack=args.no_pack_texture)
-        aggregate: dict[str, dict[str, object]] = {}
-        for key, members in groups:
-            gslug = _slug(key)
-            parts = split_parts(members, submodel_limit=args.submodel_limit,
-                                texture_budget=args.texture_budget,
-                                max_skins=args.max_skins,
-                                reserve_submodels=1 if args.include_base else 0)
-            multi = len(parts) > 1
-            for pnum, part in enumerate(parts, 1):
-                stem = f"{args.name}_{gslug}" + (f"_p{pnum}" if multi else "")
-                part_out = args.out / gslug / (f"p{pnum}" if multi else "")
-                include_base = args.include_base and pnum == 1
-                try:
-                    report = merge_players_part(
-                        part, donor, part_out, stem,
-                        include_base=include_base, placeholder_globs=globs,
-                        submodel_limit=args.submodel_limit, textures=textures,
-                        manifest_format=args.manifest_format, write_manifest=True,
-                    )
-                except MergeError as exc:
-                    print(f"error: merge failed ({stem}): {exc}")
-                    return EXIT_FAIL
-                print(f"    {stem}: {len(part)} skins bones={report.bones} "
-                      f"seqs={report.sequences} (voided {report.sequences_deduped}) "
-                      f"textures={report.textures}")
-                for warning in report.warnings:
-                    print(f"      warn: {warning}")
-                for skin, body in report.manifest.items():
-                    aggregate[f"{gslug}/{skin}"] = {"model": f"{stem}.mdl", **body}
-
-                if not args.no_verify:
-                    skins = ([("base", donor.directory, [donor.body_stem])]
-                             if include_base else []) + \
-                            [(m.name, m.directory, m.body_stems) for m in part]
-                    gate = verify_players_part(
-                        part_out, f"{stem}.qc", donor, skins,
-                        placeholder_globs=globs, submodel_limit=args.submodel_limit,
-                        texture_count=report.textures,
-                    )
-                    for row in gate:
-                        mark = "PASS" if row.passed else "FAIL"
-                        print(f"      verify {row.check:<20} {mark}  {row.detail}")
-                    if not all(row.passed for row in gate):
-                        failures.append(f"{stem}: verification gate failed")
-
-        write_manifest_data(args.out, aggregate, args.manifest_format)
-        return EXIT_FAIL if failures else EXIT_OK
-
-
-def _load_labels(path: Path | None) -> dict[str, str]:
-    if path is None:
-        return {}
-    import tomllib
-    with open(path, "rb") as handle:
-        data = tomllib.load(handle)
-    return {str(k): str(v) for k, v in data.items()}
-
+        return run_merge_players(options_from(MergePlayersOptions, args)).exit_code
 
 _CONFIG_DEFAULTS: dict[str, object] = {
     "name": "players", "group_by": "size", "proportion_tolerance": 2.0,

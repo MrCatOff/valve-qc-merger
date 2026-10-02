@@ -4,7 +4,8 @@ Merges a folder of decompiled CSO zombie hand view models
 (``v_<zombie>_knife[_variant]`` and ``v_<zombie>_grenade``) into ONE model:
 a ``hands`` bodygroup with every distinct hand mesh and a shared ``grenade``
 bodygroup, so ``pev_body = grenade_on + 2 * hands``. Inputs must already
-be decompiled (one subdirectory with one .qc per model).
+be decompiled (one subdirectory with one .qc per model). The work lives in
+:mod:`valve_qc_merger.services.merge_zhands`.
 """
 
 from __future__ import annotations
@@ -13,17 +14,8 @@ import argparse
 from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
-from valve_qc_merger.merge_view.discovery import (
-    MergeViewError,
-    discover_models,
-    load_model,
-    sanitize_model_dir,
-)
-from valve_qc_merger.merge_zhands.merger import ZhandsError, merge_zhands
-
-EXIT_OK = 0
-EXIT_FAIL = 2
-EXIT_DISCOVERY = 3
+from valve_qc_merger.services.base import options_from
+from valve_qc_merger.services.merge_zhands import MergeZhandsOptions, run_merge_zhands
 
 
 class MergeZhandsCommand(Command):
@@ -51,39 +43,6 @@ class MergeZhandsCommand(Command):
                             default="ini", help="per-model manifest format")
 
     def run(self, args: argparse.Namespace) -> int:
-        try:
-            model_dirs = discover_models(args.models_dir, exclude=set(args.exclude))
-        except MergeViewError as exc:
-            print(f"error: {exc}")
-            return EXIT_DISCOVERY
-        models = []
-        for model_dir in model_dirs:
-            sanitize_model_dir(model_dir)
-            try:
-                models.append(load_model(model_dir))
-            except MergeViewError as exc:
-                print(f"  {model_dir.name:<26} FAIL  {exc}")
-                return EXIT_DISCOVERY
-            print(f"  {model_dir.name:<26} OK    sequences={len(models[-1].anims)}")
-        if not models:
-            print("error: no models found")
-            return EXIT_DISCOVERY
-        try:
-            report = merge_zhands(
-                models, args.out, args.name,
-                grenade_prefix=args.grenade_prefix,
-                grenade_texture=args.grenade_texture,
-                manifest_format=args.manifest_format,
-            )
-        except ZhandsError as exc:
-            print(f"error: {exc}")
-            return EXIT_FAIL
-        for warning in report.warnings:
-            print(f"  [Warning] {warning}")
-        print(f"  {args.name}: bones={report.bones} hands={len(report.hands)} "
-              f"grenade={report.grenade_from} sequences={report.sequences} "
-              f"({report.sequences_deduped} shared) textures={report.textures}")
-        print(f"  hands: {', '.join(report.hands)}")
-        for check, passed, detail in report.gate:
-            print(f"    verify {check:<20} {'PASS' if passed else 'FAIL'}  {detail}")
-        return EXIT_OK if all(passed for _c, passed, _d in report.gate) else EXIT_FAIL
+        return run_merge_zhands(options_from(MergeZhandsOptions, args)).exit_code
+
+__all__ = ["MergeZhandsCommand"]
