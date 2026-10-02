@@ -47,13 +47,15 @@ def test_sanitise_renames_non_ascii_and_patches_references(tmp_path: Path) -> No
     weird = "손텍스처.bmp"  # Korean: "hand texture"
     (d / weird).write_bytes(b"BM" + b"\x00" * 52)
     qc = d / "v_kr.qc"
-    qc.write_text(qc.read_text() + f'\n// texture {weird}\n')
+    qc.write_text(qc.read_text(encoding="utf-8") + f'\n// texture {weird}\n',
+                  encoding="utf-8")
 
     renames = sanitize_model_dir(d)
     assert weird in renames
     new = renames[weird]
     assert new.isascii() and (d / new).exists() and not (d / weird).exists()
-    assert new in qc.read_text() and weird not in qc.read_text()
+    text = qc.read_text(encoding="utf-8")
+    assert new in text and weird not in text
 
 
 def test_load_model_reads_manifest_and_fails_loudly(tmp_path: Path) -> None:

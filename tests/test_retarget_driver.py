@@ -7,6 +7,7 @@ wiring, all of which run in ordinary Python.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,7 @@ def _inputs(tmp_path: Path):  # type: ignore[no-untyped-def]
     return resolve_inputs(ref, _weapon_dir(tmp_path), "v_elite_anims/*.smd", only={"idle"})
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fake blender script")
 def test_run_sequence_fails_when_worker_writes_no_report(tmp_path: Path) -> None:
     # Blender exits 0 but the worker crashed before writing a report: must NOT PASS.
     blender = _fake_blender(tmp_path, "sys.exit(0)\n")
@@ -134,6 +136,7 @@ def test_run_sequence_fails_when_worker_writes_no_report(tmp_path: Path) -> None
     assert result.report["kind"] == "worker-crash"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fake blender script")
 def test_run_sequence_threads_dry_run_into_the_job(tmp_path: Path) -> None:
     body = (
         "job = json.load(open(sys.argv[sys.argv.index('--job') + 1]))\n"

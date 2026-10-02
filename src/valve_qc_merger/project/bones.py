@@ -237,7 +237,8 @@ class AttachmentSpec:
 
 
 def read_attachments(directory: Path) -> list[AttachmentSpec]:
-    qc = next(Path(directory).glob("*.qc")).read_text(encoding="latin-1")
+    # the same QC load_model() reads (a folder may hold several)
+    qc = sorted(Path(directory).glob("*.qc"))[0].read_text(encoding="latin-1")
     return [AttachmentSpec(int(m.group(1)), m.group(2) or m.group(3),
                            (float(m.group(4)), float(m.group(5)), float(m.group(6))))
             for m in _ATTACH_RE.finditer(qc)]

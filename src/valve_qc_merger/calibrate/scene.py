@@ -359,7 +359,7 @@ def _discover_qc(directory: Path) -> tuple[Smd, Smd, dict[str, str]] | None:
     hands (rhand+lhand) merge into one hand mesh; multiple weapons (dual elite)
     merge into one weapon mesh. Returns (weapon_smd, hand_smd, anims) or None."""
     from valve_qc_merger.retarget.qc_build import parse_bodygroups, parse_sequences
-    qc = next(iter(directory.glob("*.qc")), None)
+    qc = next(iter(sorted(directory.glob("*.qc"))), None)
     if qc is None:
         return None
     text = qc.read_text(errors="replace")
