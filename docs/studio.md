@@ -11,7 +11,7 @@ since the exe cannot ship one).
 | M0 | service layer + project format | done |
 | M1 | pure-Python `.mdl` importer | done |
 | M2 | GUI shell: projects, import, explorer, inspector, log | done |
-| M3 | OpenGL viewport: textures, sequences, bodygroups, bone/attachment overlay | planned |
+| M3 | OpenGL viewport: textures, sequences, bodygroups, bone/attachment overlay | done |
 | M4 | builds in the GUI: options forms, budgets, gates, compile, manifest | planned |
 | M5 | bone tools: rename / reparent / delete, attachments, weapon seating | planned |
 | M6 | packaging: windowed PyInstaller exe + CI | planned |
@@ -154,7 +154,39 @@ valve-qc-studio [project-folder]   # or: python -m valve_qc_merger.studio
   as a background job (`studio.jobs.JobRunner`, one at a time; actions that
   change the project are disabled meanwhile); cancelling stops the service
   at its next model.
-- The centre is reserved for the M3 viewport.
 
 `studio.model_info` (the Inspector's data) is Qt-free; the GUI is covered by
 offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
+
+## Viewport (M3)
+
+The centre of the window shows the selected asset (`studio.viewport`):
+
+- **Playback**: sequence list, play/pause, frame slider, speed (0.1–2×).
+  Frames interpolate like the engine (positions linearly, rotations by
+  quaternion slerp); looping sequences wrap, others replay.
+- **Bodygroups**: one selector per group with more than one entry (`blank`
+  included).
+- **Display**: textures, bones (lines + joints, drawn on top), attachments,
+  wireframe; **Frame** (also double-click) and **First person** (the eye at
+  the model origin looking down SMD -Y — what the game shows for a v_ model).
+- **Mouse**: left drag orbits, right/middle drag pans, wheel zooms.
+
+Design:
+
+- `studio.scene` (numpy, Qt-free) stores every reference vertex in its bone's
+  bind frame (each SMD's own bind, as studiomdl does), poses a sequence frame
+  by FK and skins a batch (submodel x texture) with one `einsum`: ~0.5 ms per
+  frame for a 50-bone, 2.4k-triangle model.
+- `studio.renderer` is OpenGL 3.3 core through Qt's wrappers (no PyOpenGL):
+  CPU-skinned vertex buffers streamed per frame; GoldSource render modes —
+  `masked` = alpha test on palette index 255, `additive` = ONE/ONE blend
+  without depth writes after the opaque pass. It sets every GL state it
+  relies on at the start of each frame: Qt composites widgets in the same
+  context and left the depth mask off, so `glClear` skipped the depth buffer
+  and models drew see-through. GL objects are freed on the context's
+  `aboutToBeDestroyed`.
+- `render_offscreen(scene, state, w, h)` draws the same into a framebuffer
+  object (tests, thumbnails); it needs a platform with OpenGL — Qt's
+  `offscreen` plugin has none, the native one works without showing a
+  window.

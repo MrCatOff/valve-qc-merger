@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from valve_qc_merger.merge_view.bmp8 import BmpError, read_bmp8
-from valve_qc_merger.merge_view.discovery import load_model
+from valve_qc_merger.merge_view.discovery import ModelInput, load_model
 
 _ATTACH_RE = re.compile(
     r'^\s*\$attachment\s+(\d+)\s+(?:"([^"]+)"|(\S+))\s+(\S+)\s+(\S+)\s+(\S+)',
@@ -115,9 +115,10 @@ def _find_texture(directory: Path, name: str) -> Path | None:
     return None
 
 
-def read_model_info(directory: Path) -> ModelInfo:
-    """Summarise the decompiled model in ``directory`` (one ``.qc``)."""
-    model = load_model(Path(directory), require_anims=False)
+def read_model_info(directory: Path, model: ModelInput | None = None) -> ModelInfo:
+    """Summarise the decompiled model in ``directory`` (one ``.qc``); pass an
+    already loaded ``model`` to avoid parsing it twice."""
+    model = model or load_model(Path(directory), require_anims=False)
     qc = model.qc_text
 
     submodels: list[SubmodelInfo] = []

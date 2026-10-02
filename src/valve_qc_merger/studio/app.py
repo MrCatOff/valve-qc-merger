@@ -15,9 +15,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("The studio needs PySide6: pip install 'valve-qc-merger[studio]'",
               file=sys.stderr)
         return 2
+    from PySide6.QtGui import QSurfaceFormat
+
     from valve_qc_merger import __version__
     from valve_qc_merger.studio.main_window import MainWindow
+    from valve_qc_merger.studio.renderer import gl_format
 
+    # GL 3.3 core for every context, before the application exists (macOS
+    # otherwise hands out a legacy 2.1 context)
+    QSurfaceFormat.setDefaultFormat(gl_format())
     args = list(sys.argv[1:] if argv is None else argv)
     app = QApplication.instance() or QApplication([sys.argv[0], *args])
     app.setApplicationName("valve-qc-merger Studio")

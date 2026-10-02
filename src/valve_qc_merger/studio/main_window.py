@@ -9,7 +9,6 @@ from PySide6.QtGui import QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
-    QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -17,11 +16,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from valve_qc_merger.merge_view.discovery import load_model
 from valve_qc_merger.project import Project, ProjectError
 from valve_qc_merger.services.base import Reporter
 from valve_qc_merger.studio.dialogs import NewProjectDialog, SettingsDialog
 from valve_qc_merger.studio.jobs import JobRunner
 from valve_qc_merger.studio.model_info import ModelInfo, read_model_info
+from valve_qc_merger.studio.scene import ModelScene, build_scene
+from valve_qc_merger.studio.viewport import ViewportPanel
 from valve_qc_merger.studio.widgets import (
     KIND_TITLES,
     Explorer,
@@ -43,11 +45,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(project_title(None))
         self.resize(1400, 860)
 
-        # centre: the viewport arrives in M3
-        placeholder = QLabel("3D viewport — milestone M3")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet("color: #808080; font-size: 15px;")
-        self.setCentralWidget(placeholder)
+        self.viewport = ViewportPanel()
+        self.setCentralWidget(self.viewport)
+        self._scene_cache: dict[str, ModelScene] = {}
 
         self.explorer = Explorer()
         self.inspector = Inspector()
@@ -160,6 +160,8 @@ class MainWindow(QMainWindow):
     def set_project(self, project: Project | None) -> None:
         self.project = project
         self._info_cache.clear()
+        self._scene_cache.clear()
+        self.viewport.set_scene(None)
         self.setWindowTitle(project_title(project))
         self.explorer.show_project(project)
         self.inspector.show_asset(project, None)
@@ -243,6 +245,7 @@ class MainWindow(QMainWindow):
             return
         self.project.remove_asset(name)
         self._info_cache.pop(name, None)
+        self._scene_cache.pop(name, None)
         self.log.append_line(f"removed {name}")
         self.explorer.show_project(self.project)
 
@@ -251,6 +254,7 @@ class MainWindow(QMainWindow):
             return
         self.project.set_kind(name, kind)
         self._info_cache.pop(name, None)
+        self._scene_cache.pop(name, None)
         self.log.append_line(f"{name}: kind -> {kind}")
         self.explorer.show_project(self.project)
         self._select_asset(name)
@@ -263,17 +267,25 @@ class MainWindow(QMainWindow):
     def _select_asset(self, name: str) -> None:
         if self.project is None or not name:
             self.inspector.show_asset(self.project, None)
+            self.viewport.set_scene(None)
             return
         info = self._info_cache.get(name)
-        if info is None:
+        scene = self._scene_cache.get(name)
+        if info is None or scene is None:
             self.inspector.show_asset(self.project, None, name)
+            directory = self.project.asset_dir(name)
             try:
-                info = read_model_info(self.project.asset_dir(name))
+                model = load_model(directory, require_anims=False)
+                info = read_model_info(directory, model)
+                scene = build_scene(directory, model)
             except Exception as exc:  # noqa: BLE001 - a broken asset must not kill the UI
                 self.log.append_line(f"{name}: cannot read model ({exc})")
+                self.viewport.set_scene(None)
                 return
             self._info_cache[name] = info
+            self._scene_cache[name] = scene
         self.inspector.show_asset(self.project, info, name)
+        self.viewport.set_scene(scene)
 
     def _reveal(self, name: str) -> None:
         if self.project is not None:
@@ -315,6 +327,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{title}: {payload}", 8000)
         if self.project is not None:
             self._info_cache.clear()
+            self._scene_cache.clear()
             self.explorer.show_project(self.project)
         self._update_actions()
 

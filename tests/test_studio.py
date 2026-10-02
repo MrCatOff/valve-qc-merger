@@ -150,3 +150,23 @@ def test_broken_asset_does_not_break_the_window(window, tmp_path: Path) -> None:
     window.set_project(project)
     _select(window, "w_luger")
     assert "cannot read model" in window.log.toPlainText()
+
+
+def test_viewport_panel_follows_the_selection(window, tmp_path: Path) -> None:
+    from valve_qc_merger.project import Project
+
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(_MINI)
+    window.set_project(project)
+    _select(window, "src")
+    panel = window.viewport
+    assert panel.sequence_box.count() == 2
+    assert list(panel.group_boxes) == ["gun"]  # single-entry groups need no box
+    panel.group_boxes["gun"].setCurrentIndex(1)
+    assert panel.viewport.state.bodygroups == {"gun": 1}
+    panel.sequence_box.setCurrentIndex(1)
+    assert panel.slider.maximum() == 2  # shoot: 3 frames
+    panel.slider.setValue(2)
+    assert panel.viewport.state.frame == 2.0
+    window.close_project()
+    assert panel.viewport.scene is None
