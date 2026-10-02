@@ -73,6 +73,7 @@ class Viewport(QOpenGLWidget):
         self.state.frame = 0.0
         self.state.sequence = 0 if scene is not None and scene.sequences else None
         self.state.bodygroups = {}
+        self.state.highlight_bone = None
         if scene is not None:
             self.frame_model()
         self.update()
@@ -227,6 +228,13 @@ class ViewportPanel(QWidget):
         for widget in (self.sequence_box, self.play_button, self.slider, self.speed_box):
             widget.setEnabled(has)
         self._sequence_changed(0)
+
+    def highlight_bone(self, name: str) -> None:
+        scene = self.viewport.scene
+        state = self.viewport.state
+        state.highlight_bone = (scene.bone_names.index(name)
+                                if scene is not None and name in scene.bone_names else None)
+        self.viewport.update()
 
     def show_body(self, value: int, sequence: int | None = None) -> None:
         """Select every bodygroup entry ``pev->body = value`` picks, and

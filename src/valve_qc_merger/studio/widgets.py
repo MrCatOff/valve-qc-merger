@@ -261,18 +261,22 @@ class Inspector(QTabWidget):
         self.addTab(textures, "Textures")
         self.sequences = _table(["#", "Sequence", "FPS", "Frames", "Loop", "Events"])
         self.addTab(self.sequences, "Sequences")
-        self.bones = QTreeWidget()
-        self.bones.setHeaderLabels(["Bone", "#", "Vertices"])
-        self.bones.header().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.addTab(self.bones, "Bones")
-        self.attachments = _table(["#", "Bone", "Offset"])
-        self.addTab(self.attachments, "Attachments")
+        from valve_qc_merger.studio.bone_tools import AttachmentsPage, BonesPage
+        self.bones_page = BonesPage()
+        self.bones = self.bones_page.tree
+        self.addTab(self.bones_page, "Bones")
+        self.attachments_page = AttachmentsPage()
+        self.attachments = self.attachments_page.table
+        self.addTab(self.attachments_page, "Attachments")
         self._info: ModelInfo | None = None
         self.show_asset(None, None)
 
     def show_asset(self, project: Project | None, info: ModelInfo | None,
                    name: str = "") -> None:
         self._asset = name
+        can_undo = bool(project is not None and name and project.can_undo(name))
+        self.bones_page.set_info(info, can_undo=can_undo)
+        self.attachments_page.set_info(info)
         self._info = info
         asset = project.assets.get(name) if project is not None and name else None
         enabled = asset is not None
@@ -285,9 +289,8 @@ class Inspector(QTabWidget):
             self.stats_label.setText("Select an asset in the Explorer")
             self.notes.setText("")
             self.warnings_label.setText("")
-            for table in (self.submodels, self.textures, self.sequences, self.attachments):
+            for table in (self.submodels, self.textures, self.sequences):
                 table.setRowCount(0)
-            self.bones.clear()
             self.texture_preview.set_image(None)
             return
         self.name_label.setText(asset.name)
@@ -310,20 +313,6 @@ class Inspector(QTabWidget):
         _fill(self.sequences, [[s.index, s.name, s.fps if s.fps is not None else "",
                                 s.frames, "yes" if s.loop else "", len(s.events)]
                                for s in info.sequences])
-        _fill(self.attachments, [[a.index, a.bone, " ".join(f"{v:g}" for v in a.offset)]
-                                 for a in info.attachments])
-        self.bones.clear()
-        items: dict[int, QTreeWidgetItem] = {}
-        for bone in info.bones:
-            parent = items.get(bone.parent)
-            item = QTreeWidgetItem([bone.name, str(bone.index),
-                                    str(bone.vertices) if bone.vertices else ""])
-            if parent is None:
-                self.bones.addTopLevelItem(item)
-            else:
-                parent.addChild(item)
-            items[bone.index] = item
-        self.bones.expandAll()
         self.texture_preview.set_image(None)
         if info.textures:
             self.textures.setCurrentCell(0, 0)

@@ -88,6 +88,7 @@ void main() { frag = vec4(v_col, 1.0); }
 BONE_COLOR = (1.0, 0.75, 0.1)
 JOINT_COLOR = (1.0, 0.95, 0.4)
 ATTACH_COLOR = (0.2, 0.9, 1.0)
+HIGHLIGHT_COLOR = (1.0, 0.2, 0.25)
 
 
 @dataclass
@@ -144,6 +145,7 @@ class ViewState:
     show_attachments: bool = True
     wireframe: bool = False
     textured: bool = True
+    highlight_bone: int | None = None  # drawn on top even with bones hidden
     background: tuple[float, float, float] = (0.24, 0.26, 0.29)
 
 
@@ -311,33 +313,46 @@ class Renderer:
             self._polygon_mode(GL_FRONT_AND_BACK, GL_FILL)
         program.release()
 
-        overlay_lines: list[np.ndarray] = []
-        overlay_points: list[tuple[np.ndarray, float]] = []
+        # Markers are 3D crosses made of lines: GL_POINTS with a shader point
+        # size draws nothing on some core-profile drivers (macOS).
+        cam = state.camera
+        size = (0.5 if cam.first_person else max(cam.distance, 1.0)) * 0.012
+
+        def crosses(points: np.ndarray, colour: tuple[float, float, float],
+                    scale: float) -> np.ndarray:
+            out = []
+            for axis in np.eye(3) * size * scale:
+                out.append(np.hstack([points - axis, np.tile(colour, (len(points), 1))]))
+                out.append(np.hstack([points + axis, np.tile(colour, (len(points), 1))]))
+            pairs = np.stack(out).reshape(3, 2, len(points), 6)
+            return pairs.transpose(0, 2, 1, 3).reshape(-1, 6)
+
+        overlay: list[np.ndarray] = []
         if state.show_bones:
             for b, parent in enumerate(scene.parents):
                 if parent >= 0:
-                    overlay_lines.append(np.array([[*trans[parent], *BONE_COLOR],
-                                                   [*trans[b], *BONE_COLOR]]))
-            overlay_points.append(
-                (np.hstack([trans, np.tile(JOINT_COLOR, (len(trans), 1))]), 5.0))
+                    overlay.append(np.array([[*trans[parent], *BONE_COLOR],
+                                             [*trans[b], *BONE_COLOR]]))
+            overlay.append(crosses(trans, JOINT_COLOR, 0.6))
         if state.show_attachments and scene.attachments:
             pts = np.array([rot[bone] @ offset + trans[bone]
                             for _i, bone, offset in scene.attachments])
-            overlay_points.append(
-                (np.hstack([pts, np.tile(ATTACH_COLOR, (len(pts), 1))]), 12.0))
-        if overlay_lines or overlay_points:
+            overlay.append(crosses(pts, ATTACH_COLOR, 1.4))
+        hb = state.highlight_bone
+        if hb is not None and 0 <= hb < len(trans):
+            parent = scene.parents[hb]
+            if parent >= 0:
+                overlay.append(np.array([[*trans[parent], *HIGHLIGHT_COLOR],
+                                         [*trans[hb], *HIGHLIGHT_COLOR]]))
+            overlay.append(crosses(trans[hb:hb + 1], HIGHLIGHT_COLOR, 2.0))
+        if overlay:
             gl.glDisable(GL_DEPTH_TEST)
-            gl.glEnable(GL_PROGRAM_POINT_SIZE)
             line = self.line_program
             line.bind()
             line.setUniformValue("u_mvp", mvp)
-            if overlay_lines:
-                line.setUniformValue("u_point", 1.0)
-                self._draw(line, self._lines, np.concatenate(overlay_lines).astype(np.float32),
-                           GL_LINES, (3, 3))
-            for pts, size in overlay_points:
-                line.setUniformValue("u_point", size)
-                self._draw(line, self._lines, pts.astype(np.float32), GL_POINTS, (3, 3))
+            line.setUniformValue("u_point", 1.0)
+            self._draw(line, self._lines, np.concatenate(overlay).astype(np.float32),
+                       GL_LINES, (3, 3))
             line.release()
             gl.glEnable(GL_DEPTH_TEST)
 

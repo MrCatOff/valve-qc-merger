@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
         self.project: Project | None = None
         self._info_cache: dict[str, ModelInfo] = {}
         self._pending_build = ""
+        self._pending_asset = ""
         self.jobs = JobRunner(self)
         self.setWindowTitle(project_title(None))
         self.resize(1400, 860)
@@ -90,6 +91,14 @@ class MainWindow(QMainWindow):
         self.explorer.reveal_requested.connect(self._reveal)
         self.inspector.kind_changed.connect(self.set_kind)
         self.inspector.notes_changed.connect(self._set_notes)
+        bones = self.inspector.bones_page
+        bones.bone_selected.connect(self.viewport.highlight_bone)
+        bones.rename_requested.connect(self.rename_bone)
+        bones.reparent_requested.connect(self.reparent_bone)
+        bones.reparent_dialog_requested.connect(self.reparent_bone_dialog)
+        bones.delete_requested.connect(self.delete_bone)
+        bones.undo_requested.connect(self.undo_asset_edit)
+        self.inspector.attachments_page.save_requested.connect(self.save_attachments)
         self.jobs.started.connect(self._job_started)
         self.jobs.log.connect(self.log.append_line)
         self.jobs.progress.connect(self._job_progress)
@@ -297,6 +306,85 @@ class MainWindow(QMainWindow):
             self.project.assets[name].notes = notes
             self.project.save()
 
+    # -- bone tools ----------------------------------------------------------
+    def _edit_asset(self, title: str, edit) -> None:  # noqa: ANN001 - callable
+        """Snapshot the selected asset, run ``edit(asset_dir)`` as a job,
+        then reload it (Inspector + viewport)."""
+        project, name = self.project, self.explorer.current_asset()
+        if project is None or not name or self.jobs.busy:
+            return
+        directory = project.asset_dir(name)
+
+        def work(reporter: Reporter) -> object:
+            project.snapshot_asset(name)
+            result = edit(directory)
+            for warning in result.warnings:
+                reporter.log(f"  warn: {warning}")
+            reporter.log(f"  {name}: {len(result.files)} file(s) rewritten, max pose "
+                         f"deviation {result.max_pose_deviation:.2e}u")
+            return result
+
+        self._pending_asset = name
+        self.jobs.start(f"{title} ({name})", work)
+
+    def rename_bone(self, bone: str) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        from valve_qc_merger.project.bones import rename_bone
+        new, ok = QInputDialog.getText(self, "Rename bone", f"New name for {bone}:", text=bone)
+        if ok and new.strip() and new.strip() != bone:
+            self._edit_asset("Rename bone", lambda d: rename_bone(d, bone, new.strip()))
+
+    def reparent_bone(self, bone: str, parent: object) -> None:
+        from valve_qc_merger.project.bones import reparent
+        self._edit_asset("Reparent bone", lambda d: reparent(d, bone, parent))
+
+    def reparent_bone_dialog(self, bone: str) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        from valve_qc_merger.studio.bone_tools import ROOT_CHOICE
+        info = self._info_cache.get(self.explorer.current_asset())
+        if info is None:
+            return
+        # a bone cannot move under itself or its descendants
+        children: dict[int, list[int]] = {}
+        for b in info.bones:
+            children.setdefault(b.parent, []).append(b.index)
+        start = next(b.index for b in info.bones if b.name == bone)
+        banned, stack = set(), [start]
+        while stack:
+            index = stack.pop()
+            banned.add(index)
+            stack.extend(children.get(index, []))
+        choices = [ROOT_CHOICE] + [b.name for b in info.bones if b.index not in banned]
+        parent, ok = QInputDialog.getItem(self, "Change parent", f"New parent of {bone}:",
+                                          choices, 0, False)
+        if ok:
+            self.reparent_bone(bone, None if parent == ROOT_CHOICE else parent)
+
+    def delete_bone(self, bone: str) -> None:
+        from valve_qc_merger.project.bones import delete_bone
+        answer = QMessageBox.question(
+            self, "Delete bone",
+            f"Delete {bone}? Its children keep their pose; vertices it carries move to "
+            "its parent and stop following its own motion. (Undo restores it.)")
+        if answer == QMessageBox.StandardButton.Yes:
+            self._edit_asset("Delete bone", lambda d: delete_bone(d, bone))
+
+    def save_attachments(self, specs: list) -> None:
+        from valve_qc_merger.project.bones import write_attachments
+        self._edit_asset("Save attachments", lambda d: write_attachments(d, specs))
+
+    def undo_asset_edit(self) -> None:
+        name = self.explorer.current_asset()
+        if self.project is None or not name or self.jobs.busy:
+            return
+        if self.project.undo_asset(name):
+            self.log.append_line(f"{name}: last edit undone")
+            self._info_cache.pop(name, None)
+            self._scene_cache.pop(name, None)
+            self._select_asset(name)
+
     # -- builds ------------------------------------------------------------
     def new_build(self) -> None:
         if self.project is None:
@@ -447,6 +535,12 @@ class MainWindow(QMainWindow):
             self._info_cache.clear()
             self._scene_cache.clear()
             self.explorer.show_project(self.project)
+            asset = getattr(self, "_pending_asset", "")
+            if asset and asset in self.project.assets:
+                self.explorer.select("asset", asset)
+                self._select_asset(asset)
+                self.right.setCurrentWidget(self.inspector)
+            self._pending_asset = ""
             pending = getattr(self, "_pending_build", "")
             if pending and pending in self.project.builds:
                 self.explorer.select("build", pending)

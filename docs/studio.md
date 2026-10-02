@@ -13,7 +13,7 @@ since the exe cannot ship one).
 | M2 | GUI shell: projects, import, explorer, inspector, log | done |
 | M3 | OpenGL viewport: textures, sequences, bodygroups, bone/attachment overlay | done |
 | M4 | builds in the GUI: options forms, budgets, gates, compile, manifest | done |
-| M5 | bone tools: rename / reparent / delete, attachments, weapon seating | planned |
+| M5 | bone tools: rename / reparent / delete, attachments | done |
 | M6 | packaging: windowed PyInstaller exe + CI | planned |
 
 ## Services (M0)
@@ -212,3 +212,31 @@ Design:
 - **Run** (F5) and **Compile** (F7) are background jobs; after a run the
   part figures are measured in the same job and stored in `last_run.json`
   (`studio.build_report`, Qt-free), so the panel opens instantly.
+
+## Bone tools (M5)
+
+Hierarchy edits on the selected asset (Inspector ▸ **Bones**), applied to every
+SMD of the model (reference meshes and animations) by
+`valve_qc_merger.project.bones`, Qt-free:
+
+- **Rename…** — names only (≤ 31 characters, unique); `$attachment`,
+  `$hbox` and `$controller` lines follow.
+- **Change parent…** or **drag a bone onto another** (onto empty space: make
+  it a root) — FK-exact, the bone keeps its world pose in every frame;
+  moving a bone under its own descendant is refused.
+- **Delete…** — children fold the bone's transform in and keep their pose;
+  vertices it carried move to its parent and attachments are re-expressed in
+  the parent's bind frame (both reported: they stop following the deleted
+  bone's own motion). A root carrying vertices cannot be deleted.
+- **Undo** — every edit snapshots the asset's QC + SMDs first
+  (`.history/<asset>/N`, last 10 kept).
+
+Each edit re-checks every surviving bone's world position in every frame and
+logs the worst deviation (~1e-14 u on the CSO corpus). Selecting a bone
+highlights it in the viewport (red cross + link to its parent).
+
+Inspector ▸ **Attachments**: an editable table (index, bone, offset in the
+bone's frame) with Add / Remove / **Save attachments** (warns above
+GoldSource's 4). Attachments, joints and the highlight are drawn as 3D line
+crosses — `GL_POINTS` with a shader point size draws nothing on macOS core
+profile.

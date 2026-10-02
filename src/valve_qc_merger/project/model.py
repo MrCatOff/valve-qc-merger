@@ -263,10 +263,56 @@ class Project:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
+    # -- edit history (bone tools) -----------------------------------------
+    HISTORY_LIMIT = 10
+
+    def _history_dir(self, name: str) -> Path:
+        return self.root / ".history" / name
+
+    def snapshot_asset(self, name: str) -> Path:
+        """Copy the asset's QC and SMD files aside before an edit (the last
+        :data:`HISTORY_LIMIT` are kept); textures never change, so they're not."""
+        source = self.asset_dir(name)
+        history = self._history_dir(name)
+        history.mkdir(parents=True, exist_ok=True)
+        existing = sorted(int(p.name) for p in history.iterdir() if p.name.isdigit())
+        target = history / str((existing[-1] + 1) if existing else 1)
+        for path in source.rglob("*"):
+            if path.is_file() and path.suffix.lower() in (".qc", ".smd"):
+                dest = target / path.relative_to(source)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, dest)
+        for old in existing[: max(0, len(existing) + 1 - self.HISTORY_LIMIT)]:
+            shutil.rmtree(history / str(old), ignore_errors=True)
+        return target
+
+    def can_undo(self, name: str) -> bool:
+        history = self._history_dir(name)
+        return history.exists() and any(p.name.isdigit() for p in history.iterdir())
+
+    def undo_asset(self, name: str) -> bool:
+        """Restore the newest snapshot of the asset; False if there is none."""
+        history = self._history_dir(name)
+        if not self.can_undo(name):
+            return False
+        latest = history / str(max(int(p.name) for p in history.iterdir() if p.name.isdigit()))
+        target = self.asset_dir(name)
+        for path in target.rglob("*"):
+            if path.is_file() and path.suffix.lower() in (".qc", ".smd"):
+                path.unlink()
+        for path in latest.rglob("*"):
+            if path.is_file():
+                dest = target / path.relative_to(latest)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, dest)
+        shutil.rmtree(latest)
+        return True
+
     def remove_asset(self, name: str, *, delete_files: bool = True) -> None:
         asset = self.assets.pop(name)
         if delete_files:
             shutil.rmtree(self.root / asset.path, ignore_errors=True)
+            shutil.rmtree(self._history_dir(name), ignore_errors=True)
         for build in self.builds.values():
             if name in build.assets:
                 build.assets.remove(name)
