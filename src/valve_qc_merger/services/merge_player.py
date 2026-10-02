@@ -11,6 +11,7 @@ from valve_qc_merger.merge_player.analyze import (
     PlayerPlan,
     collapse_weapon_bones,
 )
+from valve_qc_merger.merge_player.loading import load_player_model
 from valve_qc_merger.merge_player.merger import merge_player_models, skin_texture_files
 from valve_qc_merger.merge_player.parts import (
     TEXTURE_BUDGET,
@@ -23,11 +24,9 @@ from valve_qc_merger.merge_view.discovery import (
     MergeViewError,
     ModelInput,
     discover_models,
-    load_model,
     sanitize_model_dir,
 )
 from valve_qc_merger.merge_view.merger import MergeError, write_manifest_data
-from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.services.base import (
     EXIT_DISCOVERY,
     EXIT_FAIL,
@@ -36,31 +35,6 @@ from valve_qc_merger.services.base import (
     Reporter,
     ServiceResult,
 )
-
-
-def load_player_model(model_dir: Path) -> ModelInput:
-    """Load a p_ model; QCs without ``$sequence`` fall back to an on-disk idle.
-
-    Some decompiles (p_tknife) ship an anims folder the QC never references;
-    an animation matching the model's own skeleton is still the best source
-    for the weapon bone's in-game pose, so adopt the first one that parses.
-    """
-    model = load_model(model_dir, require_anims=False)
-    if not model.anims:
-        bones = set(model.bone_names)
-        for candidate in sorted(model_dir.glob("*/*.smd")):
-            try:
-                smd = parse_smd_file(candidate)
-            except (OSError, ValueError):
-                continue
-            if smd.frames and {n.name for n in smd.nodes} <= bones:
-                model.anims[candidate.stem] = smd
-                model.warnings.append(
-                    f"QC has no $sequence; using {candidate.name} for the "
-                    "idle pose"
-                )
-                break
-    return model
 
 
 @dataclass

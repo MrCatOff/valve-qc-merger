@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from valve_qc_merger.merge_player.analyze import PlayerPlan
+from valve_qc_merger.merge_player.loading import load_player_model
 from valve_qc_merger.merge_player.merger import skin_texture_files
 from valve_qc_merger.merge_player.parts import (
     TEXTURE_BUDGET,
@@ -36,7 +37,6 @@ from valve_qc_merger.services.base import (
     Reporter,
     ServiceResult,
 )
-from valve_qc_merger.services.merge_player import load_player_model
 
 
 @dataclass

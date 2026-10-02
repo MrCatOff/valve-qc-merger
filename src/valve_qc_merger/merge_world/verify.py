@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from valve_qc_merger.commands.merge_player import _load_player_model
+from valve_qc_merger.merge_player.loading import load_player_model
 from valve_qc_merger.merge_player.merger import parse_texturegroups
 from valve_qc_merger.merge_view.skeleton_ops import fk_worlds
 from valve_qc_merger.merge_view.verify import (
@@ -75,7 +75,7 @@ def verify_world_part(
     total_verts = 0
     worst_model = ""
     for model_name in model_names:
-        original = _load_player_model(models_dir / model_name)
+        original = load_player_model(models_dir / model_name)
         anim = next(iter(original.anims.values()), None)
         anim_worlds: dict[str, Transform] = {}
         if anim is not None and anim.frames:

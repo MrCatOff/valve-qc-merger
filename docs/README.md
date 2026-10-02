@@ -17,6 +17,8 @@ Project documentation lives here, one page per topic.
   models onto a single hitboxed weapon bone.
 - [`merge-zhands`](merge-zhands.md) — merge CSO zombie hand view models
   (knife + grenade per zombie) into one model with a shared grenade bodygroup.
+- [Studio (GUI)](studio.md) — the desktop IDE plan, the service layer
+  (`run_<op>(options, reporter)`) and the `project.toml` project format.
 - [Building the `tmp/wpn_unpacked` pack](wpn_unpacked-build.md) — a worked
   end-to-end record: grouping a mixed CSO dump by `p_`/`w_`/`v_`, the merge
   commands + exclusions, and the compile steps (LF + backslash fixups) that

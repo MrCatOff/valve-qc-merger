@@ -117,13 +117,14 @@ def _slot_worlds(
         local = {p.bone: p for p in frame.poses}
         worlds: dict[int, Transform] = {}
 
-        def world(index: int) -> Transform:
+        def world(index: int, local: dict[int, BonePose] = local,
+                  worlds: dict[int, Transform] = worlds) -> Transform:
             cached = worlds.get(index)
             if cached is None:
                 pose = local[index]
                 xf = Transform.from_pos_euler(pose.position, pose.rotation)
                 parent = parent_of[index]
-                cached = xf if parent < 0 else world(parent).compose(xf)
+                cached = xf if parent < 0 else world(parent, local, worlds).compose(xf)
                 worlds[index] = cached
             return cached
 
@@ -294,13 +295,13 @@ def share_attachments(
     slot_parent = {name: parent_of[int(name[len("attachment"):].split("_")[0])]
                    or _ROOT for name, parent in layout if parent is None}
     zero = Vector3(0.0, 0.0, 0.0)
-    for smd, rows in zip(smds, data):
+    for smd, rows in zip(smds, data, strict=True):
         index_of = {n.name: n.index for n in smd.nodes}
         root = index_of.get(_ROOT, -1)
         first = max((n.index for n in smd.nodes), default=-1) + 1
         new_index = {name: first + i for i, (name, _p) in enumerate(layout)}
         frames: list[Frame] = []
-        for frame, (anchors_w, row) in zip(smd.frames, rows):
+        for frame, (anchors_w, row) in zip(smd.frames, rows, strict=True):
             extra: list[BonePose] = []
             for slot, world in enumerate(row):
                 name = SLOT_BONE.format(slot)

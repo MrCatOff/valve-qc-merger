@@ -15,13 +15,10 @@ import argparse
 from pathlib import Path
 
 from valve_qc_merger.commands.base import Command
+from valve_qc_merger.merge_player.loading import load_player_model
 from valve_qc_merger.merge_player.parts import TEXTURE_BUDGET
 from valve_qc_merger.services.base import options_from
-from valve_qc_merger.services.merge_player import (
-    MergePlayerOptions,
-    load_player_model,
-    run_merge_player,
-)
+from valve_qc_merger.services.merge_player import MergePlayerOptions, run_merge_player
 
 # Kept for callers that predate the service layer.
 _load_player_model = load_player_model
