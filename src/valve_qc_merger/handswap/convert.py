@@ -17,6 +17,7 @@ from . import asset as assetmod
 from . import build as buildmod
 from . import qc as qcmod
 from . import smd as smdmod
+from . import tuning as tuningmod
 from .retarget import build_plan, refine_finger_fit
 
 def _project_root() -> str:
@@ -108,17 +109,13 @@ def convert(args, log=log) -> dict:
                                              model.skel)[0]
 
     # per-weapon tuning table (committed, calibrated against examples/);
-    # explicit --grip-offset flags override it. Lives next to the CSO asset
-    # (storage/handswap/grip_tuning.json).
-    grip_offsets = {}
-    tuning_path = os.path.join(os.path.dirname(os.path.abspath(
-        args.asset)), "grip_tuning.json")
-    if os.path.isfile(tuning_path):
-        with open(tuning_path) as f:
-            tuning = json.load(f).get(os.path.basename(weapon_dir), {})
-        grip_offsets.update(tuning.get("grip_offset", {}))
-        if grip_offsets:
-            log("Grip tuning: %s" % grip_offsets)
+    # explicit --grip-offset / --weapon-offset flags override it. Lives next
+    # to the CSO asset (storage/handswap/grip_tuning.json).
+    tuned = tuningmod.load_entry(tuningmod.tuning_path(args.asset),
+                                 os.path.basename(weapon_dir))
+    grip_offsets = dict(tuned.get("grip_offset", {}))
+    if tuned:
+        log("Grip tuning: %s" % tuned)
     for spec in args.grip_offset:
         side, _, xyz = spec.partition(":")
         grip_offsets[side.strip().lower()] = \
@@ -127,8 +124,8 @@ def convert(args, log=log) -> dict:
     weapon_offset = getattr(args, "weapon_offset", None)
     if isinstance(weapon_offset, str):
         weapon_offset = [float(x) for x in weapon_offset.split(",")]
-    if weapon_offset is not None and not any(weapon_offset):
-        weapon_offset = None
+    if not weapon_offset or not any(weapon_offset):
+        weapon_offset = tuned.get("weapon_offset")
     if weapon_offset is not None:
         if len(weapon_offset) != 3:
             raise RuntimeError("weapon offset needs 3 numbers: dx,dy,dz")

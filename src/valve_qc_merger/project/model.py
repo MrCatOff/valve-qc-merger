@@ -318,10 +318,12 @@ class Project:
         staging = self.root / ".derive" / name
         shutil.rmtree(staging, ignore_errors=True)
         try:
-            # services sanitise their input in place: work on a copy
-            shutil.copytree(self.asset_dir(source), staging / "input")
+            # services sanitise their input in place: work on a copy, named
+            # like the source (retarget keys grip_tuning.json by folder name)
+            staged = staging / "input" / source
+            shutil.copytree(self.asset_dir(source), staged)
             opts = options_from_dict(spec.options, {
-                **stored, spec.input_field: str(staging / "input"),
+                **stored, spec.input_field: str(staged),
                 "out": str(staging / "output"),
             })
             reporter.log(f"{spec.title}: {source} -> {name}")

@@ -262,6 +262,13 @@ hands, in model space at the grip frame (`retarget --weapon-offset dx,dy,dz`);
 the thumb, z palm normal (`--grip-offset side:dx,dy,dz`). The fingers re-snug
 to the weapon after an offset, so nudge, re-run, look, repeat.
 
+**Save to grip_tuning.json** stores the offsets as the weapon's tuning in
+`storage/handswap/grip_tuning.json` (keyed by the source asset name =
+weapon folder name; `grip_offset` per side + `weapon_offset`). Every later
+retarget of a folder with that name applies them — the CLI and build-level
+retarget too; explicit options still override (per side for palms, whole
+vector for the weapon). A new Retarget dialog is prefilled from the table.
+
 A derived asset stores how it was made in `project.toml`
 (`[assets.derived]`: `from`, `mode`, `options`); its context menu adds
 **Re-run retarget** (Ctrl+Shift+R, after the source changed) and **Retarget

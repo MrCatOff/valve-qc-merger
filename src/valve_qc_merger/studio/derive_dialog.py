@@ -10,6 +10,7 @@ find a better grip.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtWidgets import (
@@ -23,13 +24,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QRadioButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from valve_qc_merger.handswap import tuning
 from valve_qc_merger.project import DERIVE_MODES
+from valve_qc_merger.resources import resource_path
 from valve_qc_merger.services.canonicalize import CanonicalizeOptions
 from valve_qc_merger.services.retarget import RetargetOptions
 from valve_qc_merger.studio.options_form import OptionsForm
@@ -87,6 +91,14 @@ def format_grip_offsets(offsets: dict[str, list[float]]) -> list[str]:
             for side, xyz in offsets.items() if any(xyz)]
 
 
+def grip_tuning_file(asset: str | None = None) -> Path:
+    """The grip_tuning.json retarget reads for the given CSO hands asset
+    (default: the bundled one)."""
+    from valve_qc_merger.handswap import asset as assetmod
+    source = str(resource_path(Path(asset))) if asset else assetmod.DEFAULT_ASSET
+    return Path(tuning.tuning_path(source))
+
+
 class DeriveDialog(QDialog):
     """Pick the mode, the new asset's name and the options; ``result_spec()``
     then gives ``(mode, name or None, options)``."""
@@ -139,6 +151,14 @@ class DeriveDialog(QDialog):
         hands_page = QWidget()
         hands_layout = QVBoxLayout(hands_page)
         hands_layout.setContentsMargins(0, 0, 0, 0)
+        prefilled = False
+        if (name is None and len(sources) == 1
+                and not options.get("weapon_offset") and not options.get("grip_offset")):
+            tuned = tuning.load_entry(str(grip_tuning_file(options.get("asset"))), sources[0])
+            if tuned:
+                options["weapon_offset"] = tuned.get("weapon_offset", [])
+                options["grip_offset"] = format_grip_offsets(tuned.get("grip_offset", {}))
+                prefilled = True
         offsets = QGroupBox("Grip offsets")
         offsets_form = QFormLayout(offsets)
         self.weapon_offset = Vec3Edit(
@@ -154,6 +174,20 @@ class DeriveDialog(QDialog):
                 "forward, y toward the thumb, z palm normal"))
             self.grip_offsets[side] = edit
             offsets_form.addRow(f"{side.capitalize()} palm (palm axes)", edit)
+        tuning_row = QWidget()
+        tuning_layout = QHBoxLayout(tuning_row)
+        tuning_layout.setContentsMargins(0, 0, 0, 0)
+        self.tuning_label = QLabel(f"prefilled from {tuning.FILE_NAME}" if prefilled else "")
+        self.tuning_label.setStyleSheet("color: gray")
+        self.save_tuning_button = QPushButton(f"Save to {tuning.FILE_NAME}")
+        self.save_tuning_button.setToolTip(
+            f"store these offsets as {sources[0]}'s grip tuning: every later retarget of "
+            "a weapon folder with this name uses them (CLI and builds too)")
+        self.save_tuning_button.setEnabled(len(sources) == 1)
+        self.save_tuning_button.clicked.connect(self.save_tuning)
+        tuning_layout.addWidget(self.tuning_label, 1)
+        tuning_layout.addWidget(self.save_tuning_button)
+        offsets_form.addRow(tuning_row)
         hands_layout.addWidget(offsets)
         self.retarget_form = OptionsForm(
             RetargetOptions, "retarget",
@@ -220,6 +254,26 @@ class DeriveDialog(QDialog):
             values["grip_offset"] = grips
         return values
 
+    def tuning_file(self) -> Path:
+        return grip_tuning_file(self.retarget_form.values().get("asset"))
+
+    def save_tuning(self) -> dict | None:
+        """Write the current offsets as the source weapon's grip tuning."""
+        if len(self.sources) != 1:
+            return None
+        path = self.tuning_file()
+        try:
+            entry = tuning.save_entry(
+                str(path), self.sources[0],
+                grip_offset={s: e.value() for s, e in self.grip_offsets.items()},
+                weapon_offset=self.weapon_offset.value())
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Grip tuning", f"Cannot write {path}: {exc}")
+            return None
+        self.tuning_label.setText(f"saved for {self.sources[0]}" if entry
+                                  else f"{self.sources[0]} removed from {tuning.FILE_NAME}")
+        return entry
+
     def target_name(self) -> str | None:
         """The new asset's name (None: the default per source, batch mode)."""
         if self._fixed_name is not None:
@@ -253,4 +307,5 @@ class DeriveDialog(QDialog):
         return self.mode, self.target_name(), self.options()
 
 
-__all__ = ["DeriveDialog", "Vec3Edit", "format_grip_offsets", "parse_grip_offsets"]
+__all__ = ["DeriveDialog", "Vec3Edit", "format_grip_offsets", "grip_tuning_file",
+           "parse_grip_offsets"]

@@ -142,3 +142,62 @@ def test_options_form_keeps_comma_entries_whole(app) -> None:
     values = {"grip_offset": ["left:0,0,-0.4", "right:0.1,0,0"],
               "weapon_offset": [0.0, 0.5, 0.0]}
     assert OptionsForm(RetargetOptions, "retarget", values).values() == values
+
+
+def test_grip_tuning_round_trip(tmp_path: Path) -> None:
+    from valve_qc_merger.handswap import tuning
+    path = tmp_path / "grip_tuning.json"
+    path.write_text('{"_comment": "keep me", "v_deagle": {"grip_offset": '
+                    '{"left": [0, 0, -0.6]}}}')
+    tuning.save_entry(str(path), "v_x", grip_offset={"right": [0.1, 0, 0],
+                                                     "left": [0, 0, 0]},
+                      weapon_offset=[0, 0.5, 0])
+    assert tuning.load_entry(str(path), "v_x") == {
+        "grip_offset": {"right": [0.1, 0.0, 0.0]}, "weapon_offset": [0.0, 0.5, 0.0]}
+    assert tuning.load_entry(str(path), "v_deagle")["grip_offset"]["left"] == [0, 0, -0.6]
+    assert "keep me" in path.read_text()
+    tuning.save_entry(str(path), "v_x", grip_offset={}, weapon_offset=[0, 0, 0])
+    assert "v_x" not in path.read_text()  # all-zero offsets drop the weapon
+
+
+def test_retarget_reads_weapon_offset_from_tuning(tmp_path: Path) -> None:
+    import shutil
+
+    from valve_qc_merger.handswap import asset as assetmod
+    from valve_qc_merger.handswap import tuning
+    from valve_qc_merger.services.retarget import RetargetOptions, run_retarget
+    asset = tmp_path / "hands" / Path(assetmod.DEFAULT_ASSET).name
+    asset.parent.mkdir()
+    shutil.copy(assetmod.DEFAULT_ASSET, asset)
+    weapon = tmp_path / "v_anaconda"
+    shutil.copytree(_ANACONDA, weapon)
+
+    def run(name: str) -> dict[str, np.ndarray]:
+        out = tmp_path / name
+        assert run_retarget(RetargetOptions(weapon_dir=weapon, out=out, asset=asset),
+                            CollectingReporter()).ok
+        return _grip_world(out)
+
+    plain = run("plain")
+    tuning.save_entry(tuning.tuning_path(str(asset)), "v_anaconda",
+                      weapon_offset=[0.0, 0.0, 1.0])
+    tuned = run("tuned")
+    assert np.allclose(tuned["Hand.L"] - plain["Hand.L"], [0.0, 0.0, -1.0], atol=1e-6)
+
+
+def test_dialog_prefills_and_saves_tuning(app, tmp_path: Path, monkeypatch) -> None:
+    from valve_qc_merger.handswap import tuning
+    from valve_qc_merger.studio import derive_dialog
+    path = tmp_path / "grip_tuning.json"
+    monkeypatch.setattr(derive_dialog, "grip_tuning_file", lambda asset=None: path)
+    tuning.save_entry(str(path), "v_x", grip_offset={"left": [0, 0, -0.4]})
+    dialog = derive_dialog.DeriveDialog(["v_x"])
+    assert dialog.grip_offsets["left"].value() == [0.0, 0.0, -0.4]
+    assert "prefilled" in dialog.tuning_label.text()
+    dialog.weapon_offset.set_value([0.0, 0.25, 0.0])
+    dialog.save_tuning()
+    assert tuning.load_entry(str(path), "v_x") == {
+        "grip_offset": {"left": [0.0, 0.0, -0.4]}, "weapon_offset": [0.0, 0.25, 0.0]}
+    # editing a derived asset shows ITS stored options, not the table
+    stored = derive_dialog.DeriveDialog(["v_x"], options={}, name="v_x_hands")
+    assert stored.weapon_offset.value() == [0.0, 0.0, 0.0]

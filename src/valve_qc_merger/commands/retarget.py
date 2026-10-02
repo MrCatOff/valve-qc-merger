@@ -77,7 +77,8 @@ class RetargetCommand(Command):
                             metavar="dx,dy,dz",
                             help="move the weapon relative to both hands, in "
                                  "model space at the grip frame, e.g. "
-                                 "'0,0.5,0' (then fingers re-snug)")
+                                 "'0,0.5,0' (then fingers re-snug); overrides "
+                                 "the weapon's weapon_offset in grip_tuning.json")
 
     def run(self, args: argparse.Namespace) -> int:
         return run_retarget(options_from(RetargetOptions, args)).exit_code
