@@ -41,8 +41,16 @@ calibrate = [
     "PySide6>=6.6",
 ]
 
+# the desktop IDE (valve-qc-studio). Install: pip install -e '.[studio]'
+studio = [
+    "PySide6>=6.6",
+]
+
 [project.scripts]
 valve-qc-merger = "valve_qc_merger.cli:main"
+
+[project.gui-scripts]
+valve-qc-studio = "valve_qc_merger.studio.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/valve_qc_merger"]
