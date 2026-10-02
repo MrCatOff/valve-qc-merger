@@ -32,6 +32,7 @@ class RetargetOptions:
     snug_max_deg: float = 18.0
     curl: list[str] = field(default_factory=list)
     grip_offset: list[str] = field(default_factory=list)
+    weapon_offset: list[float] = field(default_factory=list)  # [dx, dy, dz], model space
 
 
 def resolve_out_dir(opts: RetargetOptions) -> Path:
@@ -86,6 +87,7 @@ def run_retarget(opts: RetargetOptions, reporter: Reporter | None = None) -> Ser
         snug_max_deg=opts.snug_max_deg,
         curl=opts.curl,
         grip_offset=opts.grip_offset,
+        weapon_offset=list(opts.weapon_offset) or None,
     )
 
     def engine_log(message: str) -> None:

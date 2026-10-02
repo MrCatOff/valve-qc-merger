@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
 
 # Set by the build (where the staged inputs and the output go).
 HIDDEN = {"models_dir", "out", "weapon_dir", "source", "qc"}
+# list fields whose entries contain commas themselves ("left:0,0,-0.4")
+LIST_SEPARATORS = {"grip_offset": ";"}
 
 
 def _cli_actions(command_name: str) -> list[argparse.Action]:
@@ -62,10 +64,12 @@ def _default(f: dataclasses.Field) -> Any:
 class OptionsForm(QWidget):
     def __init__(self, options_type: type, command_name: str,
                  values: dict[str, Any] | None = None,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, *,
+                 exclude: frozenset[str] = frozenset()) -> None:
         super().__init__(parent)
         self.options_type = options_type
-        self._fields = [f for f in dataclasses.fields(options_type) if f.name not in HIDDEN]
+        self._fields = [f for f in dataclasses.fields(options_type)
+                        if f.name not in HIDDEN and f.name not in exclude]
         self._widgets: dict[str, QWidget] = {}
         helps = cli_help(command_name)
         self._choices = cli_choices(command_name)
@@ -80,12 +84,12 @@ class OptionsForm(QWidget):
                 widget.addItems(self._choices[f.name])
                 widget.setCurrentText(str(value))
             else:
-                widget = self._make(annotation, value)
+                widget = self._make(annotation, value, LIST_SEPARATORS.get(f.name, ","))
             widget.setToolTip(helps.get(f.name, ""))
             self._widgets[f.name] = widget
             form.addRow(f.name.replace("_", " "), widget)
 
-    def _make(self, annotation: str, value: Any) -> QWidget:
+    def _make(self, annotation: str, value: Any, separator: str = ",") -> QWidget:
         base = annotation.replace("|None", "")
         if base == "bool":
             box = QCheckBox()
@@ -104,8 +108,9 @@ class OptionsForm(QWidget):
             return spin
         edit = QLineEdit()
         if base.startswith("list["):
-            edit.setText(", ".join(str(v) for v in value or []))
-            edit.setPlaceholderText("comma-separated")
+            edit.setText(f"{separator} ".join(str(v) for v in value or []))
+            edit.setPlaceholderText("comma-separated" if separator == ","
+                                    else f"'{separator}'-separated")
         else:
             edit.setText("" if value is None else str(value))
             if "|None" in annotation:
@@ -145,8 +150,11 @@ class OptionsForm(QWidget):
             else:
                 edit = getattr(widget, "edit", widget)
                 text = edit.text().strip()
-                if base.startswith("list["):
-                    value = [part.strip() for part in text.split(",") if part.strip()]
+                if base == "list[float]":
+                    value = [float(part) for part in text.split(",") if part.strip()]
+                elif base.startswith("list["):
+                    separator = LIST_SEPARATORS.get(f.name, ",")
+                    value = [part.strip() for part in text.split(separator) if part.strip()]
                 elif not text:
                     value = None
                 elif base == "int":

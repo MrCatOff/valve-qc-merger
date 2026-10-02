@@ -73,9 +73,24 @@ class RetargetCommand(Command):
                                  "palm axes (X fingers-forward, Y toward "
                                  "thumb, Z palm normal), e.g. "
                                  "'left:0,0,-0.4' (repeatable)")
+        parser.add_argument("--weapon-offset", type=_xyz, default=[],
+                            metavar="dx,dy,dz",
+                            help="move the weapon relative to both hands, in "
+                                 "model space at the grip frame, e.g. "
+                                 "'0,0.5,0' (then fingers re-snug)")
 
     def run(self, args: argparse.Namespace) -> int:
         return run_retarget(options_from(RetargetOptions, args)).exit_code
+
+def _xyz(text: str) -> list[float]:
+    try:
+        values = [float(part) for part in text.split(",")]
+    except ValueError:
+        values = []
+    if len(values) != 3:
+        raise argparse.ArgumentTypeError(f"expected dx,dy,dz, got {text!r}")
+    return values
+
 
 def _resolve_out_dir(args: argparse.Namespace) -> Path:
     """Where ``retarget`` writes for these CLI arguments (see the service)."""

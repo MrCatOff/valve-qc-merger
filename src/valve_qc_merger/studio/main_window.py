@@ -91,6 +91,8 @@ class MainWindow(QMainWindow):
         self.explorer.remove_requested.connect(self.remove_asset)
         self.explorer.kind_change_requested.connect(self.set_kind)
         self.explorer.reveal_requested.connect(self._reveal)
+        self.explorer.derive_requested.connect(self.derive_assets)
+        self.explorer.rederive_requested.connect(self.rederive_asset)
         self.inspector.kind_changed.connect(self.set_kind)
         self.inspector.notes_changed.connect(self._set_notes)
         bones = self.inspector.bones_page
@@ -142,6 +144,14 @@ class MainWindow(QMainWindow):
         self.act_reveal = project_menu.addAction("Show project folder",
                                                  lambda: self._open_path(self.project.root))
 
+        asset_menu = bar.addMenu("&Asset")
+        self.act_derive = asset_menu.addAction(
+            "Retarget…", lambda: self.derive_assets(self.explorer.selected_assets()),
+            QKeySequence("Ctrl+R"))
+        self.act_rederive = asset_menu.addAction(
+            "Re-run retarget", lambda: self.rederive_asset(self.explorer.current_asset(), False),
+            QKeySequence("Ctrl+Shift+R"))
+
         build_menu = bar.addMenu("&Build")
         self.act_new_build = build_menu.addAction("New build…", self.new_build,
                                                   QKeySequence("Ctrl+B"))
@@ -165,6 +175,7 @@ class MainWindow(QMainWindow):
         idle = not self.jobs.busy
         for action in (self.act_import_mdl, self.act_import_mdl_dir, self.act_import_dec,
                        self.act_settings, self.act_reveal, self.act_close,
+                       self.act_derive, self.act_rederive,
                        self.act_new_build, self.act_run_build, self.act_compile_build,
                        self.act_run_compile_build, self.act_delete_build):
             action.setEnabled(has and idle)
@@ -390,6 +401,81 @@ class MainWindow(QMainWindow):
             self._info_cache.pop(name, None)
             self._scene_cache.pop(name, None)
             self._select_asset(name)
+
+    # -- retarget (derived assets) --------------------------------------------
+    def derive_assets(self, names: list[str]) -> None:
+        """Retarget dialog over the selected asset(s), then run it as a job."""
+        from valve_qc_merger.studio.derive_dialog import DeriveDialog
+        project = self.project
+        if project is None or self.jobs.busy:
+            return
+        names = [n for n in names if n in project.assets]
+        if not names:
+            self.statusBar().showMessage("select an asset in the Explorer", 4000)
+            return
+        dialog = DeriveDialog(names, self, existing=set(project.assets))
+        if dialog.exec() != DeriveDialog.DialogCode.Accepted:
+            return
+        mode, name, options = dialog.result_spec()
+        self._run_derive([(source, name) for source in names], mode, options)
+
+    def rederive_asset(self, name: str, edit: bool) -> None:
+        """Re-run a derived asset from its source; ``edit`` opens its settings first."""
+        from valve_qc_merger.studio.derive_dialog import DeriveDialog
+        project = self.project
+        if project is None or self.jobs.busy or not name:
+            return
+        asset = project.assets.get(name)
+        if asset is None or not asset.derived:
+            self.statusBar().showMessage(f"{name} was not made by Retarget", 4000)
+            return
+        derived = asset.derived
+        if derived["from"] not in project.assets:
+            QMessageBox.warning(self, "Retarget",
+                                f"The source asset {derived['from']} is no longer in the project.")
+            return
+        options = dict(derived.get("options", {}))
+        if edit:
+            dialog = DeriveDialog([derived["from"]], self, mode=derived["mode"],
+                                  options=options, name=name)
+            if dialog.exec() != DeriveDialog.DialogCode.Accepted:
+                return
+            _mode, _name, options = dialog.result_spec()
+        self._run_derive([(derived["from"], name)], derived["mode"], options)
+
+    def _run_derive(self, jobs: list[tuple[str, str | None]], mode: str,
+                    options: dict) -> None:
+        project = self.project
+        assert project is not None
+        made: list[str] = []
+
+        def work(reporter: Reporter) -> object:
+            failed: list[str] = []
+            for done, (source, name) in enumerate(jobs):
+                reporter.check()
+                reporter.progress(done, len(jobs), source)
+                try:
+                    result, asset = project.derive_asset(source, mode, options, name=name,
+                                                         reporter=reporter)
+                except ProjectError as exc:
+                    reporter.log(f"  {source}: {exc}")
+                    failed.append(source)
+                    continue
+                if asset is None:
+                    reporter.log(f"  {source}: FAILED (exit {result.exit_code})")
+                    failed.append(source)
+                else:
+                    reporter.log(f"  + {asset.name}")
+                    made.append(asset.name)
+                    self._pending_asset = asset.name
+            reporter.progress(len(jobs), len(jobs), "done")
+            if failed:
+                reporter.log(f"retarget: {len(failed)} of {len(jobs)} failed: "
+                             f"{', '.join(failed)}")
+            return made
+
+        title = "Retarget" if len(jobs) == 1 else f"Retarget {len(jobs)} assets"
+        self.jobs.start(title, work)
 
     # -- builds ------------------------------------------------------------
     def new_build(self) -> None:

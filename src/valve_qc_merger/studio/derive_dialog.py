@@ -1,0 +1,256 @@
+"""The Retarget dialog: make a new asset from one (or several) by swapping
+the hands, or by bringing the bones to the canonical rig.
+
+Offsets are the grip-tuning knobs of the hand swap: the *weapon offset*
+moves the weapon relative to both hands (model space, at the grip frame);
+the per-hand *grip offsets* shift one palm in its own axes. After an offset
+the fingers re-snug to the weapon, so nudging and re-running is the way to
+find a better grip.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QRadioButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from valve_qc_merger.project import DERIVE_MODES
+from valve_qc_merger.services.canonicalize import CanonicalizeOptions
+from valve_qc_merger.services.retarget import RetargetOptions
+from valve_qc_merger.studio.options_form import OptionsForm
+
+# fields of RetargetOptions the dialog shows as spin boxes, or never
+_OFFSET_FIELDS = frozenset({"weapon_offset", "grip_offset"})
+_RETARGET_FIXED = frozenset({"category", "compile", "studiomdl", "modelname"})
+SIDES = ("left", "right")
+
+
+class Vec3Edit(QWidget):
+    """Three spin boxes (x, y, z)."""
+
+    def __init__(self, values: list[float] | None = None, *, step: float = 0.1,
+                 tooltip: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.spins: list[QDoubleSpinBox] = []
+        for axis, value in zip("xyz", values or [0.0, 0.0, 0.0], strict=False):
+            spin = QDoubleSpinBox()
+            spin.setRange(-50.0, 50.0)
+            spin.setDecimals(2)
+            spin.setSingleStep(step)
+            spin.setPrefix(f"{axis} ")
+            spin.setValue(float(value))
+            spin.setToolTip(tooltip)
+            layout.addWidget(spin)
+            self.spins.append(spin)
+
+    def value(self) -> list[float]:
+        return [round(s.value(), 4) for s in self.spins]
+
+    def set_value(self, values: list[float]) -> None:
+        for spin, value in zip(self.spins, values, strict=False):
+            spin.setValue(float(value))
+
+
+def parse_grip_offsets(specs: list[str]) -> dict[str, list[float]]:
+    """``["left:0,0,-0.4"]`` -> ``{"left": [0, 0, -0.4]}`` (bad entries dropped)."""
+    out: dict[str, list[float]] = {}
+    for spec in specs or []:
+        side, _, xyz = str(spec).partition(":")
+        try:
+            values = [float(v) for v in xyz.split(",")]
+        except ValueError:
+            continue
+        if side.strip().lower() in SIDES and len(values) == 3:
+            out[side.strip().lower()] = values
+    return out
+
+
+def format_grip_offsets(offsets: dict[str, list[float]]) -> list[str]:
+    return [f"{side}:{','.join(f'{v:g}' for v in xyz)}"
+            for side, xyz in offsets.items() if any(xyz)]
+
+
+class DeriveDialog(QDialog):
+    """Pick the mode, the new asset's name and the options; ``result_spec()``
+    then gives ``(mode, name or None, options)``."""
+
+    def __init__(self, sources: list[str], parent: QWidget | None = None, *,
+                 mode: str = "hands", options: dict[str, Any] | None = None,
+                 name: str | None = None, existing: set[str] | None = None) -> None:
+        super().__init__(parent)
+        self.sources = sources
+        self._existing = existing or set()
+        self._fixed_name = name  # re-running a derived asset keeps its name
+        self.setWindowTitle("Retarget" if name is None else f"Retarget settings — {name}")
+        options = dict(options or {})
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            f"Source: <b>{sources[0]}</b>" if len(sources) == 1
+            else f"Sources: <b>{len(sources)} assets</b> ({', '.join(sources[:4])}"
+                 f"{'…' if len(sources) > 4 else ''})"))
+
+        modes = QGroupBox("Mode")
+        modes_layout = QVBoxLayout(modes)
+        self.mode_group = QButtonGroup(self)
+        self._mode_keys = list(DERIVE_MODES)
+        hints = {
+            "hands": "replace the model's hands with ours (male/female) and retarget every "
+                     "animation onto them — ready for merge-v --shared-hands",
+            "canon": "keep the model's own hands; rename/reparent the bones onto the "
+                     "canonical rig (Bip01 root, ValveBiped hand names, no Nubs)",
+        }
+        for index, key in enumerate(self._mode_keys):
+            radio = QRadioButton(DERIVE_MODES[key].title)
+            radio.setToolTip(hints.get(key, ""))
+            self.mode_group.addButton(radio, index)
+            modes_layout.addWidget(radio)
+            hint = QLabel(hints.get(key, ""))
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color: gray; margin-left: 22px")
+            modes_layout.addWidget(hint)
+            radio.setEnabled(name is None or key == mode)
+        layout.addWidget(modes)
+
+        name_row = QFormLayout()
+        self.name_edit = QLineEdit()
+        self.name_edit.setEnabled(len(sources) == 1 and name is None)
+        name_row.addRow("New asset", self.name_edit)
+        layout.addLayout(name_row)
+
+        self.pages = QStackedWidget()
+        # -- hands -----------------------------------------------------------
+        hands_page = QWidget()
+        hands_layout = QVBoxLayout(hands_page)
+        hands_layout.setContentsMargins(0, 0, 0, 0)
+        offsets = QGroupBox("Grip offsets")
+        offsets_form = QFormLayout(offsets)
+        self.weapon_offset = Vec3Edit(
+            options.get("weapon_offset") or None,
+            tooltip="move the weapon relative to both hands (model space, at the grip "
+                    "frame); the fingers re-snug afterwards")
+        offsets_form.addRow("Weapon (model space)", self.weapon_offset)
+        grips = parse_grip_offsets(options.get("grip_offset", []))
+        self.grip_offsets: dict[str, Vec3Edit] = {}
+        for side in SIDES:
+            edit = Vec3Edit(grips.get(side), tooltip=(
+                f"shift the {side} palm relative to the weapon, in palm axes: x fingers-"
+                "forward, y toward the thumb, z palm normal"))
+            self.grip_offsets[side] = edit
+            offsets_form.addRow(f"{side.capitalize()} palm (palm axes)", edit)
+        hands_layout.addWidget(offsets)
+        self.retarget_form = OptionsForm(
+            RetargetOptions, "retarget",
+            {k: v for k, v in options.items() if k not in _OFFSET_FIELDS},
+            exclude=_OFFSET_FIELDS | _RETARGET_FIXED)
+        hands_layout.addWidget(self.retarget_form)
+        hands_layout.addStretch(1)
+        self.pages.addWidget(hands_page)
+        # -- canon -----------------------------------------------------------
+        self.canon_form = OptionsForm(CanonicalizeOptions, "canonicalize",
+                                      options if mode == "canon" else {},
+                                      exclude=frozenset({"model_dir"}))
+        canon_page = QWidget()
+        canon_layout = QVBoxLayout(canon_page)
+        canon_layout.setContentsMargins(0, 0, 0, 0)
+        canon_layout.addWidget(self.canon_form)
+        canon_layout.addStretch(1)
+        self.pages.addWidget(canon_page)
+        layout.addWidget(self.pages, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Run")
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.mode_group.idToggled.connect(self._mode_toggled)
+        self.mode_group.button(self._mode_keys.index(mode)).setChecked(True)
+        self._mode_toggled(self._mode_keys.index(mode), True)
+        self.resize(560, 0)
+
+    @property
+    def mode(self) -> str:
+        return self._mode_keys[max(self.mode_group.checkedId(), 0)]
+
+    def _default_name(self, mode: str) -> str:
+        return f"{self.sources[0]}{DERIVE_MODES[mode].suffix}"
+
+    def _mode_toggled(self, index: int, checked: bool) -> None:
+        if not checked:
+            return
+        mode = self._mode_keys[index]
+        self.pages.setCurrentIndex(index)
+        if self._fixed_name is not None:
+            self.name_edit.setText(self._fixed_name)
+        elif len(self.sources) == 1:
+            current = self.name_edit.text()
+            if not current or current in {self._default_name(m) for m in DERIVE_MODES}:
+                self.name_edit.setText(self._default_name(mode))
+        else:
+            self.name_edit.setText(f"<source>{DERIVE_MODES[mode].suffix}")
+
+    def options(self) -> dict[str, Any]:
+        """The chosen options (only non-defaults); raises ValueError on bad input."""
+        if self.mode == "canon":
+            return self.canon_form.values()
+        values = self.retarget_form.values()
+        weapon = self.weapon_offset.value()
+        if any(weapon):
+            values["weapon_offset"] = weapon
+        grips = format_grip_offsets({s: e.value() for s, e in self.grip_offsets.items()})
+        if grips:
+            values["grip_offset"] = grips
+        return values
+
+    def target_name(self) -> str | None:
+        """The new asset's name (None: the default per source, batch mode)."""
+        if self._fixed_name is not None:
+            return self._fixed_name
+        if len(self.sources) != 1:
+            return None
+        return self.name_edit.text().strip() or self._default_name(self.mode)
+
+    def _accept(self) -> None:
+        try:
+            self.options()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Retarget", f"Invalid option: {exc}")
+            return
+        name = self.target_name()
+        if name is not None and name in self.sources:
+            QMessageBox.warning(self, "Retarget", "The new asset needs its own name.")
+            return
+        if self._fixed_name is None:
+            names = [name] if name is not None else [
+                f"{s}{DERIVE_MODES[self.mode].suffix}" for s in self.sources]
+            taken = [n for n in names if n in self._existing]
+            if taken:
+                answer = QMessageBox.question(
+                    self, "Retarget", f"Replace existing asset(s): {', '.join(taken[:6])}?")
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+        self.accept()
+
+    def result_spec(self) -> tuple[str, str | None, dict[str, Any]]:
+        return self.mode, self.target_name(), self.options()
+
+
+__all__ = ["DeriveDialog", "Vec3Edit", "format_grip_offsets", "parse_grip_offsets"]

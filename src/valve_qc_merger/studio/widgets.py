@@ -53,16 +53,20 @@ class Explorer(QTreeWidget):
     build_compile_requested = Signal(str)
     build_run_compile_requested = Signal(str)
     build_delete_requested = Signal(str)
+    derive_requested = Signal(list)  # asset names: open the Retarget dialog
+    rederive_requested = Signal(str, bool)  # derived asset, edit settings first
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setHeaderHidden(True)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
         self.currentItemChanged.connect(self._on_current)
+        self._project: Project | None = None
 
     def show_project(self, project: Project | None) -> None:
+        self._project = project
         selected = self.current_asset()
         selected_build = self.current_build()
         self.clear()
@@ -77,9 +81,13 @@ class Explorer(QTreeWidget):
             group = QTreeWidgetItem(assets, [f"{KIND_TITLES[kind]}  ·  {len(members)}"])
             group.setData(0, ROLE_KIND, "group")
             for name in members:
-                item = QTreeWidgetItem(group, [name])
+                derived = project.assets[name].derived
+                item = QTreeWidgetItem(group, [f"{name}  ↳ {derived['from']}" if derived
+                                               else name])
                 item.setData(0, ROLE_KIND, "asset")
                 item.setData(0, ROLE_NAME, name)
+                if derived:
+                    item.setToolTip(0, f"{derived['mode']} from {derived['from']}")
                 if name == selected:
                     self.setCurrentItem(item)
         builds = QTreeWidgetItem(self, [f"Builds ({len(project.builds)})"])
@@ -98,12 +106,25 @@ class Explorer(QTreeWidget):
             return str(item.data(0, ROLE_NAME))
         return ""
 
+    def selected_assets(self) -> list[str]:
+        """Every selected asset (the current one first)."""
+        names = [str(i.data(0, ROLE_NAME)) for i in self.selectedItems()
+                 if i.data(0, ROLE_KIND) == "asset"]
+        current = self.current_asset()
+        if current:
+            names = [current] + [n for n in names if n != current]
+        return names
+
     def _on_current(self, item: QTreeWidgetItem | None, _previous: object) -> None:
         kind = item.data(0, ROLE_KIND) if item is not None else None
         if kind == "build":
             self.build_selected.emit(str(item.data(0, ROLE_NAME)))
         else:
             self.asset_selected.emit(self.current_asset())
+
+    def _derived(self, name: str) -> bool:
+        return bool(self._project is not None and name in self._project.assets
+                    and self._project.assets[name].derived)
 
     def current_build(self) -> str:
         item = self.currentItem()
@@ -144,7 +165,18 @@ class Explorer(QTreeWidget):
         if item is None or item.data(0, ROLE_KIND) != "asset":
             return
         name = str(item.data(0, ROLE_NAME))
+        selected = self.selected_assets()
+        if name not in selected:
+            selected = [name]
         menu = QMenu(self)
+        title = "Retarget…" if len(selected) == 1 else f"Retarget {len(selected)} assets…"
+        menu.addAction(title, lambda: self.derive_requested.emit(selected))
+        if self._derived(name):
+            menu.addAction("Re-run retarget",
+                           lambda: self.rederive_requested.emit(name, False))
+            menu.addAction("Retarget settings…",
+                           lambda: self.rederive_requested.emit(name, True))
+        menu.addSeparator()
         kinds = menu.addMenu("Change kind")
         for kind in ASSET_KINDS:
             action = QAction(KIND_TITLES[kind], kinds)
@@ -299,7 +331,14 @@ class Inspector(QTabWidget):
         self.name_label.setText(asset.name)
         self.kind_box.setCurrentIndex(ASSET_KINDS.index(asset.kind))
         self.path_label.setText(str(project.root / asset.path))
-        self.source_label.setText(asset.source or "—")
+        derived = asset.derived
+        if derived:
+            options = ", ".join(f"{k}={v}" for k, v in derived.get("options", {}).items())
+            self.source_label.setText(
+                f"{derived['mode']} from asset {derived['from']}"
+                + (f" ({options})" if options else ""))
+        else:
+            self.source_label.setText(asset.source or "—")
         self.notes.setText(asset.notes)
         if info is None:
             self.stats_label.setText("loading…")

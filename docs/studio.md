@@ -241,6 +241,35 @@ GoldSource's 4). Attachments, joints and the highlight are drawn as 3D line
 crosses — `GL_POINTS` with a shader point size draws nothing on macOS core
 profile.
 
+## Retarget (derived assets)
+
+Explorer ▸ right-click an asset (or several) ▸ **Retarget…** (Asset ▸
+Retarget…, Ctrl+R) makes a NEW asset next to the source — the source is never
+touched, so the viewport can flip between before and after:
+
+- **Swap hands (retarget)** → `<name>_hands`: the `retarget` service — our
+  male/female hands replace the model's own, every animation is retargeted
+  onto them; ready for merge-v `--shared-hands`.
+- **Canonical bones (own hands)** → `<name>_canon`: the `canonicalize`
+  service — the model keeps its hands; hand bones are renamed to the
+  reference names, the `Bip01` root is added, the reference parentage is
+  enforced and `*Nub` bones are removed (the per-model step of merge-v,
+  FK-exact and pose-checked).
+
+**Grip offsets** (swap mode): *Weapon* moves the weapon relative to BOTH
+hands, in model space at the grip frame (`retarget --weapon-offset dx,dy,dz`);
+*Left/Right palm* shift one palm in its own axes — x fingers-forward, y toward
+the thumb, z palm normal (`--grip-offset side:dx,dy,dz`). The fingers re-snug
+to the weapon after an offset, so nudge, re-run, look, repeat.
+
+A derived asset stores how it was made in `project.toml`
+(`[assets.derived]`: `from`, `mode`, `options`); its context menu adds
+**Re-run retarget** (Ctrl+Shift+R, after the source changed) and **Retarget
+settings…** (change the offsets and re-run). A re-run snapshots the previous
+output, so Inspector ▸ Bones ▸ Undo restores it. A derived asset goes into
+builds like any other; note merge-v names manifest entries after the asset
+(`v_janus1_hands`), so name it as the game should see it if that matters.
+
 ## Packaging (M6)
 
 ```bat

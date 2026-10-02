@@ -8,7 +8,9 @@
       builds/<name>/        input/ (staged copy), output/, last_run.json
 
 An *asset* is one decompiled model with a kind (``v``, ``p``, ``w``,
-``player``, ``zhands``). A *build* runs one merge service over a set of
+``player``, ``zhands``). A *derived* asset is made from another one by a
+service (hand swap, or bone canonicalisation) and remembers how, so it can be
+re-run after its source or options change. A *build* runs one merge service over a set of
 assets with stored options; a ``merge-v`` build can retarget every asset onto
 our hands first (then merges with ``shared_hands``). Inputs are staged as
 copies because the services sanitise file names in place.
@@ -29,11 +31,13 @@ from typing import Any
 from valve_qc_merger.project.toml_write import dumps
 from valve_qc_merger.services.base import (
     EXIT_DISCOVERY,
+    EXIT_FAIL,
     EXIT_OK,
     Reporter,
     ServiceResult,
     options_from_dict,
 )
+from valve_qc_merger.services.canonicalize import CanonicalizeOptions, run_canonicalize
 from valve_qc_merger.services.compile import CompileOptions, run_compile
 from valve_qc_merger.services.decompile import DecompileOptions, find_models, run_decompile
 from valve_qc_merger.services.merge_player import MergePlayerOptions, run_merge_player
@@ -72,6 +76,27 @@ BUILD_KINDS: dict[str, BuildKind] = {
                               frozenset({"zhands"})),
 }
 
+@dataclass(frozen=True)
+class DeriveMode:
+    """A service that turns one asset into a new one."""
+
+    title: str
+    options: type
+    run: Callable[..., ServiceResult]
+    input_field: str  # the options field naming the source folder
+    suffix: str  # default name: <source><suffix>
+
+
+DERIVE_MODES: dict[str, DeriveMode] = {
+    "hands": DeriveMode("Swap hands (retarget)", RetargetOptions, run_retarget,
+                        "weapon_dir", "_hands"),
+    "canon": DeriveMode("Canonical bones (own hands)", CanonicalizeOptions,
+                        run_canonicalize, "model_dir", "_canon"),
+}
+# options the project sets itself; never stored with a derived asset
+_DERIVE_FIXED = {"weapon_dir", "model_dir", "out", "qc", "category", "compile",
+                 "studiomdl"}
+
 _ZOMBIE_RE = re.compile(r"^v_(?P<zombie>.+?)_(?P<role>knife|grenade)(?:_.+)?$", re.IGNORECASE)
 
 
@@ -82,6 +107,9 @@ class Asset:
     path: str  # relative to the project root, POSIX separators
     source: str | None = None  # where it was imported from
     notes: str = ""
+    # derived assets: {"from": source asset, "mode": DERIVE_MODES key,
+    # "options": service options that differ from the defaults}
+    derived: dict[str, Any] | None = None
 
 
 @dataclass
@@ -262,6 +290,76 @@ class Project:
             return added
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+
+    # -- derived assets ----------------------------------------------------
+    def derive_asset(self, source: str, mode: str, options: dict[str, Any] | None = None,
+                     *, name: str | None = None,
+                     reporter: Reporter | None = None) -> tuple[ServiceResult, Asset | None]:
+        """Run ``mode`` (a :data:`DERIVE_MODES` key) over asset ``source`` and
+        store the result as a new asset (default name ``<source><suffix>``).
+        Re-deriving an existing derived asset replaces it (undo-able)."""
+        reporter = reporter or Reporter()
+        if source not in self.assets:
+            raise ProjectError(f"no asset {source!r}")
+        spec = DERIVE_MODES.get(mode)
+        if spec is None:
+            raise ProjectError(f"unknown derive mode {mode!r}")
+        name = (name or f"{source}{spec.suffix}").strip()
+        if not name or "/" in name or "\\" in name or name in {".", ".."}:
+            raise ProjectError(f"invalid asset name {name!r}")
+        if name == source:
+            raise ProjectError("a derived asset needs a name of its own")
+        existing = self.assets.get(name)
+        if existing is not None and existing.derived is None:
+            raise ProjectError(f"asset {name!r} already exists (imported, not derived)")
+        stored = {k: v for k, v in (options or {}).items() if k not in _DERIVE_FIXED}
+        options_from_dict(spec.options, {**stored, spec.input_field: ".", "out": "."})
+
+        staging = self.root / ".derive" / name
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            # services sanitise their input in place: work on a copy
+            shutil.copytree(self.asset_dir(source), staging / "input")
+            opts = options_from_dict(spec.options, {
+                **stored, spec.input_field: str(staging / "input"),
+                "out": str(staging / "output"),
+            })
+            reporter.log(f"{spec.title}: {source} -> {name}")
+            result = spec.run(opts, reporter)
+            if not result.ok or not any((staging / "output").glob("*.qc")):
+                if result.ok:
+                    result.exit_code = EXIT_FAIL
+                return result, None
+            kind = self.assets[source].kind
+            relative = Path("assets") / kind / name
+            if existing is not None:
+                self.snapshot_asset(name)
+                shutil.rmtree(self.root / existing.path, ignore_errors=True)
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(staging / "output"), str(target))
+            asset = Asset(name=name, kind=kind, path=relative.as_posix(),
+                          notes=existing.notes if existing is not None else "",
+                          derived={"from": source, "mode": mode, "options": stored})
+            self.assets[name] = asset
+            self.save()
+            return result, asset
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+            if (self.root / ".derive").is_dir() and not any((self.root / ".derive").iterdir()):
+                (self.root / ".derive").rmdir()
+
+    def rederive_asset(self, name: str, options: dict[str, Any] | None = None,
+                       reporter: Reporter | None = None) -> tuple[ServiceResult, Asset | None]:
+        """Re-run a derived asset from its source (with new options if given)."""
+        asset = self.assets.get(name)
+        if asset is None or asset.derived is None:
+            raise ProjectError(f"{name!r} is not a derived asset")
+        derived = asset.derived
+        return self.derive_asset(
+            derived["from"], derived["mode"],
+            derived.get("options", {}) if options is None else options,
+            name=name, reporter=reporter)
 
     # -- edit history (bone tools) -----------------------------------------
     HISTORY_LIMIT = 10
@@ -486,6 +584,7 @@ __all__ = [
     "Asset",
     "BUILD_KINDS",
     "Build",
+    "DERIVE_MODES",
     "Project",
     "ProjectError",
     "Settings",

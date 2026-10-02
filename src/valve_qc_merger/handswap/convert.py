@@ -67,6 +67,9 @@ def parse_args(argv=None):
                     help="shift the palm relative to the weapon, in palm "
                          "axes (X fingers-forward, Y toward thumb, Z palm "
                          "normal), e.g. 'left:0,0,-0.4' (repeatable)")
+    ap.add_argument("--weapon-offset", default=None, metavar="dx,dy,dz",
+                    help="move the weapon relative to BOTH hands, in model "
+                         "space at the setup frame, e.g. '0,0.5,0'")
     return ap.parse_args(argv)
 
 
@@ -121,9 +124,19 @@ def convert(args, log=log) -> dict:
         grip_offsets[side.strip().lower()] = \
             [float(x) for x in xyz.split(",")]
 
+    weapon_offset = getattr(args, "weapon_offset", None)
+    if isinstance(weapon_offset, str):
+        weapon_offset = [float(x) for x in weapon_offset.split(",")]
+    if weapon_offset is not None and not any(weapon_offset):
+        weapon_offset = None
+    if weapon_offset is not None:
+        if len(weapon_offset) != 3:
+            raise RuntimeError("weapon offset needs 3 numbers: dx,dy,dz")
+        log("Weapon offset: %s" % list(weapon_offset))
+
     log("Retarget plan (setup: %r frame 0):" % first_seq)
     plan = build_plan(asset, model.skel, model.hands, setup_world, log=log,
-                      grip_offsets=grip_offsets)
+                      grip_offsets=grip_offsets, weapon_offset=weapon_offset)
     if not plan.sides:
         raise RuntimeError("no hand could be retargeted")
 

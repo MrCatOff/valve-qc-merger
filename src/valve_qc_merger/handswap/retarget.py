@@ -92,11 +92,16 @@ def _chain_cloud_old(skel: OrigSkeleton, world, hand: HandInfo,
 
 def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
                     setup_world: dict[str, np.ndarray], log=print,
-                    grip_offset=None) -> SidePlan:
+                    grip_offset=None, weapon_offset=None) -> SidePlan:
     """grip_offset: optional (dx, dy, dz) in PALM-FRAME axes (X fingers-
     forward, Y across the palm toward the thumb, Z the palm normal) that
     shifts where the CSO palm lands relative to the original palm —
-    the per-weapon tuning knob for how the weapon sits in the hand."""
+    the per-weapon tuning knob for how the weapon sits in the hand.
+
+    weapon_offset: optional (x, y, z) in MODEL space at the setup frame:
+    moves the weapon by that vector relative to this hand (the hand is
+    shifted by the opposite vector; the offset then rides the wrist like
+    every other part of the grip)."""
     rig = asset.sides[hand.side]
     l_cso = rig.palm_local
     l_cso_inv = inv_rigid(l_cso)
@@ -156,6 +161,9 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
                     best = (total, thumb_i, assign, desired, a_old)
 
     total, thumb_i, assign, desired, a_old = best
+    if weapon_offset is not None:
+        desired = desired.copy()
+        desired[:3, 3] -= np.asarray(weapon_offset, dtype=float)
     pairs = [(hand.chains[i], rig.chains[j]) for i, j in assign]
     log("  %s: thumb %r (fit %.2f), pairing %s"
         % (hand.side, hand.chains[thumb_i][0], total / max(n, 1),
@@ -201,7 +209,8 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
 
 def build_plan(asset: HandsAsset, skel: OrigSkeleton, hands: list[HandInfo],
                setup_world: dict[str, np.ndarray], log=print,
-               grip_offsets: dict | None = None) -> RetargetPlan:
+               grip_offsets: dict | None = None,
+               weapon_offset=None) -> RetargetPlan:
     plan = RetargetPlan(asset=asset)
     for hand in hands:
         if hand.side not in asset.sides:
@@ -209,7 +218,8 @@ def build_plan(asset: HandsAsset, skel: OrigSkeleton, hands: list[HandInfo],
             continue
         off = (grip_offsets or {}).get(hand.side)
         plan.sides.append(build_side_plan(asset, skel, hand, setup_world,
-                                          log, grip_offset=off))
+                                          log, grip_offset=off,
+                                          weapon_offset=weapon_offset))
     return plan
 
 
