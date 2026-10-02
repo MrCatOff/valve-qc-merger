@@ -509,27 +509,30 @@ class Project:
 
         options = dict(build.options)
         models_dir = staged
+        notes: list[str] = []
+        names = {a.name for a in assets}
+        for asset in assets:
+            origin = asset.derived["from"] if asset.derived else None
+            if origin in names:
+                notes.append(f"{asset.name} and its source {origin} are both in the build: "
+                             "the same weapon twice")
+        for note in notes:
+            reporter.log(f"  warn: {note}")
         if build.retarget:
-            retargeted = base / "retarget"
-            for done, asset in enumerate(assets):
-                reporter.check()
-                reporter.progress(done, len(assets), f"retarget {asset.name}")
-                opts = options_from_dict(RetargetOptions, {
-                    **build.retarget_options,
-                    "weapon_dir": str(staged / asset.name),
-                    "out": str(retargeted / asset.name),
-                })
-                outcome = run_retarget(opts, reporter)
-                if not outcome.ok:
-                    reporter.log(f"  retarget {asset.name}: skipped "
-                                 f"(exit {outcome.exit_code})")
-                    shutil.rmtree(retargeted / asset.name, ignore_errors=True)
-            models_dir = retargeted
+            notes += self._retarget_for_build(assets, staged, base / "retarget", build,
+                                              reporter)
+            models_dir = base / "retarget"
             options["shared_hands"] = True
         opts = options_from_dict(kind.options, {
             **options, "models_dir": str(models_dir), "out": str(output),
         })
         result = kind.run(opts, reporter)
+        result.warnings[:0] = notes
+        failed_retargets = [n for n in notes if n.startswith("retarget ")]
+        if failed_retargets:
+            result.failures[:0] = failed_retargets
+            if result.exit_code == EXIT_OK:
+                result.exit_code = EXIT_FAIL
         record = {
             "build": name,
             "kind": build.kind,
@@ -538,10 +541,51 @@ class Project:
             "seconds": round(time.time() - started, 2),
             "outputs": [p.relative_to(self.root).as_posix() for p in result.outputs],
             "failures": result.failures,
+            "warnings": notes,
             "gates": [vars(g) for g in result.gates],
         }
         (base / "last_run.json").write_text(json.dumps(record, indent=1), encoding="utf-8")
         return result
+
+    def _retarget_for_build(self, assets: list[Asset], staged: Path, retargeted: Path,
+                            build: Build, reporter: Reporter) -> list[str]:
+        """Bring every asset onto our hands for a shared-hands merge-v build:
+        assets made by Retarget (swap hands) and models already wearing our
+        hands are taken as they are (their tuned grip kept); the rest are
+        retargeted with the build's options. Returns notes for the report."""
+        from valve_qc_merger.merge_view.handcheck import dir_wears_hands
+        from valve_qc_merger.resources import resource_path
+        from valve_qc_merger.retarget.config import DEFAULT_SHARED_HANDS_REFERENCE
+        reference = resource_path(Path(DEFAULT_SHARED_HANDS_REFERENCE))
+        retargeted.mkdir(parents=True, exist_ok=True)
+        notes: list[str] = []
+        ready = converted = 0
+        for done, asset in enumerate(assets):
+            reporter.check()
+            reporter.progress(done, len(assets), f"retarget {asset.name}")
+            source = staged / asset.name
+            if ((asset.derived and asset.derived.get("mode") == "hands")
+                    or dir_wears_hands(source, reference)):
+                shutil.copytree(source, retargeted / asset.name)
+                reporter.log(f"  retarget {asset.name}: already on our hands, taken as is")
+                ready += 1
+                continue
+            opts = options_from_dict(RetargetOptions, {
+                **build.retarget_options,
+                "weapon_dir": str(source),
+                "out": str(retargeted / asset.name),
+            })
+            outcome = run_retarget(opts, reporter)
+            if outcome.ok:
+                converted += 1
+                continue
+            why = outcome.failures[-1] if outcome.failures else f"exit {outcome.exit_code}"
+            notes.append(f"retarget {asset.name} failed ({why}); left out of the merge")
+            reporter.log(f"  warn: {notes[-1]}")
+            shutil.rmtree(retargeted / asset.name, ignore_errors=True)
+        reporter.log(f"  retarget: {converted} converted, {ready} already on our hands, "
+                     f"{len(assets) - converted - ready} failed")
+        return notes
 
     def compile_build(self, name: str, reporter: Reporter | None = None) -> ServiceResult:
         """Compile every QC the build's last run emitted with the configured

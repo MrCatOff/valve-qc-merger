@@ -273,7 +273,16 @@ A derived asset stores how it was made in `project.toml`
 (`[assets.derived]`: `from`, `mode`, `options`); its context menu adds
 **Re-run retarget** (Ctrl+Shift+R, after the source changed) and **Retarget
 settings…** (change the offsets and re-run). A re-run snapshots the previous
-output, so Inspector ▸ Bones ▸ Undo restores it. A derived asset goes into
+output, so Inspector ▸ Bones ▸ Undo restores it. A merge-v build with
+**"put every view model on our hands first"** retargets only what needs it:
+assets made by Retarget (swap hands) and models already wearing our hands
+(bone-local match with `storage/handswap/cso_reference_hands.smd`) are taken
+as they are, keeping their tuned grip; a failed retarget is listed under the
+build's Failures instead of silently dropping the weapon, and a derived asset
+built together with its own source is flagged as the same weapon twice.
+Without that option the build mixes freely only WITHOUT `shared_hands` (each
+weapon keeps its own hands); with `shared_hands` a model wearing other hands
+is rejected. A derived asset goes into
 builds like any other; note merge-v names manifest entries after the asset
 (`v_janus1_hands`), so name it as the game should see it if that matters.
 

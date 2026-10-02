@@ -25,6 +25,8 @@ from valve_qc_merger.merge_view.discovery import (
     load_model,
     sanitize_model_dir,
 )
+from valve_qc_merger.merge_view.handcheck import TOLERANCE as HAND_TOLERANCE
+from valve_qc_merger.merge_view.handcheck import group_by_hands, hand_shape
 from valve_qc_merger.merge_view.hands import (
     collision_guard,
     hand_bone_names,
@@ -218,6 +220,8 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
                      f"mapped={len(match.renames):<3} "
                      f"sequences={entry['sequences']}{san}{warn}")
     reporter.progress(len(model_dirs), len(model_dirs), "loaded")
+    if opts.shared_hands and len(merged_pairs) > 1:
+        merged_pairs = _drop_foreign_hands(merged_pairs, failures, reporter, result)
 
     reporter.log(f"  {'-' * 60}")
     reporter.log(f"  {len(inventory)} models loaded, {len(failures)} failed")
@@ -235,6 +239,36 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
             return result
     result.exit_code = EXIT_FAIL if failures else EXIT_OK
     return result
+
+
+def _drop_foreign_hands(
+    pairs: list[tuple[ModelInput, ModelParts]],
+    failures: list[str],
+    reporter: Reporter,
+    result: ServiceResult,
+) -> list[tuple[ModelInput, ModelParts]]:
+    """--shared-hands emits the first model's hands for every weapon: keep
+    only the models wearing the most common hands (bone-local comparison),
+    reject the rest — typically a model that was never retargeted."""
+    entries = [(model.name, [hand_shape(model.meshes[s]) for s in parts.hand_variants])
+               for model, parts in pairs]
+    clusters = group_by_hands(entries)
+    keep = set(clusters[0])
+    for cluster in clusters[1:]:
+        for name in cluster:
+            message = (f"model {name!r}: wears other hands than the {len(keep)} other "
+                       "model(s) (not retargeted?) — rejected under --shared-hands; "
+                       "retarget it first or merge it without --shared-hands")
+            failures.append(message)
+            reporter.log(f"  {name:<20} HANDS-MISMATCH  {message}")
+    rejected = len(pairs) - len(keep)
+    result.gates.append(GateRow(
+        "inputs", "shared_hands", True,
+        f"{len(keep)} model(s) wear identical hands (bone-local <= {HAND_TOLERANCE}u)"
+        + (f"; {rejected} rejected" if rejected else "")))
+    reporter.log(f"  shared hands: {len(keep)} model(s) agree"
+                 + (f", {rejected} rejected" if rejected else ""))
+    return [(model, parts) for model, parts in pairs if model.name in keep]
 
 
 def _merge_parts(

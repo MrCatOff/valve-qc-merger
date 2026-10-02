@@ -66,7 +66,12 @@ nears 255 by ~16 weapons.
 its `pev_body` from `models.ini`, then OR the low bit for the male hand. The
 byte is therefore `2N − 1` (well under 255; 42 pistols → max 47) instead of
 `weapon × hands`. This is valid only when the inputs share the same hand bind
-(the grip lives in the sequences, not the mesh); a **multi-part weapon** (more
+(the grip lives in the sequences, not the mesh) — the merge checks it: hand
+meshes are compared in bone-local space (each vertex in its bone's bind frame,
+so differently seated retargets still agree), the models wearing the most
+common hands are kept and every other one is rejected with a "wears other
+hands (not retargeted?)" failure; the `shared_hands` gate row reports the
+count. A **multi-part weapon** (more
 than one always-on weapon submodel) is rejected — each extra weapon bodygroup
 would multiply the byte, so ship such a weapon on its own.
 

@@ -388,8 +388,9 @@ def merge_models(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Shared hands: take the first model's hand variants (all models carry the
-    # same male/female bind, verified identical) as ONE shared bodygroup.
+    # Shared hands: take the first model's hand variants as ONE shared
+    # bodygroup. The service drops every model whose hands differ (bone-local
+    # comparison, merge_view/handcheck.py), so the first model is representative.
     shared_hand_meshes: list[tuple[str, Smd]] = []
     if shared_hands and pairs[0][1].hand_variants:
         first_model, first_parts = pairs[0]

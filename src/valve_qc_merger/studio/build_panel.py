@@ -74,7 +74,8 @@ class NewBuildDialog(QDialog):
             count = sum(1 for a in project.assets.values() if a.kind in spec.asset_kinds)
             self.kind_box.addItem(f"{kind}  —  {titles} ({count})", kind)
         self.kind_box.currentIndexChanged.connect(self._suggest)
-        self.retarget_box = QCheckBox("retarget every view model onto our hands first")
+        self.retarget_box = QCheckBox("put every view model on our hands first (shared hands; "
+                                      "already retargeted ones are kept as they are)")
         form = QFormLayout(self)
         form.addRow("Kind", self.kind_box)
         form.addRow("Name", self.name_edit)
@@ -221,8 +222,8 @@ class BuildPanel(QTabWidget):
         self.retarget_check: QCheckBox | None = None
         self.retarget_form: OptionsForm | None = None
         if build.kind == "merge-v":
-            self.retarget_check = QCheckBox("retarget every asset onto our hands first "
-                                            "(then merges with shared hands)")
+            self.retarget_check = QCheckBox("put every asset on our hands first, then merge "
+                                            "with shared hands (retargeted ones kept as is)")
             self.retarget_check.setChecked(build.retarget)
             self.settings_layout.addWidget(self.retarget_check)
             retarget_box = QGroupBox("Retarget options")
@@ -325,8 +326,12 @@ class BuildPanel(QTabWidget):
             self.gates.item(r, 2).setForeground(QBrush(OK_COLOR if gate["passed"]
                                                        else BAD_COLOR))
         failures = record.get("failures", [])
-        self.failures.setText(("Failures:\n" + "\n".join(f"• {f}" for f in failures))
-                              if failures else "")
+        warnings = [w for w in record.get("warnings", []) if w not in failures]
+        text = ("Failures:\n" + "\n".join(f"• {f}" for f in failures)) if failures else ""
+        if warnings:
+            text += ("\n" if text else "") + "Warnings:\n" + "\n".join(f"• {w}"
+                                                                       for w in warnings)
+        self.failures.setText(text)
         header, rows = manifest_rows(base / "output")
         self.manifest.setColumnCount(len(header))
         self.manifest.setHorizontalHeaderLabels(header)
