@@ -81,6 +81,7 @@ class MergeViewOptions:
     pack_textures: bool = False
     no_pack_texture: list[str] = field(default_factory=list)
     sound_path: str | None = None
+    max_decimation: float = 0.15  # --shared-hands: fold multi-part weapons
     no_verify: bool = False
     dry_run: bool = False
 
@@ -161,7 +162,10 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
                 write_smd_file(anim_smd, out_model / "anims" / f"{seq_name}.smd")
             (out_model / model.qc_path.name).write_text(model.qc_text,
                                                         encoding="latin-1")
-            parts = collapse_bodygroups(model)
+            parts = collapse_bodygroups(
+                model, max_decimation=opts.max_decimation if opts.shared_hands else 0.0)
+            if parts.fold_report is not None:
+                reporter.log(f"  {model.name:<20} {parts.warnings[-1]}")
             if opts.shared_hands and len(parts.weapon_stems) > 1:
                 # A multi-part weapon needs an extra weapon bodygroup, which
                 # multiplies pev_body past the 255 WRITE_BYTE ceiling once
@@ -179,6 +183,7 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
             hand_renames[model.name] = dict(match.renames)
             original_meshes[model.name] = [
                 str(_resolve_smd(model_dir, stem)) for stem in model.meshes
+                if stem not in parts.synthetic
             ]
             original_anims[model.name] = {
                 seq.name: str(_resolve_smd(model_dir, seq.smd))

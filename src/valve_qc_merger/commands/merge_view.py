@@ -49,6 +49,11 @@ class MergeViewCommand(Command):
                                  "bodygroup instead of per-weapon hands, so pev_body "
                                  "stays hand+weapon*2 (<255). Multi-part weapons "
                                  "(>1 weapon submodel) are rejected — use them alone")
+        parser.add_argument("--max-decimation", type=float, default=0.15, metavar="F",
+                            help="with --shared-hands: fold a multi-part weapon into one "
+                                 "submodel when removing at most this fraction of its "
+                                 "vertices fits the 2048 budget (0 = reject multi-part "
+                                 "weapons as before; default 0.15)")
         parser.add_argument("--prune", action="store_true",
                             help="also fold away vertex-less unreferenced bones "
                                  "(default keeps everything except Finger*Nub)")
@@ -109,6 +114,7 @@ _CONFIG_DEFAULTS: dict[str, object] = {
     "no_pack_texture": [],
     "no_verify": False,
     "sound_path": None,
+    "max_decimation": 0.15,
 }
 
 

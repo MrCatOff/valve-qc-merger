@@ -29,6 +29,9 @@ class ModelParts:
     hand_variants: list[str] = field(default_factory=list)
     dropped: dict[str, list[str]] = field(default_factory=dict)  # group -> dropped entries
     warnings: list[str] = field(default_factory=list)
+    # stems created in memory (a folded multi-part weapon) with no SMD on disk
+    synthetic: set[str] = field(default_factory=set)
+    fold_report: object | None = None  # decimate.FoldReport when parts were folded
 
 
 def _unique_vertices(smd: Smd) -> int:
@@ -52,10 +55,20 @@ def _hand_fraction(smd: Smd) -> float:
     return hand / total if total else 0.0
 
 
+FOLDED_STEM = "__folded_weapon"
+
+
 def collapse_bodygroups(
-    model: ModelInput, *, keep_groups: frozenset[str] = frozenset()
+    model: ModelInput, *, keep_groups: frozenset[str] = frozenset(),
+    max_decimation: float = 0.0,
 ) -> ModelParts:
-    """Reduce a canonicalised model to weapon submodels + one hands mesh."""
+    """Reduce a canonicalised model to weapon submodels + one hands mesh.
+
+    With ``max_decimation > 0``, always-on parts that do not fit ONE
+    submodel are folded into one anyway when removing at most that fraction
+    of their vertices (seam/bone/boundary-safe half-edge collapses) brings
+    them under the budget (see :mod:`.decimate`); the folded mesh is added
+    to ``model.meshes`` as :data:`FOLDED_STEM`."""
     parts = ModelParts()
     always_on: list[str] = []
 
@@ -119,6 +132,21 @@ def collapse_bodygroups(
         current_verts += verts
     if current:
         parts.weapon_stems.append(current)
+    if len(parts.weapon_stems) > 1 and max_decimation > 0:
+        from valve_qc_merger.merge_view.decimate import fold_parts
+        stems = [stem for group in parts.weapon_stems for stem in group]
+        folded = fold_parts([model.meshes[s] for s in stems], budget=VERTEX_BUDGET,
+                            max_fraction=max_decimation)
+        if folded is not None:
+            mesh, report = folded
+            model.meshes[FOLDED_STEM] = mesh
+            parts.weapon_stems = [[FOLDED_STEM]]
+            parts.synthetic.add(FOLDED_STEM)
+            parts.fold_report = report
+            parts.warnings.append(
+                f"folded {len(stems)} parts into one submodel: {report.vertices_before} -> "
+                f"{report.vertices_after} vertices (-{report.removed_fraction:.1%}), "
+                f"surface error <= {report.surface_error:.3f}u")
     if not parts.weapon_stems:
         parts.warnings.append("no weapon meshes after collapse")
     return parts

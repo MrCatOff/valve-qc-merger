@@ -155,7 +155,8 @@ deduped within a part, so recolour variants share sequence indices.
 | `--exclude NAME` | skip a model directory (repeatable) |
 | `--reference SMD` | canonical hand skeleton (default `storage/hands/reference_hands.smd`; with `--shared-hands`, `storage/handswap/cso_reference_hands.smd` — the CSO hands with the full arm, so the elbow is preserved) |
 | `--skip-unmatched` | continue past models whose rig cannot be matched |
-| `--shared-hands` | inputs already wear our male/female hands (e.g. the `retarget` output): emit ONE shared hands bodygroup (`pev_body = weapon × 2 + hand`) instead of per-weapon hands; multi-part weapons (>1 weapon submodel) are rejected |
+| `--shared-hands` | inputs already wear our male/female hands (e.g. the `retarget` output): emit ONE shared hands bodygroup (`pev_body = weapon × 2 + hand`) instead of per-weapon hands; a multi-part weapon is first folded into one submodel (see `--max-decimation`), and rejected only when that fails |
+| `--max-decimation F` | with `--shared-hands`: a weapon whose always-on parts exceed one 2048-vertex submodel is folded into ONE submodel when removing at most this fraction of its vertices fits it (default 0.15; 0 disables). Half-edge collapses only — every kept vertex keeps its exact position and bone; UV seams, material borders and open edges are never touched, so the silhouette and texturing stay intact. The log reports `folded N parts … -p%, surface error <= e u` |
 | `--prune` | also fold away vertex-less unreferenced bones (default keeps everything except `Finger*Nub`) |
 | `--no-pool-bones` | skip bone pooling (merged table may exceed 127) |
 | `--manifest-format ini\|json\|toml` | manifest format (default ini) |

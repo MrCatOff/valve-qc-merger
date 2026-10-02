@@ -26,6 +26,7 @@ from valve_qc_merger.merge_view.atlas import (
 )
 from valve_qc_merger.merge_view.attachments import share_attachments
 from valve_qc_merger.merge_view.bodygroups import ModelParts
+from valve_qc_merger.merge_view.decimate import unique_vertices
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.skeleton_ops import (
     conform_to_table,
@@ -365,10 +366,17 @@ def merge_models(
     unify_skeletons(models, skeleton)
     # Shared muzzle/shell slots: each weapon's sequences drive them to its own
     # attachment points (GoldSrc keeps 4 per model, not 4 per weapon).
-    first_model, first_parts = pairs[0]
-    shared = share_attachments(
-        models, first_model.meshes[first_parts.weapon_stems[0][0]],
+    # The slot bones' keep-alive anchor triangles go into the weapon
+    # submodel with the most vertex headroom: a folded multi-part weapon
+    # sits exactly at the 2048 budget and would overflow by the anchors.
+    def submodel_vertices(model: ModelInput, group: list[str]) -> int:
+        return sum(unique_vertices(model.meshes[stem]) for stem in group)
+
+    anchor_model, anchor_group = min(
+        ((model, group) for model, parts in pairs for group in parts.weapon_stems),
+        key=lambda mg: submodel_vertices(*mg),
     )
+    shared = share_attachments(models, anchor_model.meshes[anchor_group[0]])
     report.attachments = shared.slots
     report.bones += shared.bones
     report.warnings.extend(shared.warnings)
