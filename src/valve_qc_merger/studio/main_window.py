@@ -21,7 +21,7 @@ from valve_qc_merger.merge_view.discovery import load_model
 from valve_qc_merger.project import Project, ProjectError
 from valve_qc_merger.services.base import Reporter
 from valve_qc_merger.studio.build_panel import BuildPanel, NewBuildDialog
-from valve_qc_merger.studio.build_report import record_part_stats
+from valve_qc_merger.studio.build_report import load_record, record_part_stats
 from valve_qc_merger.studio.dialogs import NewProjectDialog, SettingsDialog
 from valve_qc_merger.studio.jobs import JobRunner
 from valve_qc_merger.studio.model_info import ModelInfo, read_model_info
@@ -79,6 +79,8 @@ class MainWindow(QMainWindow):
         self.explorer.build_selected.connect(self._select_build)
         self.explorer.build_run_requested.connect(self.run_build)
         self.explorer.build_compile_requested.connect(self.compile_build)
+        self.explorer.build_run_compile_requested.connect(
+            lambda name: self.run_build(name, then_compile=True))
         self.explorer.build_delete_requested.connect(self.delete_build)
         self.build_panel.run_requested.connect(self.run_build)
         self.build_panel.compile_requested.connect(self.compile_build)
@@ -149,6 +151,10 @@ class MainWindow(QMainWindow):
         self.act_compile_build = build_menu.addAction(
             "Compile selected build",
             lambda: self.compile_build(self.explorer.current_build()), QKeySequence("F7"))
+        self.act_run_compile_build = build_menu.addAction(
+            "Run and compile selected build",
+            lambda: self.run_build(self.explorer.current_build(), then_compile=True),
+            QKeySequence("Shift+F5"))
         build_menu.addSeparator()
         self.act_delete_build = build_menu.addAction(
             "Delete selected build…", lambda: self.delete_build(self.explorer.current_build()))
@@ -160,7 +166,7 @@ class MainWindow(QMainWindow):
         for action in (self.act_import_mdl, self.act_import_mdl_dir, self.act_import_dec,
                        self.act_settings, self.act_reveal, self.act_close,
                        self.act_new_build, self.act_run_build, self.act_compile_build,
-                       self.act_delete_build):
+                       self.act_run_compile_build, self.act_delete_build):
             action.setEnabled(has and idle)
         for action in (self.act_new, self.act_open):
             action.setEnabled(idle)
@@ -398,29 +404,55 @@ class MainWindow(QMainWindow):
         self.right.setCurrentWidget(self.build_panel)
         self.build_panel.show_build(self.project, name)
 
-    def run_build(self, name: str) -> None:
+    def run_build(self, name: str, *, then_compile: bool = False) -> None:
         project = self.project
         if project is None or not name or self.jobs.busy:
             if project is not None and not name:
                 self.statusBar().showMessage("select a build in the Explorer", 4000)
+            return
+        if then_compile and not self._studiomdl_ready():
             return
 
         def work(reporter: Reporter) -> object:
             result = project.run_build(name, reporter)
             reporter.log("measuring output parts…")
             record_part_stats(project.build_dir(name) / "last_run.json", project.root)
+            if then_compile:
+                if not result.outputs:
+                    reporter.log("nothing to compile: the build emitted no QC")
+                    return result
+                reporter.check()
+                return project.compile_build(name, reporter)
             return result
 
         self._pending_build = name
-        self.jobs.start(f"Build {name}", work)
+        title = f"Build + compile {name}" if then_compile else f"Build {name}"
+        self.jobs.start(title, work)
+
+    def _studiomdl_ready(self) -> bool:
+        if self.project is not None and self.project.settings.studiomdl:
+            return True
+        QMessageBox.information(self, "Compile",
+                                "Set the studiomdl path in Project ▸ Settings first.")
+        return False
 
     def compile_build(self, name: str) -> None:
         project = self.project
         if project is None or not name or self.jobs.busy:
+            if project is not None and not name:
+                self.statusBar().showMessage("select a build in the Explorer", 4000)
             return
-        if not project.settings.studiomdl:
-            QMessageBox.information(self, "Compile",
-                                    "Set the studiomdl path in Project ▸ Settings first.")
+        if not self._studiomdl_ready():
+            return
+        record = load_record(project.build_dir(name) / "last_run.json")
+        if record is None or not record.get("outputs"):
+            why = ("has not been run yet" if record is None
+                   else "emitted no QC on its last run")
+            answer = QMessageBox.question(
+                self, "Compile", f"Build {name} {why}, so there is nothing to compile.\n\n"
+                "Run it now and then compile?")
+            if answer == QMessageBox.StandardButton.Yes:
+                self.run_build(name, then_compile=True)
             return
         self._pending_build = name
         self.jobs.start(f"Compile {name}", lambda r: project.compile_build(name, r))

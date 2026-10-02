@@ -208,8 +208,13 @@ def _sanitize_material(material: str) -> str:
 
 
 def _find_texture(directory: Path, material: str) -> Path | None:
+    """The material's BMP next to the QC, else in a subfolder (decompilers
+    use ``maps_8bit/``)."""
     wanted = {material.lower(), (material + ".bmp").lower()}
     for candidate in sorted(directory.iterdir()):
+        if candidate.is_file() and candidate.name.lower() in wanted:
+            return candidate
+    for candidate in sorted(directory.rglob("*")):
         if candidate.is_file() and candidate.name.lower() in wanted:
             return candidate
     return None

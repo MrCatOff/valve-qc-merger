@@ -75,3 +75,21 @@ def test_surviving_hand_named_group_with_partial_drop_renamed() -> None:
     assert "old_hand" not in out                    # dropped variant gone
     assert 'studio "claw_keep"' in out              # survivor kept
     assert '$bodygroup "weapon"' in out
+
+
+def test_body_with_any_name_is_a_reference(tmp_path) -> None:
+    # studiomdl syntax is ``$body <name> "<smd>"``; our decompiler names the
+    # body after its bodypart ("weapon"), decompmdl calls it "studio".
+    for line in ('$body "weapon" "ref_gun"', '$body studio "ref_gun"',
+                 "$body weapon ref_gun"):
+        qc = tmp_path / "v.qc"
+        qc.write_text(line + '\n$bodygroup "hands"\n{\n\tstudio "orig_hands"\n}\n')
+        info = qcmod.parse(str(qc))
+        assert ("weapon" if "weapon" in line else "studio", "ref_gun") in info.references
+
+
+def test_dropped_body_with_a_name_is_swapped() -> None:
+    out = _rewrite('$body "hands" "orig_hands"\n$body "weapon" "ref_gun"\n',
+                   {"orig_hands"})
+    assert "orig_hands" not in out and out.count('studio "hands"') == 1
+    assert '$body "weapon" "ref_gun"' in out

@@ -172,12 +172,18 @@ def convert(args, log=log) -> dict:
     log("Wrote %s" % qc_name)
 
     # textures
+    # decompilers put them next to the QC (Crowbar) or under maps_8bit/
+    # (decompmdl, our own); the output is flat. The top level wins a clash.
     n_bmp = 0
-    for f in os.listdir(weapon_dir):
-        if f.lower().endswith(".bmp"):
-            shutil.copy2(os.path.join(weapon_dir, f),
-                         os.path.join(out_dir, f))
-            n_bmp += 1
+    copied = set()
+    for root, _dirs, files in sorted(os.walk(weapon_dir), key=lambda w: len(w[0])):
+        if os.path.abspath(root).startswith(os.path.abspath(out_dir)):
+            continue
+        for f in sorted(files):
+            if f.lower().endswith(".bmp") and f.lower() not in copied:
+                shutil.copy2(os.path.join(root, f), os.path.join(out_dir, f))
+                copied.add(f.lower())
+                n_bmp += 1
     hands_bmp = args.hands_texture or DEFAULT_HANDS_BMP
     if not os.path.isfile(hands_bmp):
         cands = glob.glob(os.path.join(REPO, "storage", "hands", "*.bmp"))

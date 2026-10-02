@@ -39,8 +39,12 @@ _BODYGROUP = re.compile(
     r'\$bodygroup\s+(?P<name>"[^"]+"|\S+)\s*\{(?P<inner>[^}]*)\}',
     re.IGNORECASE)
 _STUDIO = re.compile(r'studio\s+(?P<studio>"[^"]+"|\S+)', re.IGNORECASE)
-_BODY = re.compile(r'(?im)^\s*\$body\s+(?P<name>"[^"]+"|\S+)?\s*'
-                   r'studio\s+(?P<studio>"[^"]+"|\S+)')
+# studiomdl syntax: ``$body <name> "<smd>"``. decompilers often name the body
+# "studio" (``$body studio "x"``), which an older pattern mistook for a keyword
+# and so missed every other name (``$body "weapon" "ref"``: the weapon mesh
+# vanished and hand detection "ate the whole model").
+_BODY = re.compile(r'(?im)^\s*\$body\s+(?P<name>"[^"]+"|\S+)\s+'
+                   r'(?P<studio>"[^"]+"|\S+)')
 
 
 def _unq(s: str) -> str:
@@ -191,8 +195,8 @@ def rewrite(qc: QcInfo, *, drop_studios: set[str],
         if _norm(m.group("studio")) in drop_studios:
             return _swap()
         return m.group(0)
-    text = re.sub(r'(?im)^[ \t]*\$body\s+(?:"[^"]+"|\S+)?\s*studio\s+'
-                  r'(?P<studio>"[^"]+"|\S+)\s*\n?', body_sub, text)
+    text = re.sub(r'(?im)^[ \t]*\$body\s+(?:"[^"]+"|\S+)[ \t]+'
+                  r'(?P<studio>"[^"]+"|\S+)[ \t]*\n?', body_sub, text)
 
     if not state["replaced"]:
         # no dedicated hand bodygroup (single-reference models): append ours

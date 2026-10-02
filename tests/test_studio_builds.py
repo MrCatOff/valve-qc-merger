@@ -127,3 +127,23 @@ def test_pick_assets_requires_one(window, zombie_project: Project, monkeypatch) 
                         lambda *a, **k: warnings.append(a[2]))
     assert not panel.save()
     assert warnings and "at least one" in warnings[0]
+
+
+def test_compile_before_run_offers_to_run_first(window, zombie_project: Project,
+                                                monkeypatch) -> None:
+    zombie_project.settings.studiomdl = str(Path("does-not-matter"))
+    window.set_project(zombie_project)
+    window.explorer.select("build", "zh")
+    asked = []
+
+    def answer(*args, **kwargs):
+        asked.append(args[2])
+        return QtWidgets.QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", answer)
+    window.compile_build("zh")
+    assert asked and "has not been run" in asked[0]
+    assert window.jobs.wait(60_000)
+    record = json.loads((zombie_project.build_dir("zh") / "last_run.json").read_text())
+    assert record["outputs"]  # the build ran (the fake studiomdl then fails to start)
+    assert "Build + compile zh" in window.log.toPlainText()
