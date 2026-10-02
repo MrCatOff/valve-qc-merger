@@ -196,49 +196,70 @@ def find_hands(skel: OrigSkeleton, refs: dict[str, Smd],
                 fans.append((b, chains))
         if fans:
             break
-    # deepest-only: drop a fan that is an ancestor of another fan
-    fan_names = {f for f, _ in fans}
-    fans = [(f, ch) for f, ch in fans
-            if not any(a in fan_names for a in _descendant_fans(skel, f,
-                                                                fan_names))]
-    if len(fans) > 2:
-        # keep two: name-confirmed hands outrank chain count — a kart
-        # body with five part-chains must not displace a real hand
-        def confirmed(fan):
-            t = fan.lower()
-            return _name_side(fan) is not None or "hand" in t
-        fans.sort(key=lambda fc: (not confirmed(fc[0]), -len(fc[1])))
-        fans = fans[:2]
-
-    hands = []
-    for fan, chains in fans:
+    def hand_info(fan: str, chains: list[list[str]]) -> HandInfo:
         wrist = fan
         while wrist is not None and wrist not in weighted:
             wrist = skel.parent[wrist]
         if wrist is None:
             wrist = fan
         core = rebuild_core(skel, fan, wrist, chains)
-        tip_dirs = _tip_directions(skel, refs, chains)
         srcs = {m for m, w in weights_by_mesh.items()
                 if sum(w.get(b, 0.0) for b in core) > 0.5}
-        hands.append(HandInfo(side="?", wrist=wrist, fan=fan, chains=chains,
-                              tip_dirs=tip_dirs, core=core,
-                              source_meshes=srcs))
-        log("  hand fan %r: wrist %r, %d fingers, meshes %s"
-            % (fan, wrist, len(chains), sorted(srcs)))
+        return HandInfo(side="?", wrist=wrist, fan=fan, chains=chains,
+                        tip_dirs=_tip_directions(skel, refs, chains), core=core,
+                        source_meshes=srcs)
 
-    # Reject false hands: a weapon whose own bone tree fans out like fingers
-    # (a "connector"/effect rig) registers as a hand skinned only by the
-    # WEAPON mesh. When the QC labels the real hand meshes, drop any fan not
-    # backed by one of them — as long as a real (labelled) hand survives.
+    candidates = [hand_info(fan, chains) for fan, chains in fans]
+
+    # Reject false hands FIRST: a weapon whose own bone tree fans out like
+    # fingers (a "connector"/effect rig) registers as a hand skinned only by
+    # the WEAPON mesh. When the QC labels the real hand meshes, drop any fan
+    # not backed by one of them — as long as a real (labelled) hand
+    # survives. This must precede the deepest-only rule below: v_janus1's
+    # gun hangs under the LEFT wrist and has a five-chain fan of its own,
+    # which used to evict the real left hand as "an ancestor of a fan" and
+    # was then dropped itself — the left hand vanished from the retarget.
     if hand_labeled:
-        real = [h for h in hands if h.source_meshes & hand_labeled]
-        if real and len(real) < len(hands):
-            for h in hands:
+        real = [h for h in candidates if h.source_meshes & hand_labeled]
+        if real and len(real) < len(candidates):
+            for h in candidates:
                 if h not in real:
-                    log("  dropping false hand fan %r (weapon-mesh only)"
-                        % h.fan)
-            hands = real
+                    log("  dropping false hand fan %r (weapon-mesh only)" % h.fan)
+            candidates = real
+
+    def confirmed(fan):
+        t = fan.lower()
+        return _name_side(fan) is not None or "hand" in t
+
+    # A name-confirmed hand whose subtree holds fans WITHOUT a hand name is
+    # a hand holding a weapon whose own rig fans out (v_janus1: the gun
+    # hangs under 'Bone_Lefthand' with five-chain part fans). Those fans
+    # are weapon parts — drop them, not the hand above them.
+    fan_names = {h.fan for h in candidates}
+    weapon_fans: set[str] = set()
+    for h in candidates:
+        below = _descendant_fans(skel, h.fan, fan_names)
+        if below and confirmed(h.fan) and not any(confirmed(d) for d in below):
+            for d in sorted(below - weapon_fans):
+                log("  fan %r under hand %r: weapon parts, not a hand" % (d, h.fan))
+            weapon_fans |= below
+    candidates = [h for h in candidates if h.fan not in weapon_fans]
+
+    # deepest-only: drop a fan that is an ancestor of another fan
+    fan_names = {h.fan for h in candidates}
+    candidates = [h for h in candidates
+                  if not any(a in fan_names
+                             for a in _descendant_fans(skel, h.fan, fan_names))]
+    if len(candidates) > 2:
+        # keep two: name-confirmed hands outrank chain count — a kart
+        # body with five part-chains must not displace a real hand
+        candidates.sort(key=lambda h: (not confirmed(h.fan), -len(h.chains)))
+        candidates = candidates[:2]
+
+    hands = candidates
+    for h in hands:
+        log("  hand fan %r: wrist %r, %d fingers, meshes %s"
+            % (h.fan, h.wrist, len(h.chains), sorted(h.source_meshes)))
 
     _resolve_sides(skel, hands, weights_by_mesh, log)
     return hands

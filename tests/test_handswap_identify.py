@@ -85,3 +85,58 @@ def test_pure_hand_mesh_dropped_by_strict_rule_without_label() -> None:
     dropped, kept = buildmod.classify_meshes(_model(weights, refs), hand_bones,
                                              log=lambda *a: None)
     assert dropped == ["rhand"] and kept == ["gun"]
+
+
+# --- a weapon rig hanging under a wrist ------------------------------------ #
+
+def _skeleton(bones):
+    """bones: [(name, parent, (x, y, z) local offset)] -> OrigSkeleton."""
+    import numpy as np
+
+    from valve_qc_merger.handswap.identify import OrigSkeleton
+    names = [b[0] for b in bones]
+    parent = {b[0]: b[1] for b in bones}
+    children = {n: [] for n in names}
+    for name, par, _ in bones:
+        if par is not None:
+            children[par].append(name)
+    skel = OrigSkeleton(names=names, parent=parent, children=children,
+                        bind_local={b[0]: (np.array(b[2], float), np.zeros(3))
+                                    for b in bones},
+                        bind_world={})
+    skel.bind_world = skel.world_at({})
+    return skel
+
+
+def _fingers(wrist, prefix, spread=1.0):
+    out = []
+    for i in range(5):
+        out.append((f"{prefix}{i}a", wrist, (2.0, (i - 2) * spread, 0.0)))
+        out.append((f"{prefix}{i}b", f"{prefix}{i}a", (1.0, 0.0, 0.0)))
+    return out
+
+
+def test_weapon_fan_under_a_named_wrist_does_not_evict_the_hand() -> None:
+    # v_janus1: the gun's rig hangs under 'Bone_Lefthand' and its body fans
+    # out into five part-chains. The deepest-only fan rule used to keep the
+    # gun fan, drop the real left hand above it, then drop the gun fan as a
+    # weapon-mesh-only "hand": the left hand vanished from the retarget.
+    from valve_qc_merger.handswap.identify import find_hands
+    bones = [("Root", None, (0, 0, 0)),
+             ("Bone_Lefthand", "Root", (0, 10, 0)),
+             ("Bone_Righthand", "Root", (0, -10, 0)),
+             ("gun_root", "Bone_Lefthand", (1, 0, -2)),
+             ("gun_body", "gun_root", (3, 0, 0))]
+    bones += _fingers("Bone_Lefthand", "L") + _fingers("Bone_Righthand", "R")
+    bones += _fingers("gun_body", "G", spread=1.5)
+    skel = _skeleton(bones)
+    hand_bones = [b[0] for b in bones if b[0][0] in "LR" and b[0][1].isdigit()]
+    weights = {
+        "hands": {**{b: 10.0 for b in hand_bones},
+                  "Bone_Lefthand": 30.0, "Bone_Righthand": 30.0},
+        "gun": {b[0]: 40.0 for b in bones if b[0].startswith(("G", "gun"))},
+    }
+    hands = find_hands(skel, {}, weights, hand_labeled={"hands"}, log=lambda *a: None)
+    assert sorted(h.wrist for h in hands) == ["Bone_Lefthand", "Bone_Righthand"]
+    assert {h.wrist: h.side for h in hands} == {"Bone_Lefthand": "left",
+                                                 "Bone_Righthand": "right"}
