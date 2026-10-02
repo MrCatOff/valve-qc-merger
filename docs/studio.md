@@ -9,7 +9,7 @@ since the exe cannot ship one).
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | M0 | service layer + project format | done |
-| M1 | pure-Python `.mdl` importer | planned |
+| M1 | pure-Python `.mdl` importer | done |
 | M2 | GUI shell: projects, import, explorer, inspector, log | planned |
 | M3 | OpenGL viewport: textures, sequences, bodygroups, bone/attachment overlay | planned |
 | M4 | builds in the GUI: options forms, budgets, gates, compile, manifest | planned |
@@ -30,6 +30,7 @@ Every operation is `run_<op>(options, reporter) -> ServiceResult` in
 | `run_merge_players` | `MergePlayersOptions` | `merge-players` |
 | `run_merge_zhands` | `MergeZhandsOptions` | `merge-zhands` |
 | `run_compile` | `CompileOptions` | — |
+| `run_decompile` | `DecompileOptions` | `decompile` |
 
 - Options are dataclasses with the CLI flag names (`options_from(cls,
   argparse_namespace)`; `options_to_dict` / `options_from_dict` for TOML).
@@ -94,3 +95,36 @@ models into `zhands`. `Project.set_kind` overrides (and moves the folder).
 model folder or a folder of them), `remove_asset`, `set_kind`,
 `add_build(Build(...))` (validates the kind and every option name),
 `remove_build`, `run_build(name, reporter)`, `compile_build(name, reporter)`.
+
+## `.mdl` import (M1)
+
+`valve_qc_merger.mdl` reads GoldSource v10 models in pure Python
+(`read_mdl`) and writes the same QC + SMD + BMP folder layout as
+tools/decompmdl (`decompile_mdl`); `valve-qc-merger decompile <file|folder>
+--out DIR` and `Project.import_mdl` use it, so the Windows exe needs no
+external decompiler.
+
+- Covered: bones, controllers, hitboxes, attachments, sequences (fps, loop,
+  activity, events, blends, motion flags, transitions; RLE animation
+  decoding, `LX/LY/LZ` linear motion added back), sequence-group files
+  (`<name>01.mdl`), textures (8-bit + palette, render-mode flags) including
+  `$externaltextures` (`<name>T.mdl`), skin families (`$texturegroup`),
+  bodyparts with blank submodels, strips and fans.
+- Conventions proven by round trip: animation ROOT bones are turned back by
+  -90 deg about Z (studiomdl turns them +90 when compiling) while reference
+  SMDs keep the stored bind; triangles are written in the reverse of the
+  drawn order (studiomdl reverses SMD winding when it builds strips).
+- `$cliptotextures` is emitted (stock studiomdl crops textures to their UV
+  bounds otherwise: 512 -> 500x501). Texture names drop non-ASCII bytes,
+  turn spaces into `_` and keep a 40-character stem: studiomdl crashed
+  (SIGTRAP, no output) on a 63-character texture name. Merges cap staged
+  texture names at 56 characters for the same reason.
+- Validated on 78 models (56 CSO pistols, 13 zombie hands, zp-cso grenades,
+  knife and a player model, our compiled packs): against tools/decompmdl
+  every triangle and every animation frame matches (where decompmdl works —
+  it silently dies on the player model, which we decompile with all 111
+  sequences); decompile -> stock studiomdl -> re-read keeps every model
+  compilable, all 488,630 triangles present (29 of 223,559 non-sliver
+  triangles change winding, studiomdl's own stripping), sequences, events,
+  attachments, hitboxes and bones intact, animation within studiomdl's
+  quantisation.

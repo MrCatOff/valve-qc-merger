@@ -31,6 +31,8 @@ from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.hands import collision_guard, match_hands, rig_bones_from_smd
 from valve_qc_merger.merge_view.merger import (
+    _sanitize_material,
+    fit_texture_name,
     merged_skeleton,
     unify_skeletons,
     write_manifest_data,
@@ -336,13 +338,6 @@ def _find_texture(directory: Path, material: str) -> Path | None:
     return None
 
 
-def _sanitize_material(material: str) -> str:
-    cleaned = "".join(ch if "!" <= ch <= "~" else "_" for ch in material)
-    if not cleaned.lower().endswith(".bmp"):
-        cleaned += ".bmp"
-    return cleaned
-
-
 class _TextureStage:
     """Stage textures by (content, render mode); returns final names."""
 
@@ -366,11 +361,12 @@ class _TextureStage:
         base = _sanitize_material(material)
         stem, ext = base[:-4], base[-4:]
         name = base
-        if mode:
-            name = base if base.lower() not in self.taken else f"{stem}_{mode}{ext}"
+        if mode and base.lower() in self.taken:
+            name = f"{stem}_{mode}{ext}"
         counter = 2
+        name = fit_texture_name(name)
         while name.lower() in self.taken:
-            name = f"{stem}_{counter}{ext}"
+            name = fit_texture_name(f"{stem}_{counter}{ext}")
             counter += 1
         self.taken.add(name.lower())
         self.by_key[key] = name

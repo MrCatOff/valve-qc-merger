@@ -172,8 +172,30 @@ def _concat_meshes(meshes: list[Smd]) -> Smd:
                triangles=triangles)
 
 
+TEXTURE_NAME_LIMIT = 56  # studiomdl: char[64] names, "./" path prefix, margin
+
+
+def fit_texture_name(name: str) -> str:
+    """Keep a texture file name within :data:`TEXTURE_NAME_LIMIT` characters.
+
+    studiomdl copies texture names into ``char[64]`` buffers together with
+    the ``$cdtexture`` prefix; a 63-character name crashed it outright
+    (SIGTRAP, no output). Long names keep their head plus a short hash of
+    the full name, so distinct names stay distinct.
+    """
+    if len(name) <= TEXTURE_NAME_LIMIT:
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    tag = hashlib.md5(name.encode("utf-8")).hexdigest()[:6]
+    keep = TEXTURE_NAME_LIMIT - len(tag) - 1 - (len(ext) + 1 if ext else 0)
+    return f"{stem[:keep]}_{tag}" + (f".{ext}" if ext else "")
+
+
 def _sanitize_material(material: str) -> str:
-    """Delivery contract: printable ASCII, no spaces, .bmp extension.
+    """Delivery contract: printable ASCII, no spaces, .bmp extension, and a
+    name short enough for studiomdl (:func:`fit_texture_name`).
 
     Spaces are outright fatal: studiomdl tokenizes SMD triangle headers on
     whitespace, so a material like ``king cobra scope.bmp`` crashes the
@@ -182,7 +204,7 @@ def _sanitize_material(material: str) -> str:
     cleaned = "".join(ch if "!" <= ch <= "~" else "_" for ch in material)
     if not cleaned.lower().endswith(".bmp"):
         cleaned += ".bmp"
-    return cleaned
+    return fit_texture_name(cleaned)
 
 
 def _find_texture(directory: Path, material: str) -> Path | None:

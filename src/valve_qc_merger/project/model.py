@@ -35,6 +35,7 @@ from valve_qc_merger.services.base import (
     options_from_dict,
 )
 from valve_qc_merger.services.compile import CompileOptions, run_compile
+from valve_qc_merger.services.decompile import DecompileOptions, find_models, run_decompile
 from valve_qc_merger.services.merge_player import MergePlayerOptions, run_merge_player
 from valve_qc_merger.services.merge_players import MergePlayersOptions, run_merge_players
 from valve_qc_merger.services.merge_view import MergeViewOptions, run_merge_view
@@ -232,6 +233,35 @@ class Project:
                 self._move_to_kind_folder(asset)
         self.save()
         return added
+
+    def import_mdl(self, source: Path, *, kind: str | None = None,
+                   overwrite: bool = False,
+                   reporter: Reporter | None = None) -> list[Asset]:
+        """Decompile one ``.mdl`` (or every model in a folder) in process and
+        import the results like :meth:`import_decompiled`."""
+        source = Path(source)
+        models = find_models(source)
+        if not models:
+            raise ProjectError(f"no .mdl in {source}")
+        clashes = [m.stem for m in models if m.stem in self.assets and not overwrite]
+        if clashes:
+            raise ProjectError(f"assets already exist: {clashes}")
+        staging = self.root / ".import"
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            outcome = run_decompile(DecompileOptions(source=source, out=staging),
+                                    reporter or Reporter())
+            if not outcome.outputs:
+                raise ProjectError(f"nothing decompiled from {source}: {outcome.failures}")
+            added = self.import_decompiled(staging, kind=kind, overwrite=overwrite)
+            originals = {m.stem: m for m in models}
+            for asset in added:
+                if asset.name in originals:
+                    asset.source = str(originals[asset.name].resolve())
+            self.save()
+            return added
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def remove_asset(self, name: str, *, delete_files: bool = True) -> None:
         asset = self.assets.pop(name)

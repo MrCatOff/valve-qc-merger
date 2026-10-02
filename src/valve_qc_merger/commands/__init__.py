@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from valve_qc_merger.commands.base import Command
+from valve_qc_merger.commands.decompile import DecompileCommand
 from valve_qc_merger.commands.merge_player import MergePlayerCommand
 from valve_qc_merger.commands.merge_players import MergePlayersCommand
 from valve_qc_merger.commands.merge_view import MergeViewCommand
@@ -24,6 +25,7 @@ _COMMAND_CLASSES: list[type[Command]] = [
     MergePlayersCommand,
     MergeWorldCommand,
     MergeZhandsCommand,
+    DecompileCommand,
 ]
 
 
