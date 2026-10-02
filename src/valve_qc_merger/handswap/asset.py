@@ -18,16 +18,9 @@ from .math3d import inv_rigid
 
 
 def _project_root() -> str:
-    """The valve-qc-merger checkout (dir holding pyproject.toml); cwd for a
-    frozen/wheel run."""
-    d = os.path.dirname(os.path.abspath(__file__))
-    while True:
-        if os.path.isfile(os.path.join(d, "pyproject.toml")):
-            return d
-        parent = os.path.dirname(d)
-        if parent == d:
-            return os.getcwd()
-        d = parent
+    """Where ``storage/`` lives: the checkout, or the exe's bundle when frozen."""
+    from valve_qc_merger.resources import data_root
+    return str(data_root())
 
 
 # The CSO hands asset and its per-weapon grip_tuning.json live together under

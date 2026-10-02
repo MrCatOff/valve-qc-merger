@@ -1,8 +1,9 @@
 name: build-exe
 
-# Standalone executables (no Python needed on the target machine).
-# Runs on manual dispatch and on version tags; download from the run's
-# artifacts (valve-qc-merger-windows / -macos / -linux).
+# Standalone builds (no Python needed on the target machine), on manual
+# dispatch and on version tags. Artifacts:
+#   valve-qc-merger-<os>  the CLI (one file)
+#   valve-qc-studio-<os>  the GUI (a folder, zipped; macOS: the .app)
 
 on:
   workflow_dispatch:
@@ -10,7 +11,7 @@ on:
     tags: ["v*"]
 
 jobs:
-  build:
+  cli:
     strategy:
       matrix:
         include:
@@ -40,8 +41,45 @@ jobs:
         run: |
           ${{ matrix.binary }} --version
           ${{ matrix.binary }} merge-p tests/examples/player --out smoke_out --name p_smoke
+          ${{ matrix.binary }} decompile tests/examples/mdl/mini.mdl --out smoke_dec
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  studio:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Qt runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - name: Build + selftest (Windows)
+        if: runner.os == 'Windows'
+        run: tools\build_studio.bat
+        shell: cmd
+      - name: Build + selftest (Unix)
+        if: runner.os != 'Windows'
+        run: sh tools/build_studio.sh
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/valve-qc-studio -DestinationPath valve-qc-studio-windows.zip
+        shell: pwsh
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/valve-qc-studio.app valve-qc-studio-macos.zip
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf valve-qc-studio-linux.tar.gz -C dist valve-qc-studio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valve-qc-studio-${{ runner.os }}
+          path: valve-qc-studio-*
           if-no-files-found: error

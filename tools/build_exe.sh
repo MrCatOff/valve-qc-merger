@@ -14,7 +14,9 @@ python3 -m pip install --quiet pyinstaller .
 python3 -m PyInstaller \
     --onefile \
     --name valve-qc-merger \
-    --add-data "storage/hands/reference_hands.smd:storage/hands" \
+    --add-data "storage/hands:storage/hands" \
+    --add-data "storage/handswap:storage/handswap" \
+    --add-data "storage/players_donor:storage/players_donor" \
     --add-data "src/valve_qc_merger/retarget/worker.py:valve_qc_merger/retarget" \
     --distpath dist \
     --workpath build/pyinstaller \

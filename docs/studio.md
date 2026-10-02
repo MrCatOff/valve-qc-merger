@@ -14,7 +14,7 @@ since the exe cannot ship one).
 | M3 | OpenGL viewport: textures, sequences, bodygroups, bone/attachment overlay | done |
 | M4 | builds in the GUI: options forms, budgets, gates, compile, manifest | done |
 | M5 | bone tools: rename / reparent / delete, attachments | done |
-| M6 | packaging: windowed PyInstaller exe + CI | planned |
+| M6 | packaging: windowed PyInstaller exe + CI | done |
 
 ## Services (M0)
 
@@ -240,3 +240,44 @@ bone's frame) with Add / Remove / **Save attachments** (warns above
 GoldSource's 4). Attachments, joints and the highlight are drawn as 3D line
 crosses — `GL_POINTS` with a shader point size draws nothing on macOS core
 profile.
+
+## Packaging (M6)
+
+```bat
+rem Windows (from the repo root; Python 3.11+ only for the build)
+tools\build_studio.bat
+```
+```sh
+sh tools/build_studio.sh        # macOS / Linux
+```
+
+`tools/studio.spec` builds **one folder** `dist/valve-qc-studio/` (Windows:
+`valve-qc-studio.exe` inside — ship the whole folder; macOS also
+`dist/valve-qc-studio.app`). One-folder because a one-file build would
+unpack ~150 MB of Qt on every start. It is a windowed app (no console),
+bundles `storage/hands`, `storage/handswap` and `storage/players_donor`
+(the services read them via `resources.data_root()`, which is the bundle
+when frozen) and excludes the Qt modules the studio never imports
+(~163 MB: Qt ~87 MB, data ~44 MB).
+
+`valve-qc-studio --selftest [model.mdl]` is the headless smoke test the
+build scripts and CI run: the window starts on Qt's offscreen platform, a
+project is created, the model is imported with the in-process decompiler
+and turned into a viewport scene, and the bundled data is checked; exit
+code 0 = healthy (a windowed exe prints nothing, the exit code tells).
+
+On a machine without OpenGL 3.3 the viewport says so (with the reason)
+instead of staying blank; everything else works.
+
+CI (`.github/workflows/`):
+
+- `tests.yml` — ruff + the whole pytest suite on Windows, Linux and macOS on
+  every push / pull request (GUI tests offscreen; the real GL render skips
+  where no OpenGL is available).
+- `build-exe.yml` — on dispatch / `v*` tags: the CLI one-file exe (smoke:
+  `--version`, `merge-p`, `decompile`) and the studio folder (build +
+  selftest), as artifacts `valve-qc-merger-<os>` / `valve-qc-studio-<os>`.
+
+The CLI exe now bundles the same `storage/` data, so `retarget` and
+`merge-players` work from any folder (they looked for `storage/` next to
+`pyproject.toml`, i.e. only inside a checkout).

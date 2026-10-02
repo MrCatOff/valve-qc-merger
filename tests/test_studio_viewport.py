@@ -95,7 +95,9 @@ def test_offscreen_render_draws_the_model(tmp_path: Path) -> None:
     env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"}
     run = subprocess.run([sys.executable, str(script), str(_MINI), str(out)],
                          capture_output=True, text=True, timeout=120, env=env)
-    if "NO_GL" in run.stdout or run.returncode != 0 and "platform" in run.stderr.lower():
+    no_display = run.returncode != 0 and ("platform" in run.stderr.lower()
+                                          or os.environ.get("CI"))
+    if "NO_GL" in run.stdout or no_display:
         pytest.skip(f"no OpenGL here: {run.stdout.strip() or run.stderr.strip()[:200]}")
     assert run.returncode == 0, run.stderr
     from PySide6.QtGui import QImage

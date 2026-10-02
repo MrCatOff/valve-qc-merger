@@ -12,6 +12,20 @@ import sys
 from pathlib import Path
 
 
+def data_root() -> Path:
+    """Where bundled data (``storage/...``) lives: the PyInstaller unpack
+    directory when frozen, else the checkout holding ``pyproject.toml``,
+    else the working directory."""
+    bundle = getattr(sys, "_MEIPASS", None)
+    if bundle is not None:
+        return Path(bundle)
+    here = Path(__file__).resolve().parent
+    for candidate in (here, *here.parents):
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return Path.cwd()
+
+
 def resource_path(relative: str | Path) -> Path:
     """Resolve a repo-relative data file from cwd first, then the exe bundle."""
     candidate = Path(relative)
@@ -25,4 +39,4 @@ def resource_path(relative: str | Path) -> Path:
     return candidate
 
 
-__all__ = ["resource_path"]
+__all__ = ["data_root", "resource_path"]

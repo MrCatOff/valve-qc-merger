@@ -40,6 +40,12 @@ class Viewport(QOpenGLWidget):
 
     # -- GL ----------------------------------------------------------------
     def initializeGL(self) -> None:  # noqa: N802 - Qt override
+        context = self.context()
+        fmt = context.format() if context is not None else None
+        if fmt is not None and (fmt.majorVersion(), fmt.minorVersion()) < (3, 3):
+            self.gl_error = (f"this system offers OpenGL {fmt.majorVersion()}."
+                             f"{fmt.minorVersion()}")
+            return
         try:
             self.renderer.initialize()
         except Exception as exc:  # noqa: BLE001 - shown in the widget instead
@@ -60,6 +66,15 @@ class Viewport(QOpenGLWidget):
 
     def paintGL(self) -> None:  # noqa: N802 - Qt override
         if self.gl_error:
+            from PySide6.QtGui import QPainter
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), Qt.GlobalColor.darkGray)
+            painter.setPen(Qt.GlobalColor.white)
+            painter.drawText(self.rect().adjusted(20, 20, -20, -20),
+                             Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                             "The 3D viewport needs OpenGL 3.3 (update the graphics "
+                             f"driver).\n\n{self.gl_error}")
+            painter.end()
             return
         ratio = self.devicePixelRatioF()
         self.renderer.render(int(self.width() * ratio), int(self.height() * ratio), self.state)

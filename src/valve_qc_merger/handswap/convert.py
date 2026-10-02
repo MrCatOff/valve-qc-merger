@@ -20,16 +20,9 @@ from . import smd as smdmod
 from .retarget import build_plan, refine_finger_fit
 
 def _project_root() -> str:
-    """Walk up from this module to the valve-qc-merger checkout (the dir
-    holding pyproject.toml). Falls back to the cwd for frozen/wheel runs."""
-    d = os.path.dirname(os.path.abspath(__file__))
-    while True:
-        if os.path.isfile(os.path.join(d, "pyproject.toml")):
-            return d
-        parent = os.path.dirname(d)
-        if parent == d:
-            return os.getcwd()
-        d = parent
+    """Where ``storage/`` lives: the checkout, or the exe's bundle when frozen."""
+    from valve_qc_merger.resources import data_root
+    return str(data_root())
 
 
 REPO = _project_root()

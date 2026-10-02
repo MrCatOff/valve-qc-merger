@@ -28,6 +28,7 @@ from valve_qc_merger.merge_view.discovery import (
     sanitize_model_dir,
 )
 from valve_qc_merger.merge_view.merger import MergeError, write_manifest_data
+from valve_qc_merger.resources import resource_path
 from valve_qc_merger.services.base import (
     EXIT_DISCOVERY,
     EXIT_FAIL,
@@ -83,7 +84,7 @@ def run_merge_players(opts: MergePlayersOptions,  # noqa: C901 - orchestration
     labels = _load_labels(opts.labels)
 
     try:
-        donor = load_donor(opts.base)
+        donor = load_donor(resource_path(opts.base))
     except MergeViewError as exc:
         reporter.log(f"error: donor: {exc}")
         result.exit_code = EXIT_DISCOVERY
