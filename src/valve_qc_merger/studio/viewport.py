@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -143,6 +145,26 @@ class Viewport(QOpenGLWidget):
         self.update()
 
 
+def _strip(layout: QHBoxLayout) -> QScrollArea:
+    """A one-line horizontal strip that scrolls instead of widening its
+    parent: the viewport's control rows must never raise the central
+    widget's minimum width (that squeezed the Explorer/Inspector docks)."""
+    holder = QWidget()
+    inner = QHBoxLayout(holder)
+    inner.setContentsMargins(0, 0, 0, 0)
+    inner.addLayout(layout)
+    scroll = QScrollArea()
+    scroll.setWidget(holder)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+    # room for the scroll bar a narrow window shows, so nothing gets clipped
+    scroll.setFixedHeight(holder.sizeHint().height()
+                          + scroll.horizontalScrollBar().sizeHint().height() + 2)
+    return scroll
+
+
 class ViewportPanel(QWidget):
     """Viewport plus playback, bodygroup and display controls."""
 
@@ -153,7 +175,10 @@ class ViewportPanel(QWidget):
         super().__init__(parent)
         self.viewport = Viewport()
         self.sequence_box = QComboBox()
-        self.sequence_box.setMinimumWidth(200)
+        # a fixed hint: sequence names must not change the panel's width
+        self.sequence_box.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.sequence_box.setMinimumContentsLength(22)
         self.sequence_box.currentIndexChanged.connect(self._sequence_changed)
         self.play_button = QPushButton("▶")
         self.play_button.setFixedWidth(36)
@@ -176,10 +201,16 @@ class ViewportPanel(QWidget):
         top.addWidget(self.frame_label)
         top.addWidget(self.speed_box)
 
+        # Bodygroup pickers depend on the model (count, entry names): they live
+        # in their own scrolling strip so they can never widen the panel.
         self.groups_row = QHBoxLayout()
+        self.groups_row.setContentsMargins(0, 0, 0, 0)
+        groups_line = QHBoxLayout()
+        groups_line.addLayout(self.groups_row)
+        groups_line.addStretch(1)
+        self.groups_scroll = _strip(groups_line)
         self.group_boxes: dict[str, QComboBox] = {}
         bottom = QHBoxLayout()
-        bottom.addLayout(self.groups_row)
         bottom.addStretch(1)
         self.textures_box = self._toggle("Textures", True, "textured")
         self.bones_box = self._toggle("Bones", False, "show_bones")
@@ -193,20 +224,21 @@ class ViewportPanel(QWidget):
         fp_button.clicked.connect(self.viewport.first_person)
         bottom.addWidget(frame_button)
         bottom.addWidget(fp_button)
-        self.compare_button = QPushButton("Before")
+        self.compare_button = QPushButton("Before (B)")
         self.compare_button.setCheckable(True)
         self.compare_button.setShortcut("B")
         self.compare_button.setToolTip("show the source model in the same pose and camera "
                                        "(B flips before/after)")
         self.compare_button.toggled.connect(self.compare_toggled)
-        self.compare_button.setVisible(False)
+        self.compare_button.setEnabled(False)  # always shown: a stable bar width
         bottom.addWidget(self.compare_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.addLayout(top)
+        layout.addWidget(_strip(top))
         layout.addWidget(self.viewport, 1)
-        layout.addLayout(bottom)
+        layout.addWidget(self.groups_scroll)
+        layout.addWidget(_strip(bottom))
 
         self.timer = QTimer(self)
         self.timer.setInterval(16)
@@ -227,9 +259,11 @@ class ViewportPanel(QWidget):
         self.compare_button.blockSignals(True)
         self.compare_button.setChecked(False)
         self.compare_button.blockSignals(False)
-        self.compare_button.setVisible(source is not None)
-        if source is not None:
-            self.compare_button.setText(f"Before: {source}")
+        self.compare_button.setEnabled(source is not None)
+        self.compare_button.setToolTip(
+            f"show the source model {source} in the same pose and camera "
+            "(B flips before/after)" if source is not None
+            else "before/after: only for assets made by Retarget")
 
     # -- scene -------------------------------------------------------------
     def set_scene(self, scene: ModelScene | None, *, keep_view: bool = False) -> None:
@@ -270,6 +304,10 @@ class ViewportPanel(QWidget):
                 self.groups_row.addWidget(label)
                 self.groups_row.addWidget(box)
                 self.group_boxes[group] = box
+        if not self.group_boxes:  # keep the row (a stable viewport height)
+            hint = QLabel("no switchable bodygroups" if scene is not None else "")
+            hint.setEnabled(False)
+            self.groups_row.addWidget(hint)
         has = scene is not None and bool(scene.sequences)
         for widget in (self.sequence_box, self.play_button, self.slider, self.speed_box):
             widget.setEnabled(has)

@@ -219,10 +219,10 @@ def test_before_after_keeps_camera_pose_and_frame(app, tmp_path: Path) -> None:
         win.set_project(project)
         panel = win.viewport
         assert win.explorer.select("asset", "v_anaconda")
-        assert not panel.compare_button.isVisibleTo(panel)  # not derived: no flip
+        assert not panel.compare_button.isEnabled()  # not derived: no flip
         assert win.explorer.select("asset", "v_anaconda_canon")
-        assert panel.compare_button.isVisibleTo(panel)
-        assert "v_anaconda" in panel.compare_button.text()
+        assert panel.compare_button.isEnabled()
+        assert "v_anaconda" in panel.compare_button.toolTip()
         names = [panel.sequence_box.itemText(i) for i in range(panel.sequence_box.count())]
         reload = next(i for i, n in enumerate(names) if "reload" in n)
         panel.sequence_box.setCurrentIndex(reload)
@@ -241,5 +241,35 @@ def test_before_after_keeps_camera_pose_and_frame(app, tmp_path: Path) -> None:
         win._select_asset("v_anaconda_canon")  # e.g. after a re-run: view kept
         assert panel.viewport.state.camera.distance == 12.5
         assert panel.sequence_box.currentIndex() == reload
+    finally:
+        win.close()
+
+
+def test_switching_assets_never_resizes_the_docks(app, tmp_path: Path) -> None:
+    """The viewport's control rows (bodygroup pickers, the Before button)
+    must not change the central widget's minimum width: that squeezed the
+    Explorer/Inspector on every pick."""
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QDockWidget
+
+    from valve_qc_merger.studio.main_window import MainWindow
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(_ANACONDA)
+    project.derive_asset("v_anaconda", "canon", name="v_anaconda_with_a_long_name_canon")
+    win = MainWindow(QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    try:
+        win.set_project(project)
+        win.resize(1200, 800)
+        win.show()
+        app.processEvents()
+        docks = [d for d in win.findChildren(QDockWidget)]
+
+        def sizes() -> list[int]:
+            app.processEvents()
+            return [win.viewport.width()] + [d.width() for d in docks] + [win.width()]
+        start = sizes()
+        for name in ("v_anaconda", "v_anaconda_with_a_long_name_canon", "v_anaconda"):
+            assert win.explorer.select("asset", name)
+            assert sizes() == start, name
     finally:
         win.close()
