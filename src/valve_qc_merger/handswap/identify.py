@@ -110,7 +110,8 @@ def mesh_bone_weights(smd: Smd) -> dict[str, float]:
 
 
 def _finger_chains_of(skel: OrigSkeleton, bone: str, weighted: set[str],
-                      total_weight: dict[str, float] | None = None
+                      total_weight: dict[str, float] | None = None,
+                      weights_by_mesh: dict[str, dict[str, float]] | None = None
                       ) -> list[list[str]]:
     """Chains of length>=2 hanging off `bone` that look like FINGERS.
 
@@ -155,6 +156,20 @@ def _finger_chains_of(skel: OrigSkeleton, bone: str, weighted: set[str],
     med_w = max(wts[len(wts) // 2], 1e-6)
     kept = [c for c in chains
             if extent(c) <= 2.5 * med_e and weight(c) <= 8 * med_w]
+    if len(kept) > 5 and weights_by_mesh:
+        # a weapon part can hang off the wrist like a finger and sit closer
+        # than a real finger (giantknife: the blade root beat the MIDDLE
+        # finger on compactness). Fingers are skinned by the hand mesh(es):
+        # keep the chains skinned by the set of meshes most chains share
+        # (a set: male and female hands weight a finger equally).
+        def meshes_of(ch):
+            return frozenset(m for m, w in weights_by_mesh.items()
+                             if sum(w.get(b, 0.0) for b in ch) > 1e-4)
+        sets = [meshes_of(c) for c in kept]
+        hand_set = max(set(sets), key=sets.count)
+        same = [c for c, m in zip(kept, sets, strict=True) if m == hand_set]
+        if len(same) >= 4:
+            kept = same
     if len(kept) > 5:  # still too many: the 5 most compact win
         kept.sort(key=extent)
         kept = kept[:5]
@@ -191,7 +206,8 @@ def find_hands(skel: OrigSkeleton, refs: dict[str, Smd],
     fans = []
     for min_chains in (4, 3):
         for b in skel.names:
-            chains = _finger_chains_of(skel, b, weighted, total_weight)
+            chains = _finger_chains_of(skel, b, weighted, total_weight,
+                                       weights_by_mesh)
             if len(chains) >= min_chains and plausible(b, chains):
                 fans.append((b, chains))
         if fans:

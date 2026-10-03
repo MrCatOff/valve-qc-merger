@@ -140,3 +140,49 @@ def test_weapon_fan_under_a_named_wrist_does_not_evict_the_hand() -> None:
     assert sorted(h.wrist for h in hands) == ["Bone_Lefthand", "Bone_Righthand"]
     assert {h.wrist: h.side for h in hands} == {"Bone_Lefthand": "left",
                                                  "Bone_Righthand": "right"}
+
+
+def test_weapon_chain_off_the_wrist_does_not_evict_a_finger() -> None:
+    """giantknife: the blade hangs off the wrist like a sixth 'finger' and
+    is MORE compact than the middle finger — the chains skinned by the hand
+    meshes win, the weapon chain goes."""
+    import numpy as np
+
+    from valve_qc_merger.handswap.identify import _finger_chains_of
+
+    class Skel:
+        def __init__(self) -> None:
+            self.children = {"wrist": ["thumb0", "index0", "middle0", "ring0", "pinky0",
+                                       "blade0"]}
+            self.bind_world = {"wrist": np.eye(4)}
+            spans = {"thumb": 3.7, "index": 5.3, "middle": 5.7, "ring": 5.4,
+                     "pinky": 4.8, "blade": 5.0}
+            for name, span in spans.items():
+                self.children[f"{name}0"] = [f"{name}1"]
+                self.children[f"{name}1"] = [f"{name}2"]
+                for i in range(3):
+                    m = np.eye(4)
+                    m[0, 3] = span * (i + 1) / 3
+                    self.bind_world[f"{name}{i}"] = m
+
+        def subtree(self, bone: str) -> set[str]:
+            out, stack = set(), [bone]
+            while stack:
+                b = stack.pop()
+                out.add(b)
+                stack.extend(self.children.get(b, []))
+            return out
+
+    skel = Skel()
+    fingers = [f"{n}{i}" for n in ("thumb", "index", "middle", "ring", "pinky")
+               for i in range(3)]
+    hand = {b: 100.0 for b in fingers}
+    weights = {"hand_male": hand, "hand_female": dict(hand),
+               "weapon": {"blade0": 900.0, "blade1": 900.0, "blade2": 900.0}}
+    weighted = {b for w in weights.values() for b in w}
+    total = {b: sum(w.get(b, 0.0) for w in weights.values()) for b in weighted}
+    chains = _finger_chains_of(skel, "wrist", weighted, total, weights)
+    assert sorted(c[0] for c in chains) == ["index0", "middle0", "pinky0", "ring0", "thumb0"]
+    # without the mesh information the old compactness rule drops the middle finger
+    legacy = _finger_chains_of(skel, "wrist", weighted, total)
+    assert "middle0" not in [c[0] for c in legacy]
