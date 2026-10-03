@@ -171,6 +171,28 @@ geometric path below runs on a size mismatch, i.e. under `--force`.
    space-free 8-bit BMPs (spaces and missing `.bmp` extensions are fixed
    automatically, in both the SMD and the staged file).
 
+## Measuring it: the round-trip benchmark
+
+`tools/retarget_bench.py <corpus> --out <dir>` turns "looks better" into a
+number. Every *native* view model in the corpus — one already wearing our
+exact hands, the CSO 2009 set — is retargeted two ways and compared with the
+original frame by frame:
+
+- **identity**: native → ours directly. Nothing needs to change, so this is
+  the engine's own floor (rig differences, finger-fit side effects).
+- **round trip**: native → foreign hands → ours. The foreign hands are built
+  from a donor weapon by `handswap/foreign.py` (default: the corpus'
+  classic `v_deagle`, i.e. the old small Valve hands; a rig with a forearm
+  only gets its upper arm synthesised on the forearm's line, no mesh on it).
+
+The error is the distance between the same hand segment in both models: the
+centroid of the hand-mesh vertices skinned to each paired bone (pairs as the
+engine pairs them), every frame of every sequence; `tips` is the distal
+segments only. `report.md` ranks weapons by round-trip error; `report.json`
+has every sequence. First numbers (v_p228): identity 0.22 u mean, round trip
+0.38 u (tips 0.36 u), nearly constant over the sequences — the error is the
+static grip, not the motion.
+
 ## Troubleshooting
 
 - **"thumb signals disagree"** — the rig's finger geometry is ambiguous; check
