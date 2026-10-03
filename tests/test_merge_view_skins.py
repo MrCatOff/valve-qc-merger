@@ -66,8 +66,9 @@ def test_skin_rows_become_weapon_entries(models: Path, tmp_path: Path) -> None:
     assert base["pev_body"] != gold["pev_body"]
     anims = {k: v for k, v in base.items() if k.startswith("anim_")}
     assert anims and anims == {k: v for k, v in gold.items() if k.startswith("anim_")}
-    gold_mesh = next((out / "v_anaconda_skin1").glob("*.smd"))
-    materials = {t.material for t in parse_smd_file(gold_mesh).triangles}
+    # the mesh SMDs (the folder also holds animation SMDs, glob order varies)
+    materials = {t.material for path in (out / "v_anaconda_skin1").glob("*.smd")
+                 for t in parse_smd_file(path).triangles}
     assert any("gold" in m.lower() for m in materials)
     assert not any("anaconda_512" in m.lower() for m in materials)
     assert all(g.passed for g in result.gates), [g for g in result.gates if not g.passed]

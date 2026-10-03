@@ -191,7 +191,7 @@ def test_explorer_paints_connectors(window, project: Project) -> None:
     window.set_project(project)
     window.explorer.resize(300, 400)
     image = window.explorer.grab().toImage()  # drawBranches runs for every row
-    assert not image.isNull() and image.width() == 300
+    assert not image.isNull() and image.width() == window.explorer.width()
 
 
 def _visible(win) -> list[str]:

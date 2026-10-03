@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPlainTextEdit,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -57,6 +58,7 @@ STATUS_HINTS = {"problem": "failed or rejected in its last build",
                 "stale": "its source changed: re-run",
                 "ours": "on our hands", "own": "own hands (not retargeted)"}
 _ICONS: dict[str, QIcon] = {}
+
 
 # Explorer quick filters: key -> (title, test(status, project, asset name))
 FILTERS = {
@@ -585,6 +587,13 @@ class Inspector(QTabWidget):
         self.warnings_label = QLabel("")
         self.warnings_label.setWordWrap(True)
         self.warnings_label.setStyleSheet("color: #c58a00")
+        # long names/paths (Windows paths cannot wrap at '\\') must never set
+        # the dock's minimum width: the full text is in the tooltip
+        for label in (self.name_label, self.category_label, self.status_label,
+                      self.path_label, self.source_label, self.stats_label,
+                      self.warnings_label):
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            label.setWordWrap(True)
         form.addRow("Name", self.name_label)
         form.addRow("Kind", self.kind_box)
         form.addRow("Category", self.category_label)
@@ -658,6 +667,7 @@ class Inspector(QTabWidget):
         self.status_label.setText("—")
         self.kind_box.setCurrentIndex(ASSET_KINDS.index(asset.kind))
         self.path_label.setText(str(project.root / asset.path))
+        self.path_label.setToolTip(self.path_label.text())
         derived = asset.derived
         if derived:
             options = ", ".join(f"{k}={v}" for k, v in derived.get("options", {}).items())
@@ -666,6 +676,7 @@ class Inspector(QTabWidget):
                 + (f" ({options})" if options else ""))
         else:
             self.source_label.setText(asset.source or "—")
+            self.source_label.setToolTip(asset.source or "")
         self.notes.setText(asset.notes)
         if info is None:
             self.stats_label.setText("loading…")
