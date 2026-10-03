@@ -116,6 +116,11 @@ class MainWindow(QMainWindow):
         bones.delete_requested.connect(self.delete_bone)
         bones.undo_requested.connect(self.undo_asset_edit)
         self.inspector.attachments_page.save_requested.connect(self.save_attachments)
+        self.inspector.sequence_edit_requested.connect(self.edit_sequence)
+        self.inspector.render_mode_edit_requested.connect(self.edit_render_mode)
+        self.inspector.qc_page.save_requested.connect(self.save_qc)
+        self.inspector.skins_page.skin_selected.connect(self.viewport.set_skin)
+        self.viewport.skin_changed.connect(self._skin_shown)
         self.jobs.started.connect(self._job_started)
         self.jobs.log.connect(self.log.append_line)
         self.jobs.progress.connect(self._job_progress)
@@ -380,8 +385,14 @@ class MainWindow(QMainWindow):
         directory = project.asset_dir(name)
 
         def work(reporter: Reporter) -> object:
-            project.snapshot_asset(name)
-            result = edit(directory)
+            snapshot = project.snapshot_asset(name)
+            try:
+                result = edit(directory)
+            except Exception:
+                # nothing changed: drop the snapshot, or Undo would be a no-op
+                import shutil
+                shutil.rmtree(snapshot, ignore_errors=True)
+                raise
             for warning in result.warnings:
                 reporter.log(f"  warn: {warning}")
             reporter.log(f"  {name}: {len(result.files)} file(s) rewritten, max pose "
@@ -438,6 +449,53 @@ class MainWindow(QMainWindow):
     def save_attachments(self, specs: list) -> None:
         from valve_qc_merger.project.bones import write_attachments
         self._edit_asset("Save attachments", lambda d: write_attachments(d, specs))
+
+    # -- QC edits ----------------------------------------------------------------
+    def edit_sequence(self, row: int) -> None:
+        from valve_qc_merger.project.qc_edit import parse_blocks, qc_file, set_sequence
+        from valve_qc_merger.studio.qc_tools import SequenceDialog
+        project, name = self.project, self.explorer.current_asset()
+        if project is None or not name or self.jobs.busy:
+            return
+        info = self._info_cache.get(name)
+        if info is None or not 0 <= row < len(info.sequences):
+            return
+        wanted = info.sequences[row].name
+        blocks = parse_blocks(qc_file(project.asset_dir(name)).read_text(encoding="latin-1"))
+        index = next((i for i, b in enumerate(blocks) if b.name == wanted), None)
+        if index is None:
+            return
+        dialog = SequenceDialog(blocks[index], info.sequences[row].frames or None, self)
+        if dialog.exec() != SequenceDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        self._edit_asset("Edit sequence", lambda d: set_sequence(d, index, **values))
+
+    def edit_render_mode(self, texture: str) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        from valve_qc_merger.project.qc_edit import RENDER_MODES, set_render_mode
+        info = self._info_cache.get(self.explorer.current_asset())
+        current = next((t.render_mode for t in info.textures if t.name == texture), "") \
+            if info is not None else ""
+        choices = ["normal"] + list(RENDER_MODES)
+        mode, ok = QInputDialog.getItem(
+            self, "Render mode", f"{texture}:", choices,
+            choices.index(current) if current in choices else 0, False)
+        if ok and mode != (current or "normal"):
+            self._edit_asset("Render mode", lambda d: set_render_mode(
+                d, texture, None if mode == "normal" else mode))
+
+    def save_qc(self, text: str) -> None:
+        from valve_qc_merger.project.qc_edit import write_qc
+        self._edit_asset("Save QC", lambda d: write_qc(d, text))
+
+    def _skin_shown(self, index: int) -> None:
+        table = self.inspector.skins_page.table
+        if table.currentRow() != index and index < table.rowCount():
+            table.blockSignals(True)
+            table.selectRow(index)
+            table.blockSignals(False)
 
     def undo_asset_edit(self) -> None:
         name = self.explorer.current_asset()
@@ -856,8 +914,17 @@ class MainWindow(QMainWindow):
         source = asset.derived["from"] if asset.derived else None
         # the same model again (re-run, edit) or its own new version: keep the view
         keep = bool(self._shown_asset) and self._shown_asset in (name, source)
+        if self.inspector.qc_page.dirty and self._shown_asset not in ("", name):
+            self.log.append_line(f"{self._shown_asset}: unsaved QC edits discarded")
         self._shown_asset = name
         self.inspector.show_asset(self.project, info, name)
+        self.inspector.skins_page.set_skins(scene.skins)
+        try:
+            from valve_qc_merger.project.qc_edit import qc_file
+            self.inspector.qc_page.set_text(
+                qc_file(self.project.asset_dir(name)).read_text(encoding="latin-1"))
+        except (OSError, ValueError):
+            self.inspector.qc_page.set_text(None)
         self.inspector.show_status(self.explorer.statuses.get(name))
         self.viewport.set_compare(source if source in self.project.assets else None)
         self.viewport.set_scene(scene, keep_view=keep)

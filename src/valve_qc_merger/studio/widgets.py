@@ -550,6 +550,8 @@ class Inspector(QTabWidget):
 
     kind_changed = Signal(str, str)  # asset, kind
     notes_changed = Signal(str, str)
+    sequence_edit_requested = Signal(int)  # sequence position in the QC
+    render_mode_edit_requested = Signal(str)  # texture name
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -606,7 +608,12 @@ class Inspector(QTabWidget):
         tex_layout.addWidget(self.texture_preview, 1)
         self.addTab(textures, "Textures")
         self.sequences = _table(["#", "Sequence", "FPS", "Frames", "Loop", "Events"])
+        self.sequences.setToolTip("double-click: edit name, fps, loop, activity and events")
+        self.sequences.cellDoubleClicked.connect(
+            lambda row, _c: self._asset and self.sequence_edit_requested.emit(row))
         self.addTab(self.sequences, "Sequences")
+        self.textures.setToolTip("double-click the render mode to change it")
+        self.textures.cellDoubleClicked.connect(self._texture_double_clicked)
         from valve_qc_merger.studio.bone_tools import AttachmentsPage, BonesPage
         self.bones_page = BonesPage()
         self.bones = self.bones_page.tree
@@ -614,6 +621,11 @@ class Inspector(QTabWidget):
         self.attachments_page = AttachmentsPage()
         self.attachments = self.attachments_page.table
         self.addTab(self.attachments_page, "Attachments")
+        from valve_qc_merger.studio.qc_tools import QcPage, SkinsPage
+        self.skins_page = SkinsPage()
+        self.addTab(self.skins_page, "Skins")
+        self.qc_page = QcPage()
+        self.addTab(self.qc_page, "QC")
         self._info: ModelInfo | None = None
         self.show_asset(None, None)
 
@@ -673,6 +685,11 @@ class Inspector(QTabWidget):
         self.texture_preview.set_image(None)
         if info.textures:
             self.textures.setCurrentCell(0, 0)
+
+    def _texture_double_clicked(self, row: int, _column: int) -> None:
+        item = self.textures.item(row, 0)
+        if self._asset and item is not None:
+            self.render_mode_edit_requested.emit(item.text())
 
     def show_status(self, status: object) -> None:
         """The asset's AssetStatus (from the Explorer's last refresh)."""

@@ -13,11 +13,12 @@ SMD space (studiomdl's +90 deg turn makes that +X in game).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
 
+from valve_qc_merger.merge_player.merger import parse_texturegroups
 from valve_qc_merger.merge_view.discovery import ModelInput, load_model
 from valve_qc_merger.models.smd import Smd
 from valve_qc_merger.studio.model_info import _entries_with_blanks
@@ -110,6 +111,31 @@ class ModelScene:
     textures: dict[str, Path | None]  # material -> file
     render_modes: dict[str, str]
     attachments: list[tuple[int, int, np.ndarray]] = field(default_factory=list)
+    # $texturegroup rows (row 0 = the textures the meshes use); [] = no skins
+    skins: list[list[str]] = field(default_factory=list)
+
+    def with_skin(self, index: int) -> ModelScene:
+        """This scene drawn with skin row ``index``: every material of row 0
+        swapped for the same column of that row (0 or out of range: self)."""
+        if index <= 0 or index >= len(self.skins):
+            return self
+        mapping = {old.lower(): new for old, new in zip(self.skins[0], self.skins[index],
+                                                         strict=False)}
+        textures = dict(self.textures)
+        batches = []
+        for batch in self.batches:
+            new = mapping.get(batch.material.lower())
+            if new is None:
+                batches.append(batch)
+                continue
+            if new not in textures:
+                textures[new] = next(
+                    (p for p in self.directory.rglob("*")
+                     if p.is_file() and p.name.lower() == new.lower()), None)
+            batches.append(replace(batch, material=new,
+                                   render_mode=self.render_modes.get(new.lower(),
+                                                                     batch.render_mode)))
+        return replace(self, batches=batches, textures=textures)
 
     # -- posing ------------------------------------------------------------
     def local_pose(self, sequence: int | None, frame: float) -> tuple[np.ndarray, np.ndarray]:
@@ -234,6 +260,7 @@ def build_scene(directory: Path, model: ModelInput | None = None) -> ModelScene:
         order=order, bind_positions=bind_pos, bind_quats=bind_quat,
         groups=_entries_with_blanks(model.qc_text, model.bodygroups), batches=[],
         sequences=[], textures={}, render_modes=modes,
+        skins=parse_texturegroups(model.qc_text),
     )
 
     for stem, mesh in model.meshes.items():

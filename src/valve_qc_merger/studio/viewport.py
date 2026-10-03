@@ -170,6 +170,7 @@ class ViewportPanel(QWidget):
 
     frame_changed = Signal(float)
     compare_toggled = Signal(bool)  # True: show the source instead of the asset
+    skin_changed = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -254,6 +255,25 @@ class ViewportPanel(QWidget):
                                         self.viewport.update()))
         return box
 
+    def set_skin(self, index: int) -> None:
+        """Draw skin row ``index`` of the loaded model (same pose and view)."""
+        base = getattr(self, "_base_scene", None)
+        if base is None:
+            return
+        index = index if 0 <= index < max(len(base.skins), 1) else 0
+        viewport, state = self.viewport, self.viewport.state
+        keep = (state.sequence, state.frame, dict(state.bodygroups), state.highlight_bone)
+        viewport.set_scene(base.with_skin(index), keep_view=True)
+        state.sequence, state.frame, state.bodygroups, state.highlight_bone = keep
+        self._skin = index
+        box = self.group_boxes.get("\x00skin")
+        if box is not None and box.currentIndex() != index:
+            box.blockSignals(True)
+            box.setCurrentIndex(index)
+            box.blockSignals(False)
+        viewport.update()
+        self.skin_changed.emit(index)
+
     def set_compare(self, source: str | None) -> None:
         """Offer the before/after flip against ``source`` (None: hide it)."""
         self.compare_button.blockSignals(True)
@@ -279,6 +299,8 @@ class ViewportPanel(QWidget):
         groups = {g: self.group_boxes[g].currentText() for g in self.group_boxes} \
             if keep_view else {}
         self.play_button.setChecked(False)
+        self._base_scene = scene
+        self._skin = 0
         self.viewport.set_scene(scene, keep_view=keep_view and scene is not None)
         self.sequence_box.blockSignals(True)
         self.sequence_box.clear()
@@ -304,6 +326,15 @@ class ViewportPanel(QWidget):
                 self.groups_row.addWidget(label)
                 self.groups_row.addWidget(box)
                 self.group_boxes[group] = box
+        if scene is not None and len(scene.skins) > 1:
+            label = QLabel("skin")
+            box = QComboBox()
+            for index, row in enumerate(scene.skins):
+                box.addItem(f"{'base' if index == 0 else index}: {row[0] if row else ''}")
+            box.currentIndexChanged.connect(self.set_skin)
+            self.groups_row.addWidget(label)
+            self.groups_row.addWidget(box)
+            self.group_boxes["\x00skin"] = box
         if not self.group_boxes:  # keep the row (a stable viewport height)
             hint = QLabel("no switchable bodygroups" if scene is not None else "")
             hint.setEnabled(False)

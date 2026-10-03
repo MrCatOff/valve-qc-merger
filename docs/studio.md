@@ -376,6 +376,25 @@ name-blind comparison backs merge-v's shared-hands check and the build's
 "already on our hands" skip. Staleness compares the source's newest QC/SMD
 edit with the time the derived asset was made (`derived.at`).
 
+## QC editing
+
+All in the Inspector, on the selected asset; every edit snapshots it first
+(Bones ▸ Undo restores; a failed edit leaves no snapshot behind), and the
+Qt-free logic lives in `valve_qc_merger.project.qc_edit`:
+
+- **Sequences** — double-click a row: name (≤ 31 characters, unique), fps (or
+  none), loop, `ACT_*` activity, and the **events** table (frame, event,
+  option; 5001/5011/5021/5031 = muzzle flash on attachment 0–3, 5004 = sound).
+  The block is rewritten in braced form; its animation paths and any option
+  the dialog doesn't manage (`blend`, `origin`, `LX` …) are kept verbatim.
+- **Textures** — double-click a texture: render mode normal / masked /
+  additive / fullbright / flatshade / chrome (`$texrendermode`).
+- **Skins** — the `$texturegroup` rows; picking one retextures the viewport
+  (also the *skin* picker in the viewport's bodygroup row).
+- **QC** — the raw text with highlighting; **Save QC** writes it only if the
+  model still loads and references no missing file (otherwise the old text
+  is put back and the reason shown); **Revert** drops unsaved edits.
+
 ## Packaging (M6)
 
 ```bat
