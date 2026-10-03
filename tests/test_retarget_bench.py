@@ -91,3 +91,39 @@ def test_skin_centroids_on_both_hands(native: Path) -> None:
             assert chain[-1] in centroids
             # a fingertip's flesh sits near its bone, not at the origin
             assert np.linalg.norm(centroids[chain[-1]] - setup[chain[-1]][:3, 3]) < 3.0
+
+
+def test_grip_offset_never_changes_the_finger_pairing() -> None:
+    """A palm offset moves the chosen seat; it must not steer the pairing
+    search (an old v_deagle tuning offset picked the wrong thumb)."""
+    from valve_qc_merger.handswap import build as buildmod
+    from valve_qc_merger.handswap.retarget import build_plan
+    model = buildmod.load_weapon(str(_DONOR), None, log=lambda *a: None)
+    setup = buildmod.anim_world_frames(model.anims[model.qc.sequences[0]["smd"]],
+                                       model.skel)[0]
+    hands = assetmod.load()
+    plain = build_plan(hands, model.skel, model.hands, setup, log=lambda *a: None)
+    moved = build_plan(hands, model.skel, model.hands, setup, log=lambda *a: None,
+                       grip_offsets={"left": [0.0, 0.0, -0.6], "right": [0.3, 0.0, 0.0]})
+    for a, b in zip(plain.sides, moved.sides, strict=True):
+        assert a.pairs == b.pairs
+        shift = np.linalg.norm(a.desired_setup[:3, 3] - b.desired_setup[:3, 3])
+        assert 0.25 < shift < 0.7  # the offset itself still applies
+
+
+def test_wrist_kink_is_kept_in_the_native_range() -> None:
+    from valve_qc_merger.handswap.retarget import WRIST_NATIVE, _natural_arm, _palm_angles
+    palm = np.eye(4)  # X fingers, Y across, Z normal
+    rest = (0.0, 0.0)
+    for side, ((p_med, p_lo, p_hi), (y_med, y_lo, y_hi)) in WRIST_NATIVE.items():
+        # an arm bent 70 deg up and 50 deg sideways comes back into range
+        steep = -np.array([1.0, 0.0, 0.0]) + np.tan(np.radians(50)) * np.array([0, 1.0, 0]) \
+            + np.tan(np.radians(70)) * np.array([0, 0, 1.0])
+        out = _natural_arm(palm, steep / np.linalg.norm(steep), rest, side)
+        pitch, yaw = _palm_angles(palm, out)
+        assert p_lo - 1e-6 <= pitch <= p_hi + 1e-6 and y_lo - 1e-6 <= yaw <= y_hi + 1e-6
+        # a wrist already at the native median stays where it is
+        med = -np.array([1.0, 0, 0]) + np.tan(np.radians(y_med)) * np.array([0, 1.0, 0]) \
+            + np.tan(np.radians(p_med)) * np.array([0, 0, 1.0])
+        med /= np.linalg.norm(med)
+        assert np.allclose(_natural_arm(palm, med, rest, side), med, atol=1e-9)

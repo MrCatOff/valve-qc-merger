@@ -39,6 +39,47 @@ from .math3d import (axis_angle, compose, inv_rigid, normalized,
 
 FALLBACK_ARM_DIR = np.array([0.0, 8.0, -6.0])  # behind and below the view
 
+# Wrist kink of OUR hand mesh as CSO's own animators pose it: the forearm
+# direction in the palm frame, relative to the rest pose, (pitch, yaw) in
+# degrees — median and p2..p98, measured on the native CSO 2009 weapons. A
+# foreign animation's wrist bend was made for ITS rig's hinge; copied
+# verbatim onto our mesh it overbends ("---^--" at the wrist). Each frame
+# the bend is pulled toward the native median (WRIST_KEEP of the excess
+# survives) and clamped to the native range; the hand and grip stay put, the
+# forearm (elbow) moves.
+WRIST_KEEP = 0.5
+NATURAL_WRIST = True
+WRIST_NATIVE = {  # side: ((pitch median, lo, hi), (yaw median, lo, hi))
+    "left": ((-1.1, -32.3, 21.9), (-0.4, -28.6, 26.3)),
+    "right": ((12.3, -46.5, 38.2), (-6.3, -29.9, 51.1)),
+}
+
+
+def _palm_angles(palm: np.ndarray, back: np.ndarray) -> tuple[float, float]:
+    """(pitch, yaw) of the wrist->elbow direction in a palm frame (X fingers,
+    Y across toward the thumb, Z normal); a straight arm is (0, 0)."""
+    x, y, z = palm[:3, 0], palm[:3, 1], palm[:3, 2]
+    ahead = -float(back @ x)
+    return (float(np.degrees(np.arctan2(back @ z, ahead))),
+            float(np.degrees(np.arctan2(back @ y, ahead))))
+
+
+def _natural_arm(palm: np.ndarray, back: np.ndarray, rest: tuple[float, float],
+                 side: str) -> np.ndarray:
+    """``back`` (unit wrist->elbow) with its kink pulled into the native range."""
+    native = WRIST_NATIVE.get(side)
+    if native is None:
+        return back
+    pitch, yaw = _palm_angles(palm, back)
+    new = []
+    for value, rest_value, (median, lo, hi) in zip((pitch, yaw), rest, native, strict=True):
+        rel = value - rest_value
+        rel = median + WRIST_KEEP * (rel - median)
+        new.append(rest_value + min(max(rel, lo), hi))
+    x, y, z = palm[:3, 0], palm[:3, 1], palm[:3, 2]
+    out = -x + np.tan(np.radians(new[1])) * y + np.tan(np.radians(new[0])) * z
+    return out / np.linalg.norm(out)
+
 
 @dataclass
 class SidePlan:
@@ -105,11 +146,11 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
     every other part of the grip)."""
     rig = asset.sides[hand.side]
     l_cso = rig.palm_local
+    # the finger pairing is searched on the PLAIN seat; a grip offset only
+    # moves the chosen seat afterwards (applied before the search, an old
+    # tuning offset on v_deagle picked the wrong thumb and crossed every
+    # finger of that hand)
     l_cso_inv = inv_rigid(l_cso)
-    if grip_offset is not None:
-        shift = np.eye(4)
-        shift[:3, 3] = grip_offset
-        l_cso_inv = shift @ l_cso_inv
 
     cso_clouds = [_chain_cloud_cso(asset, rig, ch) for ch in rig.chains]
     old_clouds = [_chain_cloud_old(skel, setup_world, hand, ch)
@@ -162,6 +203,10 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
                     best = (total, thumb_i, assign, desired, a_old, flip)
 
     total, thumb_i, assign, desired, a_old, _flip = best
+    if grip_offset is not None:
+        shift = np.eye(4)
+        shift[:3, 3] = grip_offset
+        desired = a_old @ shift @ l_cso_inv
     if weapon_offset is not None:
         desired = desired.copy()
         desired[:3, 3] -= np.asarray(weapon_offset, dtype=float)
@@ -450,6 +495,11 @@ def solve_frame(plan: RetargetPlan,
                 else FALLBACK_ARM_DIR.copy()
         d = normalized(d)
         sp._prev_dir = d
+        if NATURAL_WRIST:
+            palm_now = hand_w @ rig.palm_local
+            palm_rest = rig.palm_world
+            back_rest = normalized(asset.head(rig.arm[1]) - asset.head(rig.wrist))
+            d = _natural_arm(palm_now, d, _palm_angles(palm_rest, back_rest), sp.side)
 
         upper, fore0, fore1 = rig.arm  # UpperArm, Arm0, Arm1
         s_rest = asset.head(upper)

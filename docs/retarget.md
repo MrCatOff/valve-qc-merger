@@ -211,6 +211,23 @@ identity seat is already within 0.03 u; on foreign hands it turned the palm
 5° and got worse). The error is nearly constant across sequences (median
 spread 0.016 u): what remains is the static grip.
 
+## Natural wrist and the grip offset
+
+**Wrist.** A foreign animation's wrist bend was made for its own rig's hinge;
+copied onto our mesh it overbends — the support hand's wrist peaks above the
+arm (`---^--`). Measured on the native CSO weapons (the same mesh, posed by
+CSO's animators), the forearm direction in the palm frame stays within
+pitch −32…+22° / −46…+38° and yaw −29…+26° / −30…+51° (left / right, p2…p98,
+relative to rest). Each frame the bend is pulled halfway toward the native
+median and clamped to that range (`WRIST_NATIVE`, `WRIST_KEEP` in
+`handswap/retarget.py`); only the forearm (elbow) moves — hand and grip stay.
+On the example weapons the support-hand median went +35° → +14°.
+
+**Grip offset.** `grip_offset` (dialog, `--grip-offset`, `grip_tuning.json`)
+moves the chosen palm seat; it no longer takes part in the finger-pairing
+search — applied before it, the old `v_deagle` tuning offset made the engine
+pick the wrong thumb and cross every finger of that hand.
+
 ## Troubleshooting
 
 - **"thumb signals disagree"** — the rig's finger geometry is ambiguous; check
