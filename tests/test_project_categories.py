@@ -192,3 +192,50 @@ def test_explorer_paints_connectors(window, project: Project) -> None:
     window.explorer.resize(300, 400)
     image = window.explorer.grab().toImage()  # drawBranches runs for every row
     assert not image.isNull() and image.width() == 300
+
+
+def _visible(win) -> list[str]:
+    lines: list[str] = []
+
+    def walk(item, depth: int) -> None:
+        if item.isHidden():
+            return
+        lines.append("  " * depth + item.text(0))
+        for i in range(item.childCount()):
+            walk(item.child(i), depth + 1)
+    for i in range(win.explorer.topLevelItemCount()):
+        walk(win.explorer.topLevelItem(i), 0)
+    return lines
+
+
+def test_explorer_filter(window, project: Project) -> None:
+    project.set_category(["v_deagle"], "Pistols")
+    project.add_build(Build("deagle_pack", "merge-v", category="Pistols"))
+    project.assets["v_mp5_hands"] = Asset(name="v_mp5_hands", kind="v",
+                                          path="assets/v/v_mp5_hands",
+                                          derived={"from": "v_mp5", "mode": "hands",
+                                                   "options": {}})
+    window.set_project(project)
+    panel = window.explorer_panel
+    panel.search.setText("DEAGLE")  # case-insensitive, builds too
+    shown = _visible(window)
+    assert "      v_deagle" in shown and "      w_deagle" in shown
+    assert not any("mp5" in line for line in shown)
+    assert not any("Uncategorized" in line for line in shown)  # nothing inside
+    assert "  deagle_pack  ·  merge-v" in shown
+    panel.search.setText("hands")  # a derived child keeps its parent visible
+    shown = _visible(window)
+    assert "      v_mp5" in shown and "        v_mp5_hands  ·  hands" in shown
+    assert not any("v_m4a1" in line for line in shown)
+    panel.search.clear()
+    panel.status_box.setCurrentIndex(panel.status_box.findData("derived"))
+    shown = _visible(window)
+    assert any("v_mp5_hands" in line for line in shown)
+    assert not any("deagle_pack" in line for line in shown)  # builds hide on status
+    window.explorer.show_project(project)  # a refresh keeps the filter
+    assert not any("w_deagle" in line for line in _visible(window))
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    panel.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                  Qt.KeyboardModifier.NoModifier))
+    assert not window.explorer.filtering and "      w_deagle" in _visible(window)

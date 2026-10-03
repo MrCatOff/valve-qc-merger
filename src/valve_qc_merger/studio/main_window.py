@@ -30,6 +30,7 @@ from valve_qc_merger.studio.viewport import ViewportPanel
 from valve_qc_merger.studio.widgets import (
     KIND_TITLES,
     Explorer,
+    ExplorerPanel,
     Inspector,
     LogPanel,
     project_title,
@@ -58,7 +59,8 @@ class MainWindow(QMainWindow):
         self.explorer = Explorer()
         self.inspector = Inspector()
         self.log = LogPanel()
-        self._dock("Explorer", self.explorer, Qt.DockWidgetArea.LeftDockWidgetArea, 300)
+        self.explorer_panel = ExplorerPanel(self.explorer)
+        self._dock("Explorer", self.explorer_panel, Qt.DockWidgetArea.LeftDockWidgetArea, 300)
         self.build_panel = BuildPanel()
         self.right = QStackedWidget()
         self.right.addWidget(self.inspector)
@@ -158,6 +160,7 @@ class MainWindow(QMainWindow):
         self.act_rederive = asset_menu.addAction(
             "Re-run retarget", lambda: self.rederive_asset(self.explorer.current_asset(), False),
             QKeySequence("Ctrl+Shift+R"))
+        asset_menu.addAction("Find…", self._focus_filter, QKeySequence.StandardKey.Find)
         asset_menu.addSeparator()
         self.act_new_category = asset_menu.addAction("New category…", self.new_category)
 
@@ -436,6 +439,10 @@ class MainWindow(QMainWindow):
             self._select_asset(name)
 
     # -- categories ----------------------------------------------------------
+    def _focus_filter(self) -> None:
+        self.explorer_panel.search.setFocus()
+        self.explorer_panel.search.selectAll()
+
     def _ask_category_name(self, title: str, text: str = "") -> str | None:
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, title, "Category name:", text=text)

@@ -321,6 +321,14 @@ is rejected. A derived asset goes into
 builds like any other; note merge-v names manifest entries after the asset
 (`v_janus1_hands`), so name it as the game should see it if that matters.
 
+## Filter
+
+Above the Explorer: a text filter (Ctrl+F; case-insensitive part of the
+name, builds included) and a status filter — own hands, on our hands, stale,
+problems in builds, in no build, made by Retarget. Matching assets keep their
+parents visible (a derived asset shows under its source); empty categories
+and kind groups hide; Esc clears both. The filter survives refreshes.
+
 ## Asset status
 
 Every asset in the Explorer carries a dot (details in its tooltip and in

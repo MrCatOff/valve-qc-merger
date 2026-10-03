@@ -58,6 +58,17 @@ STATUS_HINTS = {"problem": "failed or rejected in its last build",
                 "ours": "on our hands", "own": "own hands (not retargeted)"}
 _ICONS: dict[str, QIcon] = {}
 
+# Explorer quick filters: key -> (title, test(status, project, asset name))
+FILTERS = {
+    "own": ("Own hands (not retargeted)", lambda st, _p, _n: st is not None and st.hands == "own"),
+    "ours": ("On our hands", lambda st, _p, _n: st is not None and st.hands == "ours"),
+    "stale": ("Stale (source changed)", lambda st, _p, _n: st is not None and st.stale),
+    "problem": ("Problems in builds", lambda st, _p, _n: st is not None and bool(st.problems)),
+    "orphan": ("In no build", lambda st, _p, _n: st is not None and not st.builds),
+    "derived": ("Made by Retarget",
+                lambda _st, p, n: p is not None and bool(p.assets[n].derived)),
+}
+
 
 def status_icon(level: str) -> QIcon:
     """A small filled dot in the level's colour (empty icon for "plain")."""
@@ -78,6 +89,39 @@ def status_icon(level: str) -> QIcon:
 # --------------------------------------------------------------------------- #
 # Explorer
 # --------------------------------------------------------------------------- #
+class ExplorerPanel(QWidget):
+    """The Explorer tree under a filter row (text + status)."""
+
+    def __init__(self, explorer: Explorer, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.explorer = explorer
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Filter assets and builds (Ctrl+F)")
+        self.search.setClearButtonEnabled(True)
+        self.status_box = QComboBox()
+        self.status_box.addItem("Any status", "")
+        for key, (title, _test) in FILTERS.items():
+            self.status_box.addItem(title, key)
+        self.search.textChanged.connect(self._changed)
+        self.status_box.currentIndexChanged.connect(self._changed)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(self.search)
+        layout.addWidget(self.status_box)
+        layout.addWidget(explorer, 1)
+
+    def _changed(self, *_args: object) -> None:
+        self.explorer.set_filter(self.search.text(), self.status_box.currentData())
+
+    def keyPressEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if event.key() == Qt.Key.Key_Escape and self.explorer.filtering:
+            self.search.clear()
+            self.status_box.setCurrentIndex(0)
+            return
+        super().keyPressEvent(event)
+
+
 class Explorer(QTreeWidget):
     """Project tree: assets grouped by kind, then builds."""
 
@@ -113,6 +157,8 @@ class Explorer(QTreeWidget):
         self.currentItemChanged.connect(self._on_current)
         self._project: Project | None = None
         self.statuses: dict = {}  # asset -> project.status.AssetStatus
+        self._filter_text = ""
+        self._filter_level = ""  # "" or a FILTERS key
 
     def show_project(self, project: Project | None) -> None:
         from valve_qc_merger.project.status import project_status
@@ -146,6 +192,7 @@ class Explorer(QTreeWidget):
             if name == selected_build:
                 self.setCurrentItem(item)
         self.expandAll()
+        self._apply_filter()
 
     # -- tree connectors (├─ └─ │) -------------------------------------------
     def drawBranches(self, painter: QPainter, rect, index) -> None:  # noqa: ANN001, N802
@@ -204,6 +251,45 @@ class Explorer(QTreeWidget):
             painter.setPen(arrow_pen)
             painter.drawPath(arrow)
         painter.restore()
+
+    # -- filter ----------------------------------------------------------------
+    def set_filter(self, text: str = "", level: str = "") -> None:
+        """Show only assets whose name contains ``text`` (case-insensitive)
+        and whose status passes ``level`` (a :data:`FILTERS` key); their
+        parents stay visible. Builds filter by name."""
+        self._filter_text = text.strip().lower()
+        self._filter_level = level
+        self._apply_filter()
+
+    @property
+    def filtering(self) -> bool:
+        return bool(self._filter_text or self._filter_level)
+
+    def _asset_passes(self, name: str) -> bool:
+        if self._filter_text and self._filter_text not in name.lower():
+            return False
+        entry = FILTERS.get(self._filter_level)
+        return entry is None or entry[1](self.statuses.get(name), self._project, name)
+
+    def _apply_filter(self) -> None:
+        def walk(item: QTreeWidgetItem) -> bool:
+            kind = item.data(0, ROLE_KIND)
+            children = [walk(item.child(i)) for i in range(item.childCount())]
+            if kind == "asset":
+                visible = self._asset_passes(str(item.data(0, ROLE_NAME))) or any(children)
+            elif kind == "build":
+                visible = (not self._filter_level and
+                           self._filter_text in str(item.data(0, ROLE_NAME)).lower())
+            elif kind in ("assets", "builds"):
+                visible = True
+            else:  # category / kind group: only if something inside shows
+                visible = any(children) or not self.filtering
+            item.setHidden(not visible)
+            return visible
+        for i in range(self.topLevelItemCount()):
+            walk(self.topLevelItem(i))
+        if self.filtering:
+            self.expandAll()
 
     def _fill_kinds(self, parent: QTreeWidgetItem, project: Project,
                     category: str | None, selected: str) -> None:
