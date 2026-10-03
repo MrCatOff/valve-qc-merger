@@ -67,6 +67,8 @@ categories = ["pistols", "submachines"]   # kept even while empty
 
 [settings]
 studiomdl = "C:/tools/studiomdl.exe"
+game_dir = "C:/Games/Half-Life/cstrike"   # Deploy target
+deploy_after_compile = false
 
 [[assets]]
 name = "v_deagle"
@@ -341,6 +343,17 @@ hands only after a run), folded weapons, and every rejection with its reason
 `builds/<name>/plan/` (removed afterwards; the last run's output stays) and
 records `plan.json`. On the 56-pistol corpus the plan matched the real run
 for every model (part and `pev_body`).
+
+## Deploy
+
+Project ▸ Settings ▸ **Game folder** (the mod folder, e.g. `…/cstrike`).
+**Deploy** (build panel, Explorer ▸ build ▸ Deploy to game, F8) copies the
+build's compiled models — and their `<name>T.mdl` texture files — into
+`models/` (player models: `models/player/<model>/<model>.mdl`; per build:
+Settings ▸ *Deploy to*), plus the manifest renamed `<output name>_models.ini`
+so two builds never overwrite each other's `models.ini`. It lists every file
+first and marks the ones it replaces. With *deploy after every successful
+compile* checked, Compile (and Run and compile) deploys by itself.
 
 ## Asset status
 

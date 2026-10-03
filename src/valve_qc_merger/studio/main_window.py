@@ -88,6 +88,8 @@ class MainWindow(QMainWindow):
         self.viewport.compare_toggled.connect(self._compare)
         self.build_panel.run_requested.connect(self.run_build)
         self.build_panel.plan_requested.connect(self.plan_build)
+        self.build_panel.deploy_requested.connect(self.deploy_build)
+        self.explorer.build_deploy_requested.connect(self.deploy_build)
         self.build_panel.asset_requested.connect(self._reveal_asset)
         self.build_panel.compile_requested.connect(self.compile_build)
         self.build_panel.preview_requested.connect(self.preview_output)
@@ -182,6 +184,9 @@ class MainWindow(QMainWindow):
             "Run and compile selected build",
             lambda: self.run_build(self.explorer.current_build(), then_compile=True),
             QKeySequence("Shift+F5"))
+        self.act_deploy_build = build_menu.addAction(
+            "Deploy selected build to game",
+            lambda: self.deploy_build(self.explorer.current_build()), QKeySequence("F8"))
         build_menu.addSeparator()
         self.act_delete_build = build_menu.addAction(
             "Delete selected build…", lambda: self.delete_build(self.explorer.current_build()))
@@ -194,7 +199,7 @@ class MainWindow(QMainWindow):
                        self.act_settings, self.act_reveal, self.act_close,
                        self.act_derive, self.act_rederive, self.act_new_category,
                        self.act_new_build, self.act_run_build, self.act_compile_build,
-                       self.act_plan_build,
+                       self.act_plan_build, self.act_deploy_build,
                        self.act_run_compile_build, self.act_delete_build):
             action.setEnabled(has and idle)
         for action in (self.act_new, self.act_open):
@@ -696,6 +701,37 @@ class MainWindow(QMainWindow):
         self._pending_build = name
         self._pending_tab = "plan"
         self.jobs.start(f"Plan {name}", lambda r: project.plan_build(name, r))
+
+    def deploy_build(self, name: str) -> None:
+        """Copy the build's compiled models + manifest into the game folder,
+        after confirming what gets overwritten."""
+        project = self.project
+        if project is None or not name or self.jobs.busy:
+            return
+        if not project.settings.game_dir:
+            QMessageBox.information(self, "Deploy",
+                                    "Set the game folder in Project ▸ Settings first.")
+            return
+        try:
+            pairs = project.deploy_files(name)
+        except ProjectError as exc:
+            QMessageBox.information(self, "Deploy", str(exc))
+            return
+        game = Path(project.settings.game_dir)
+        lines = []
+        for _source, destination in pairs:
+            try:
+                shown = destination.relative_to(game).as_posix()
+            except ValueError:
+                shown = str(destination)
+            lines.append(f"{shown}{'   (replaces)' if destination.exists() else ''}")
+        answer = QMessageBox.question(
+            self, "Deploy", f"Copy {len(pairs)} file(s) into {game}?\n\n"
+            + "\n".join(lines[:20]) + ("\n…" if len(lines) > 20 else ""))
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._pending_build = name
+        self.jobs.start(f"Deploy {name}", lambda r: project.deploy_build(name, r))
 
     def _reveal_asset(self, name: str) -> None:
         """Select an asset in the Explorer (clearing a filter that hides it)."""

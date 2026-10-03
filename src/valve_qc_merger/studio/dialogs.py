@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -58,7 +59,7 @@ class NewProjectDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
-    """Project tools: studiomdl (compile) and HLAM (preview)."""
+    """Project tools: studiomdl (compile), HLAM (preview), the game (deploy)."""
 
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -67,11 +68,17 @@ class SettingsDialog(QDialog):
         self.studiomdl_edit.setPlaceholderText("path to studiomdl(.exe)")
         self.hlam_edit = QLineEdit(settings.hlam or "")
         self.hlam_edit.setPlaceholderText("path to HLAM / HLMV (optional)")
+        self.game_edit = QLineEdit(settings.game_dir or "")
+        self.game_edit.setPlaceholderText("mod folder, e.g. …/Half-Life/cstrike (Deploy)")
+        self.deploy_box = QCheckBox("deploy to the game after every successful compile")
+        self.deploy_box.setChecked(settings.deploy_after_compile)
         form = QFormLayout(self)
         form.addRow("studiomdl", _path_row(self.studiomdl_edit,
                                            lambda: self._pick(self.studiomdl_edit)))
         form.addRow("Model viewer", _path_row(self.hlam_edit,
                                               lambda: self._pick(self.hlam_edit)))
+        form.addRow("Game folder", _path_row(self.game_edit, self._pick_game))
+        form.addRow("", self.deploy_box)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -84,9 +91,17 @@ class SettingsDialog(QDialog):
         if path:
             edit.setText(path)
 
+    def _pick_game(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Game (mod) folder",
+                                                  self.game_edit.text())
+        if folder:
+            self.game_edit.setText(folder)
+
     def apply_to(self, settings: Settings) -> None:
         settings.studiomdl = self.studiomdl_edit.text().strip() or None
         settings.hlam = self.hlam_edit.text().strip() or None
+        settings.game_dir = self.game_edit.text().strip() or None
+        settings.deploy_after_compile = self.deploy_box.isChecked()
 
 
 __all__ = ["NewProjectDialog", "SettingsDialog"]

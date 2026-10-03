@@ -122,12 +122,21 @@ class Build:
     options: dict[str, Any] = field(default_factory=dict)  # service options
     retarget: bool = False  # merge-v only: retarget each asset first
     retarget_options: dict[str, Any] = field(default_factory=dict)
+    deploy_dir: str | None = None  # under the game folder; None: by kind
 
 
 @dataclass
 class Settings:
     studiomdl: str | None = None
     hlam: str | None = None
+    game_dir: str | None = None  # the mod folder (…/cstrike): Deploy copies there
+    deploy_after_compile: bool = False
+
+
+# where Deploy puts a build's models, under the game folder
+DEPLOY_DIRS = {"merge-players": "models/player"}
+DEFAULT_DEPLOY_DIR = "models"
+MANIFEST_SUFFIXES = (".ini", ".json", ".toml")
 
 
 # --------------------------------------------------------------------------- #
@@ -221,8 +230,10 @@ class Project:
                                f"this program ({FORMAT_VERSION})")
         project = cls(root, meta.get("name", root.name))
         settings = data.get("settings", {})
-        project.settings = Settings(studiomdl=settings.get("studiomdl"),
-                                    hlam=settings.get("hlam"))
+        project.settings = Settings(
+            studiomdl=settings.get("studiomdl"), hlam=settings.get("hlam"),
+            game_dir=settings.get("game_dir"),
+            deploy_after_compile=bool(settings.get("deploy_after_compile", False)))
         project.categories = list(meta.get("categories", []))
         for entry in data.get("assets", []):
             asset = Asset(**entry)
@@ -240,7 +251,9 @@ class Project:
             "project": {"name": self.name, "format": FORMAT_VERSION,
                         "categories": sorted(self.categories, key=str.lower)},
             "settings": {"studiomdl": self.settings.studiomdl,
-                         "hlam": self.settings.hlam},
+                         "hlam": self.settings.hlam,
+                         "game_dir": self.settings.game_dir,
+                         "deploy_after_compile": self.settings.deploy_after_compile},
             "assets": [_asset_dict(a) for a in sorted(self.assets.values(),
                                                       key=lambda a: (a.kind, a.name))],
             "builds": [_build_dict(b) for b in self.builds.values()],
@@ -782,6 +795,66 @@ class Project:
                      f"{len(assets) - converted - ready} failed")
         return notes
 
+    # -- deploy ---------------------------------------------------------------
+    def deploy_files(self, name: str) -> list[tuple[Path, Path]]:
+        """``(source, destination)`` of everything Deploy copies for a build:
+        each compiled model (+ its ``T.mdl`` texture file) and the manifest,
+        renamed ``<output name>_models.<ext>`` so builds don't overwrite each
+        other's. Player models go to ``<dir>/<model>/<model>.mdl``."""
+        from valve_qc_merger.services.compile import compiled_model_path
+        if not self.settings.game_dir:
+            raise ProjectError("set the game folder in the project settings")
+        build = self.builds[name]
+        record_path = self.build_dir(name) / "last_run.json"
+        if not record_path.exists():
+            raise ProjectError(f"build {name!r} has not been run")
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        target = Path(self.settings.game_dir) / (
+            build.deploy_dir or DEPLOY_DIRS.get(build.kind, DEFAULT_DEPLOY_DIR))
+        players = build.kind == "merge-players"
+        pairs: list[tuple[Path, Path]] = []
+        missing: list[str] = []
+        for relative in record.get("outputs", []):
+            mdl = compiled_model_path(self.root / relative)
+            if not mdl.exists():
+                missing.append(mdl.name)
+                continue
+            for path in (mdl, mdl.with_name(f"{mdl.stem}T.mdl")):
+                if path.exists():
+                    folder = target / mdl.stem if players else target
+                    pairs.append((path, folder / path.name))
+        if missing:
+            raise ProjectError(f"not compiled yet: {', '.join(missing)} (Build ▸ Compile)")
+        output = self.build_dir(name) / "output"
+        base = options_from_dict(BUILD_KINDS[build.kind].options, {
+            **build.options, "models_dir": ".", "out": "."}).name
+        for path in sorted(output.glob("*")):
+            if (path.is_file() and path.suffix.lower() in MANIFEST_SUFFIXES
+                    and path.name != "inventory.json"):
+                stem = path.stem if path.stem.startswith(base) else f"{base}_{path.stem}"
+                pairs.append((path, target / f"{stem}{path.suffix}"))
+        return pairs
+
+    def deploy_build(self, name: str, reporter: Reporter | None = None) -> ServiceResult:
+        """Copy the build's compiled models and manifest into the game folder."""
+        reporter = reporter or Reporter()
+        result = ServiceResult()
+        try:
+            pairs = self.deploy_files(name)
+        except ProjectError as exc:
+            reporter.log(f"error: {exc}")
+            result.exit_code = EXIT_DISCOVERY
+            return result
+        for done, (source, destination) in enumerate(pairs):
+            reporter.check()
+            reporter.progress(done, len(pairs), destination.name)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            reporter.log(f"  deployed {destination}")
+            result.outputs.append(destination)
+        reporter.log(f"deployed {len(pairs)} file(s) to {self.settings.game_dir}")
+        return result
+
     def compile_build(self, name: str, reporter: Reporter | None = None) -> ServiceResult:
         """Compile every QC the build's last run emitted with the configured
         studiomdl."""
@@ -807,6 +880,10 @@ class Project:
                 total.exit_code = one.exit_code
         if total.exit_code == EXIT_OK:
             reporter.log(f"compiled {len(total.outputs)} model(s)")
+            if self.settings.deploy_after_compile and self.settings.game_dir:
+                deployed = self.deploy_build(name, reporter)
+                if not deployed.ok:
+                    total.exit_code = deployed.exit_code
         return total
 
 
@@ -820,7 +897,8 @@ def _asset_dict(asset: Asset) -> dict[str, Any]:
 def _build_dict(build: Build) -> dict[str, Any]:
     data: dict[str, Any] = {"name": build.name, "kind": build.kind,
                             "assets": list(build.assets), "retarget": build.retarget,
-                            "category": build.category}
+                            "category": build.category,
+                            "deploy_dir": build.deploy_dir}
     if build.options:
         data["options"] = dict(build.options)
     if build.retarget_options:

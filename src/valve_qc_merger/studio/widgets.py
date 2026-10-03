@@ -134,6 +134,7 @@ class Explorer(QTreeWidget):
     build_compile_requested = Signal(str)
     build_run_compile_requested = Signal(str)
     build_delete_requested = Signal(str)
+    build_deploy_requested = Signal(str)
     derive_requested = Signal(list)  # asset names: open the Retarget dialog
     rederive_requested = Signal(str, bool)  # derived asset, edit settings first
     category_move_requested = Signal(list, str)  # assets, category ("" / NEW_CATEGORY)
@@ -447,6 +448,7 @@ class Explorer(QTreeWidget):
             menu.addAction("Compile", lambda: self.build_compile_requested.emit(name))
             menu.addAction("Run and compile",
                            lambda: self.build_run_compile_requested.emit(name))
+            menu.addAction("Deploy to game", lambda: self.build_deploy_requested.emit(name))
             menu.addSeparator()
             menu.addAction("Delete build…", lambda: self.build_delete_requested.emit(name))
             menu.exec(self.viewport().mapToGlobal(pos))

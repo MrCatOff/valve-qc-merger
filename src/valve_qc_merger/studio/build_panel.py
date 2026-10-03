@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from valve_qc_merger.project import BUILD_KINDS, Build, Project, ProjectError
+from valve_qc_merger.project.model import DEFAULT_DEPLOY_DIR, DEPLOY_DIRS
 from valve_qc_merger.services.retarget import RetargetOptions
 from valve_qc_merger.studio.build_report import LIMITS, load_record, manifest_rows
 from valve_qc_merger.studio.options_form import OptionsForm
@@ -134,6 +135,7 @@ class BuildPanel(QTabWidget):
 
     run_requested = Signal(str)
     plan_requested = Signal(str)
+    deploy_requested = Signal(str)
     compile_requested = Signal(str)
     preview_requested = Signal(str)  # absolute QC path
     preview_body_requested = Signal(str, int, int)  # QC path, pev_body, sequence (-1)
@@ -282,6 +284,16 @@ class BuildPanel(QTabWidget):
             self.retarget_check.toggled.connect(retarget_box.setVisible)
             self.settings_layout.addWidget(retarget_box)
 
+        deploy_row = QHBoxLayout()
+        self.deploy_edit = QLineEdit(build.deploy_dir or "")
+        self.deploy_edit.setPlaceholderText(
+            DEPLOY_DIRS.get(build.kind, DEFAULT_DEPLOY_DIR) + "  (default)")
+        self.deploy_edit.setToolTip("where Deploy copies the compiled models and the "
+                                    "manifest, under the game folder (Project ▸ Settings)")
+        deploy_row.addWidget(QLabel("Deploy to"))
+        deploy_row.addWidget(self.deploy_edit, 1)
+        self.settings_layout.addLayout(deploy_row)
+
         options_box = QGroupBox(f"{build.kind} options")
         options_layout = QVBoxLayout(options_box)
         self.options_form = OptionsForm(BUILD_KINDS[build.kind].options, build.kind,
@@ -302,7 +314,11 @@ class BuildPanel(QTabWidget):
             lambda: self.save() and self.plan_requested.emit(self.build_name))
         compile_button = QPushButton("Compile")
         compile_button.clicked.connect(lambda: self.compile_requested.emit(self.build_name))
-        for button in (save, plan_button, run, compile_button):
+        deploy_button = QPushButton("Deploy")
+        deploy_button.setToolTip("copy the compiled models + manifest into the game folder")
+        deploy_button.clicked.connect(lambda: self.save() and
+                                      self.deploy_requested.emit(self.build_name))
+        for button in (save, plan_button, run, compile_button, deploy_button):
             row.addWidget(button)
         holder = QWidget()
         holder.setLayout(row)
@@ -322,6 +338,7 @@ class BuildPanel(QTabWidget):
             retarget=bool(self.retarget_check and self.retarget_check.isChecked()),
             retarget_options=(self.retarget_form.values()
                               if self.retarget_form is not None else {}),
+            deploy_dir=self.deploy_edit.text().strip().strip("/\\") or None,
         )
 
     def save(self) -> bool:
