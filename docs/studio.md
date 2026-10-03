@@ -273,7 +273,9 @@ profile.
 
 Explorer ▸ right-click an asset (or several) ▸ **Retarget…** (Asset ▸
 Retarget…, Ctrl+R) makes a NEW asset next to the source — the source is never
-touched, so the viewport can flip between before and after:
+touched, so the viewport can flip between before and after. In the Explorer
+the new asset hangs under its source (`v_elite ▸ v_elite_hands · hands`); one
+whose source sits in another category stands alone as `v_x_hands ↳ v_x`:
 
 - **Swap hands (retarget)** → `<name>_hands`: the `retarget` service — our
   male/female hands replace the model's own, every animation is retargeted

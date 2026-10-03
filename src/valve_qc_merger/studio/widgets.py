@@ -120,17 +120,48 @@ class Explorer(QTreeWidget):
             group = QTreeWidgetItem(parent, [f"{KIND_TITLES[kind]}  ·  {len(members)}"])
             group.setData(0, ROLE_KIND, "group")
             group.setData(0, ROLE_CATEGORY, category)
+            # a derived asset hangs under its source when the source is in the
+            # same group; otherwise it stands alone, marked with its source
+            shown = set(members)
+            children: dict[str, list[str]] = {}
             for name in members:
                 derived = project.assets[name].derived
-                item = QTreeWidgetItem(group, [f"{name}  ↳ {derived['from']}" if derived
-                                               else name])
-                item.setData(0, ROLE_KIND, "asset")
-                item.setData(0, ROLE_NAME, name)
-                item.setData(0, ROLE_CATEGORY, category)
-                if derived:
-                    item.setToolTip(0, f"{derived['mode']} from {derived['from']}")
-                if name == selected:
-                    self.setCurrentItem(item)
+                if derived and derived["from"] in shown and derived["from"] != name:
+                    children.setdefault(derived["from"], []).append(name)
+            nested = {n for kids in children.values() for n in kids}
+            placed: set[str] = set()
+            for name in members:
+                if name not in nested:
+                    self._add_asset(group, name, False, project, category, selected,
+                                    children, placed)
+            for name in members:  # unreachable from a root (a cycle): show flat
+                if name not in placed:
+                    self._add_asset(group, name, False, project, category, selected,
+                                    children, placed)
+
+    def _add_asset(self, holder: QTreeWidgetItem, name: str, nested: bool,
+                   project: Project, category: str | None, selected: str,
+                   children: dict[str, list[str]], placed: set[str]) -> None:
+        placed.add(name)
+        derived = project.assets[name].derived
+        if nested:
+            text = f"{name}  ·  {derived['mode']}"
+        elif derived:
+            text = f"{name}  ↳ {derived['from']}"
+        else:
+            text = name
+        item = QTreeWidgetItem(holder, [text])
+        item.setData(0, ROLE_KIND, "asset")
+        item.setData(0, ROLE_NAME, name)
+        item.setData(0, ROLE_CATEGORY, category)
+        if derived:
+            item.setToolTip(0, f"{derived['mode']} from {derived['from']}")
+        if name == selected:
+            self.setCurrentItem(item)
+        for child in children.get(name, []):
+            if child not in placed:
+                self._add_asset(item, child, True, project, category, selected,
+                                children, placed)
 
     def current_category(self) -> str | None:
         """The category of the current row (None: no categories / not inside one)."""

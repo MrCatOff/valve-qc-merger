@@ -163,3 +163,24 @@ def test_explorer_groups_by_category_and_moves(window, project: Project,
     panel.show_build(project, "pistols_v")
     panel.category_radio.setChecked(True)
     assert panel.save() and project.builds["pistols_v"].category == "Pistols"
+
+
+def test_derived_assets_nest_under_their_source(window, project: Project) -> None:
+    for name, mode in (("v_deagle_hands", "hands"), ("v_deagle_canon", "canon")):
+        project.assets[name] = Asset(name=name, kind="v", path=f"assets/v/{name}",
+                                     derived={"from": "v_deagle", "mode": mode,
+                                              "options": {}})
+    project.assets["v_mp5_hands"] = Asset(name="v_mp5_hands", kind="v",
+                                          path="assets/v/v_mp5_hands", category="SMG",
+                                          derived={"from": "v_mp5", "mode": "hands",
+                                                   "options": {}})
+    project.categories.append("SMG")
+    window.set_project(project)
+    tree = _tree(window)
+    deagle = tree.index("      v_deagle")
+    assert tree[deagle + 1:deagle + 3] == ["        v_deagle_canon  ·  canon",
+                                           "        v_deagle_hands  ·  hands"]
+    # the source sits in another category: shown flat, marked with its source
+    assert "      v_mp5_hands  ↳ v_mp5" in tree
+    assert window.explorer.select("asset", "v_deagle_hands")
+    assert window.explorer.current_asset() == "v_deagle_hands"
