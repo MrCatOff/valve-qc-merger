@@ -54,6 +54,12 @@ class MergeViewCommand(Command):
                                  "submodel when removing at most this fraction of its "
                                  "vertices fits the 2048 budget (0 = reject multi-part "
                                  "weapons as before; default 0.15)")
+        parser.add_argument("--no-skin-variants", dest="skin_variants",
+                            action="store_false", default=True,
+                            help="keep only each weapon's first $texturegroup skin "
+                                 "(default: every extra skin row becomes its own weapon "
+                                 "entry <model>_skin<k>, since the server can set a "
+                                 "view model's body but not its skin)")
         parser.add_argument("--prune", action="store_true",
                             help="also fold away vertex-less unreferenced bones "
                                  "(default keeps everything except Finger*Nub)")
@@ -115,6 +121,7 @@ _CONFIG_DEFAULTS: dict[str, object] = {
     "no_verify": False,
     "sound_path": None,
     "max_decimation": 0.15,
+    "skin_variants": True,
 }
 
 

@@ -46,6 +46,7 @@ from valve_qc_merger.merge_view.parts import (
     PartBudget,
     split_parts,
 )
+from valve_qc_merger.merge_view.skins import check_header, skin_variants
 from valve_qc_merger.merge_view.verify import verify_part
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.resources import resource_path
@@ -84,6 +85,7 @@ class MergeViewOptions:
     no_pack_texture: list[str] = field(default_factory=list)
     sound_path: str | None = None
     max_decimation: float = 0.15  # --shared-hands: fold multi-part weapons
+    skin_variants: bool = True  # each extra $texturegroup row -> <model>_skin<k>
     no_verify: bool = False
     dry_run: bool = False
     # stop once the parts are known: result.data["plan"], nothing written but
@@ -132,6 +134,16 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
             failures.append(str(exc))
             reporter.log(f"  {model_dir.name:<20} FAIL  {exc}")
             continue
+        header = check_header(model.qc_text)
+        if header.rejects:
+            message = (f"model {model.name!r}: {'; '.join(header.rejects)} — merge it "
+                       "on its own or bake the transform into its SMDs")
+            failures.append(message)
+            reporter.log(f"  {model.name:<20} HEADER  {message}")
+            continue
+        for warning in header.warnings:
+            model.warnings.append(warning)
+            reporter.log(f"  {model.name:<20} warn: {warning}")
         fullest = max(model.meshes.values(), key=lambda m: len(m.nodes))
         include = hand_bone_names(model.meshes, model.bodygroups)
         try:
@@ -226,6 +238,21 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
     reporter.progress(len(model_dirs), len(model_dirs), "loaded")
     if opts.shared_hands and len(merged_pairs) > 1:
         merged_pairs = _drop_foreign_hands(merged_pairs, failures, reporter, result)
+    if opts.skin_variants and not opts.dry_run:
+        expanded: list[tuple[ModelInput, ModelParts]] = []
+        for model, parts in merged_pairs:
+            expanded.append((model, parts))
+            variants = skin_variants(model, parts)
+            for variant, variant_parts, _index in variants:
+                expanded.append((variant, variant_parts))
+                # same geometry, bones and animations as the base model
+                hand_renames[variant.name] = hand_renames[model.name]
+                original_meshes[variant.name] = original_meshes[model.name]
+                original_anims[variant.name] = original_anims[model.name]
+            if variants:
+                reporter.log(f"  {model.name:<20} skins -> "
+                             + ", ".join(v.name for v, _p, _i in variants))
+        merged_pairs = expanded
 
     reporter.log(f"  {'-' * 60}")
     reporter.log(f"  {len(inventory)} models loaded, {len(failures)} failed")

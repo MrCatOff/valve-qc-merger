@@ -116,6 +116,26 @@ bones. Pass `--reference` to override.
 sequence index for every original animation name — identical animations are
 deduped within a part, so recolour variants share sequence indices.
 
+## Skins and header commands
+
+**Skins.** A view model's `$texturegroup` (CSO upgrade skins: `Luger_v_6`,
+`Luger_v_8`, …) cannot stay a skin family in a merged model: the server sets a
+view model's `body` (sent with the weapon animation), never its `skin`. Each
+extra skin row therefore becomes its **own weapon entry** `<model>_skin<k>`
+(k = the row number): the weapon meshes retextured with that row, the same
+hands, bones and animations. Identical sequences are deduped within a part,
+so a variant costs one weapon submodel (one `pev_body` value) and its
+textures — no animation data. A row that changes none of the weapon's
+textures adds nothing. `models.ini` lists the variants like any weapon
+(same `anim_*` indices as the base). `--no-skin-variants` keeps only the
+first row (the pre-skins behaviour).
+
+**Header commands.** The merged QC is written with `$scale 1.0`, no
+`$origin` and `$flags 0`. An input whose QC relies on anything else would
+silently change once merged, so `$scale ≠ 1` and a non-zero `$origin` reject
+the model (merge it on its own, or bake the transform into its SMDs) and a
+non-zero `$flags` is dropped with a warning (one model-wide value).
+
 ## The pipeline
 
 1. **Discovery + sanitise** — one `.qc` per subdirectory; byte-level encoding
@@ -161,6 +181,7 @@ deduped within a part, so recolour variants share sequence indices.
 | `--reference SMD` | canonical hand skeleton (default `storage/hands/reference_hands.smd`; with `--shared-hands`, `storage/handswap/cso_reference_hands.smd` — the CSO hands with the full arm, so the elbow is preserved) |
 | `--skip-unmatched` | continue past models whose rig cannot be matched |
 | `--shared-hands` | inputs already wear our male/female hands (e.g. the `retarget` output): emit ONE shared hands bodygroup (`pev_body = weapon × 2 + hand`) instead of per-weapon hands; a multi-part weapon is first folded into one submodel (see `--max-decimation`), and rejected only when that fails |
+| `--no-skin-variants` | keep only each weapon's first `$texturegroup` row instead of one weapon entry `<model>_skin<k>` per extra row (see *Skins and header commands*) |
 | `--max-decimation F` | with `--shared-hands`: a weapon whose always-on parts exceed one 2048-vertex submodel is folded into ONE submodel when removing at most this fraction of its vertices fits it (default 0.15; 0 disables). Half-edge collapses only — every kept vertex keeps its exact position and bone; UV seams, material borders and open edges are never touched, so the silhouette and texturing stay intact. The log reports `folded N parts … -p%, surface error <= e u` |
 | `--prune` | also fold away vertex-less unreferenced bones (default keeps everything except `Finger*Nub`) |
 | `--no-pool-bones` | skip bone pooling (merged table may exceed 127) |
