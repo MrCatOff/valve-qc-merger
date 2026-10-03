@@ -184,3 +184,11 @@ def test_derived_assets_nest_under_their_source(window, project: Project) -> Non
     assert "      v_mp5_hands  ↳ v_mp5" in tree
     assert window.explorer.select("asset", "v_deagle_hands")
     assert window.explorer.current_asset() == "v_deagle_hands"
+
+
+def test_explorer_paints_connectors(window, project: Project) -> None:
+    project.set_category(["v_deagle"], "Pistols")
+    window.set_project(project)
+    window.explorer.resize(300, 400)
+    image = window.explorer.grab().toImage()  # drawBranches runs for every row
+    assert not image.isNull() and image.width() == 300

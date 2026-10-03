@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QFont, QImage, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -73,6 +73,7 @@ class Explorer(QTreeWidget):
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setIndentation(20)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
         self.currentItemChanged.connect(self._on_current)
@@ -108,6 +109,64 @@ class Explorer(QTreeWidget):
             if name == selected_build:
                 self.setCurrentItem(item)
         self.expandAll()
+
+    # -- tree connectors (├─ └─ │) -------------------------------------------
+    def drawBranches(self, painter: QPainter, rect, index) -> None:  # noqa: ANN001, N802
+        """Connector lines like a text tree plus a small chevron on expandable
+        rows; top-level rows get only the chevron. Clicks still toggle (the
+        view hit-tests the branch area itself)."""
+        model = index.model()
+        indent = self.indentation()
+        chain = []  # index, its parent, ..., the top-level row
+        current = index
+        while current.isValid():
+            chain.append(current)
+            current = current.parent()
+        depth = len(chain) - 1
+        right = rect.right() + 1
+        top, bottom = rect.top(), rect.bottom() + 1
+        mid_y = (top + bottom) // 2
+
+        def has_next(ix) -> bool:  # noqa: ANN001
+            return ix.row() + 1 < model.rowCount(ix.parent())
+
+        line = QColor(self.palette().text().color())
+        line.setAlpha(110)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        pen = QPen(line)
+        pen.setWidth(1)
+        painter.setPen(pen)
+        # depth 0 rows (Assets, Builds) are not connected to each other
+        for level in range(1, depth + 1):
+            x = right - (depth - level + 1) * indent + indent // 2
+            node = chain[depth - level]  # the row's ancestor at this level
+            if level == depth:  # the row's own column: ├─ or └─
+                painter.drawLine(x, top, x, bottom if has_next(node) else mid_y)
+                painter.drawLine(x, mid_y, right - 2, mid_y)
+            elif has_next(node):  # an open ancestor branch passes by: │
+                painter.drawLine(x, top, x, bottom)
+        if model.hasChildren(index):
+            x = right - indent // 2
+            box = indent // 2 - 1
+            painter.fillRect(x - box, mid_y - box, 2 * box, 2 * box,
+                             self.palette().base())
+            arrow = QPainterPath()
+            r = 3.5
+            if self.isExpanded(index):
+                arrow.moveTo(x - r, mid_y - r / 2)
+                arrow.lineTo(x, mid_y + r / 2)
+                arrow.lineTo(x + r, mid_y - r / 2)
+            else:
+                arrow.moveTo(x - r / 2, mid_y - r)
+                arrow.lineTo(x + r / 2, mid_y)
+                arrow.lineTo(x - r / 2, mid_y + r)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            arrow_pen = QPen(self.palette().text().color())
+            arrow_pen.setWidthF(1.5)
+            painter.setPen(arrow_pen)
+            painter.drawPath(arrow)
+        painter.restore()
 
     def _fill_kinds(self, parent: QTreeWidgetItem, project: Project,
                     category: str | None, selected: str) -> None:
