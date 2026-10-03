@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -76,8 +77,14 @@ class NewBuildDialog(QDialog):
         self.kind_box.currentIndexChanged.connect(self._suggest)
         self.retarget_box = QCheckBox("put every view model on our hands first (shared hands; "
                                       "already retargeted ones are kept as they are)")
+        self.category_box = QComboBox()
+        self.category_box.addItem("every category", None)
+        for category in sorted(project.categories, key=str.lower):
+            self.category_box.addItem(category, category)
+        self.category_box.currentIndexChanged.connect(self._suggest)
         form = QFormLayout(self)
         form.addRow("Kind", self.kind_box)
+        form.addRow("Assets", self.category_box)
         form.addRow("Name", self.name_edit)
         form.addRow("", self.retarget_box)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
@@ -98,6 +105,9 @@ class NewBuildDialog(QDialog):
         self.retarget_box.setVisible(kind == "merge-v")
         base = {"merge-v": "view", "merge-p": "player_held", "merge-w": "world",
                 "merge-players": "players", "merge-zhands": "zombie_hands"}[kind]
+        category = self.category_box.currentData() if hasattr(self, "category_box") else None
+        if category:
+            base = f"{re.sub(r'[^0-9A-Za-z]+', '_', category).strip('_').lower()}_{base}"
         name, n = base, 2
         while name in self.project.builds:
             name, n = f"{base}_{n}", n + 1
@@ -109,7 +119,7 @@ class NewBuildDialog(QDialog):
             QMessageBox.warning(self, "New build", "Use a plain folder name.")
             return
         kind = self.kind_box.currentData()
-        self.build = Build(name=name, kind=kind,
+        self.build = Build(name=name, kind=kind, category=self.category_box.currentData(),
                            retarget=kind == "merge-v" and self.retarget_box.isChecked())
         try:
             self.project.add_build(self.build)
@@ -208,13 +218,30 @@ class BuildPanel(QTabWidget):
         assets_box = QGroupBox("Assets")
         assets_layout = QVBoxLayout(assets_box)
         self.all_radio = QRadioButton("every asset of the accepted kinds")
+        self.category_radio = QRadioButton("every asset of the accepted kinds in category")
         self.pick_radio = QRadioButton("only the checked assets")
-        self.all_radio.setChecked(not build.assets)
+        self.category_combo = QComboBox()
+        for category in sorted(project.categories, key=str.lower):
+            self.category_combo.addItem(category)
+        if build.category:
+            if self.category_combo.findText(build.category) < 0:
+                self.category_combo.addItem(build.category)
+            self.category_combo.setCurrentText(build.category)
+        by_category = build.category is not None and not build.assets
+        self.all_radio.setChecked(not build.assets and not by_category)
+        self.category_radio.setChecked(by_category)
         self.pick_radio.setChecked(bool(build.assets))
+        self.category_radio.setEnabled(self.category_combo.count() > 0)
+        self.category_combo.setEnabled(by_category)
+        self.category_radio.toggled.connect(self.category_combo.setEnabled)
         self.asset_list = _asset_list(project, build.kind, build.assets)
         self.asset_list.setEnabled(bool(build.assets))
         self.pick_radio.toggled.connect(self.asset_list.setEnabled)
+        category_row = QHBoxLayout()
+        category_row.addWidget(self.category_radio)
+        category_row.addWidget(self.category_combo, 1)
         assets_layout.addWidget(self.all_radio)
+        assets_layout.addLayout(category_row)
         assets_layout.addWidget(self.pick_radio)
         assets_layout.addWidget(self.asset_list)
         self.settings_layout.addWidget(assets_box)
@@ -263,6 +290,8 @@ class BuildPanel(QTabWidget):
         return Build(
             name=current.name, kind=current.kind,
             assets=_checked(self.asset_list) if self.pick_radio.isChecked() else [],
+            category=(self.category_combo.currentText() or None)
+            if self.category_radio.isChecked() else None,
             options=self.options_form.values(),
             retarget=bool(self.retarget_check and self.retarget_check.isChecked()),
             retarget_options=(self.retarget_form.values()

@@ -11,6 +11,7 @@ from valve_qc_merger.project.model import (
     Settings,
     classify,
     refine_kinds,
+    weapon_key,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "Settings",
     "classify",
     "refine_kinds",
+    "weapon_key",
 ]

@@ -92,6 +92,11 @@ class MainWindow(QMainWindow):
         self.explorer.kind_change_requested.connect(self.set_kind)
         self.explorer.reveal_requested.connect(self._reveal)
         self.explorer.derive_requested.connect(self.derive_assets)
+        self.explorer.category_move_requested.connect(self.move_to_category)
+        self.explorer.category_new_requested.connect(self.new_category)
+        self.explorer.category_rename_requested.connect(self.rename_category)
+        self.explorer.category_delete_requested.connect(self.delete_category)
+        self.explorer.category_builds_requested.connect(self.create_category_builds)
         self.explorer.rederive_requested.connect(self.rederive_asset)
         self.inspector.kind_changed.connect(self.set_kind)
         self.inspector.notes_changed.connect(self._set_notes)
@@ -151,6 +156,8 @@ class MainWindow(QMainWindow):
         self.act_rederive = asset_menu.addAction(
             "Re-run retarget", lambda: self.rederive_asset(self.explorer.current_asset(), False),
             QKeySequence("Ctrl+Shift+R"))
+        asset_menu.addSeparator()
+        self.act_new_category = asset_menu.addAction("New category…", self.new_category)
 
         build_menu = bar.addMenu("&Build")
         self.act_new_build = build_menu.addAction("New build…", self.new_build,
@@ -175,7 +182,7 @@ class MainWindow(QMainWindow):
         idle = not self.jobs.busy
         for action in (self.act_import_mdl, self.act_import_mdl_dir, self.act_import_dec,
                        self.act_settings, self.act_reveal, self.act_close,
-                       self.act_derive, self.act_rederive,
+                       self.act_derive, self.act_rederive, self.act_new_category,
                        self.act_new_build, self.act_run_build, self.act_compile_build,
                        self.act_run_compile_build, self.act_delete_build):
             action.setEnabled(has and idle)
@@ -274,9 +281,31 @@ class MainWindow(QMainWindow):
             self.settings.setValue("last_import", folder)
             self._run_import("Import decompiled", [Path(folder)], mdl=False)
 
+    AUTO_CATEGORY = "(automatic: follow the weapon's other models)"
+
+    def _ask_import_category(self) -> str | None:
+        """Category for an import: "" = automatic, None = cancelled. Skipped
+        (automatic) while the project has no categories."""
+        from PySide6.QtWidgets import QInputDialog
+        project = self.project
+        if project is None or not project.categories:
+            return ""
+        choices = [self.AUTO_CATEGORY] + sorted(project.categories, key=str.lower)
+        current = self.explorer.current_category()
+        index = choices.index(current) if current in choices else 0
+        text, ok = QInputDialog.getItem(
+            self, "Import", "Category (pick one or type a new name):", choices, index, True)
+        if not ok:
+            return None
+        text = text.strip()
+        return "" if text in ("", self.AUTO_CATEGORY) else text
+
     def _run_import(self, title: str, sources: list[Path], *, mdl: bool) -> None:
         project = self.project
         assert project is not None
+        category = self._ask_import_category()
+        if category is None:
+            return
 
         def work(reporter: Reporter) -> list[str]:
             names: list[str] = []
@@ -284,12 +313,14 @@ class MainWindow(QMainWindow):
                 reporter.check()
                 reporter.progress(done, len(sources), source.name)
                 if mdl:
-                    added = project.import_mdl(source, reporter=reporter)
+                    added = project.import_mdl(source, reporter=reporter,
+                                               category=category or None)
                 else:
-                    added = project.import_decompiled(source)
+                    added = project.import_decompiled(source, category=category or None)
                 names += [a.name for a in added]
                 for asset in added:
-                    reporter.log(f"  + {asset.name:<28} {KIND_TITLES[asset.kind]}")
+                    where = f"  [{asset.category}]" if asset.category else ""
+                    reporter.log(f"  + {asset.name:<28} {KIND_TITLES[asset.kind]}{where}")
             return names
 
         self.jobs.start(title, work)
@@ -401,6 +432,104 @@ class MainWindow(QMainWindow):
             self._info_cache.pop(name, None)
             self._scene_cache.pop(name, None)
             self._select_asset(name)
+
+    # -- categories ----------------------------------------------------------
+    def _ask_category_name(self, title: str, text: str = "") -> str | None:
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, title, "Category name:", text=text)
+        return name.strip() if ok and name.strip() else None
+
+    def new_category(self) -> None:
+        if self.project is None or self.jobs.busy:
+            return
+        name = self._ask_category_name("New category")
+        if name is None:
+            return
+        try:
+            self.project.add_category(name)
+        except ProjectError as exc:
+            QMessageBox.warning(self, "New category", str(exc))
+            return
+        self.explorer.show_project(self.project)
+
+    def move_to_category(self, names: list[str], category: str) -> None:
+        """File assets under a category; offers to bring the weapon's other
+        models (v_/p_/w_, derived) along."""
+        from valve_qc_merger.studio.widgets import NEW_CATEGORY, UNCATEGORIZED
+        project = self.project
+        if project is None or self.jobs.busy or not names:
+            return
+        if category == NEW_CATEGORY:
+            category = self._ask_category_name("New category")
+            if category is None:
+                return
+        target = category.strip().lower()
+        extra = sorted({s for n in names for s in project.siblings(n)
+                        if s not in names and project.assets[s].category.lower() != target})
+        with_siblings = False
+        if extra:
+            shown = ", ".join(extra[:8]) + ("…" if len(extra) > 8 else "")
+            answer = QMessageBox.question(
+                self, "Move to category",
+                f"Also move the same weapon's other models?\n\n{shown}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Yes)
+            if answer == QMessageBox.StandardButton.Cancel:
+                return
+            with_siblings = answer == QMessageBox.StandardButton.Yes
+        try:
+            moved = project.set_category(names, category, with_siblings=with_siblings)
+        except ProjectError as exc:
+            QMessageBox.warning(self, "Move to category", str(exc))
+            return
+        self.log.append_line(f"{len(moved)} asset(s) -> {category or UNCATEGORIZED}: "
+                             f"{', '.join(moved)}")
+        self.explorer.show_project(project)
+        if self.explorer.current_asset():
+            self._select_asset(self.explorer.current_asset())
+
+    def rename_category(self, old: str) -> None:
+        if self.project is None or self.jobs.busy:
+            return
+        new = self._ask_category_name("Rename category", old)
+        if new is None or new == old:
+            return
+        try:
+            self.project.rename_category(old, new)
+        except ProjectError as exc:
+            QMessageBox.warning(self, "Rename category", str(exc))
+            return
+        self.explorer.show_project(self.project)
+
+    def delete_category(self, name: str) -> None:
+        if self.project is None or self.jobs.busy:
+            return
+        count = len(self.project.category_assets(name))
+        answer = QMessageBox.question(
+            self, "Delete category",
+            f"Delete category {name}? Its {count} asset(s) stay in the project, "
+            "uncategorized; builds that used it take every asset of their kind.")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.project.remove_category(name)
+        self.explorer.show_project(self.project)
+
+    def create_category_builds(self, category: str) -> None:
+        if self.project is None or self.jobs.busy:
+            return
+        try:
+            made = self.project.create_category_builds(category)
+        except ProjectError as exc:
+            QMessageBox.warning(self, "Create builds", str(exc))
+            return
+        if made:
+            self.log.append_line(f"{category}: builds " + ", ".join(
+                f"{b.name} ({b.kind})" for b in made))
+        else:
+            self.statusBar().showMessage(f"{category}: its builds already exist", 5000)
+        self.explorer.show_project(self.project)
+        if made:
+            self.explorer.select("build", made[0].name)
 
     # -- retarget (derived assets) --------------------------------------------
     def derive_assets(self, names: list[str]) -> None:

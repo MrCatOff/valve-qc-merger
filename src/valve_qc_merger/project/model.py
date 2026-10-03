@@ -47,7 +47,7 @@ from valve_qc_merger.services.merge_world import MergeWorldOptions, run_merge_wo
 from valve_qc_merger.services.merge_zhands import MergeZhandsOptions, run_merge_zhands
 from valve_qc_merger.services.retarget import RetargetOptions, run_retarget
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2  # 2: asset categories, category builds
 PROJECT_FILE = "project.toml"
 ASSET_KINDS = ("v", "p", "w", "player", "zhands")
 
@@ -110,6 +110,7 @@ class Asset:
     # derived assets: {"from": source asset, "mode": DERIVE_MODES key,
     # "options": service options that differ from the defaults}
     derived: dict[str, Any] | None = None
+    category: str = ""  # "" = uncategorized
 
 
 @dataclass
@@ -117,6 +118,7 @@ class Build:
     name: str
     kind: str  # a BUILD_KINDS key
     assets: list[str] = field(default_factory=list)  # empty: every matching asset
+    category: str | None = None  # with no explicit assets: only this category's
     options: dict[str, Any] = field(default_factory=dict)  # service options
     retarget: bool = False  # merge-v only: retarget each asset first
     retarget_options: dict[str, Any] = field(default_factory=dict)
@@ -163,6 +165,22 @@ def refine_kinds(assets: list[Asset], root: Path) -> None:
             asset.kind = "zhands"
 
 
+_KIND_PREFIX = re.compile(r"^[vpw]_", re.IGNORECASE)
+
+
+def weapon_key(name: str) -> str:
+    """The weapon an asset belongs to: its name without the ``v_``/``p_``/``w_``
+    prefix (``v_deagle``, ``p_deagle``, ``w_deagle`` -> ``deagle``)."""
+    return _KIND_PREFIX.sub("", name).lower()
+
+
+def _valid_category(name: str) -> str:
+    name = name.strip()
+    if not name or any(c in name for c in '/\\:*?"<>|') or name in {".", ".."}:
+        raise ProjectError(f"invalid category name {name!r}")
+    return name
+
+
 # --------------------------------------------------------------------------- #
 # Project
 # --------------------------------------------------------------------------- #
@@ -173,6 +191,7 @@ class Project:
         self.settings = Settings()
         self.assets: dict[str, Asset] = {}
         self.builds: dict[str, Build] = {}
+        self.categories: list[str] = []  # kept even while empty
 
     # -- persistence -------------------------------------------------------
     @classmethod
@@ -204,9 +223,12 @@ class Project:
         settings = data.get("settings", {})
         project.settings = Settings(studiomdl=settings.get("studiomdl"),
                                     hlam=settings.get("hlam"))
+        project.categories = list(meta.get("categories", []))
         for entry in data.get("assets", []):
             asset = Asset(**entry)
             project.assets[asset.name] = asset
+            if asset.category and asset.category not in project.categories:
+                project.categories.append(asset.category)
         for entry in data.get("builds", []):
             build = Build(**entry)
             project._validate_build(build)
@@ -215,11 +237,12 @@ class Project:
 
     def save(self) -> None:
         data: dict[str, Any] = {
-            "project": {"name": self.name, "format": FORMAT_VERSION},
+            "project": {"name": self.name, "format": FORMAT_VERSION,
+                        "categories": sorted(self.categories, key=str.lower)},
             "settings": {"studiomdl": self.settings.studiomdl,
                          "hlam": self.settings.hlam},
-            "assets": [vars(a) for a in sorted(self.assets.values(),
-                                               key=lambda a: (a.kind, a.name))],
+            "assets": [_asset_dict(a) for a in sorted(self.assets.values(),
+                                                      key=lambda a: (a.kind, a.name))],
             "builds": [_build_dict(b) for b in self.builds.values()],
         }
         tmp = self.root / (PROJECT_FILE + ".tmp")
@@ -231,9 +254,14 @@ class Project:
         return self.root / self.assets[name].path
 
     def import_decompiled(self, source: Path, *, kind: str | None = None,
-                          overwrite: bool = False) -> list[Asset]:
+                          overwrite: bool = False,
+                          category: str | None = None) -> list[Asset]:
         """Copy one decompiled model folder (with a .qc) or every such
-        subfolder of ``source`` into ``assets/<kind>/<name>``."""
+        subfolder of ``source`` into ``assets/<kind>/<name>``. ``category``
+        files them there; without it a model joins the category of its
+        weapon's other models (``w_deagle`` follows ``v_deagle``)."""
+        if category:
+            category = self.add_category(category, save=False)
         source = Path(source)
         dirs = ([source] if _qc_dir(source) else
                 sorted(d for d in source.iterdir() if d.is_dir() and _qc_dir(d)))
@@ -252,7 +280,8 @@ class Project:
             relative = Path("assets") / asset_kind / name
             shutil.copytree(directory, self.root / relative)
             asset = Asset(name=name, kind=asset_kind, path=relative.as_posix(),
-                          source=str(directory.resolve()))
+                          source=str(directory.resolve()),
+                          category=category or self._sibling_category(name))
             self.assets[name] = asset
             added.append(asset)
         if kind is None:
@@ -263,7 +292,7 @@ class Project:
         return added
 
     def import_mdl(self, source: Path, *, kind: str | None = None,
-                   overwrite: bool = False,
+                   overwrite: bool = False, category: str | None = None,
                    reporter: Reporter | None = None) -> list[Asset]:
         """Decompile one ``.mdl`` (or every model in a folder) in process and
         import the results like :meth:`import_decompiled`."""
@@ -281,7 +310,8 @@ class Project:
                                     reporter or Reporter())
             if not outcome.outputs:
                 raise ProjectError(f"nothing decompiled from {source}: {outcome.failures}")
-            added = self.import_decompiled(staging, kind=kind, overwrite=overwrite)
+            added = self.import_decompiled(staging, kind=kind, overwrite=overwrite,
+                                           category=category)
             originals = {m.stem: m for m in models}
             for asset in added:
                 if asset.name in originals:
@@ -290,6 +320,115 @@ class Project:
             return added
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+
+    # -- categories ----------------------------------------------------------
+    def weapon_of(self, name: str) -> str:
+        """:func:`weapon_key` of an asset, through its derivation chain
+        (``v_janus1_hands`` belongs to ``janus1``)."""
+        seen: set[str] = set()
+        while name in self.assets and self.assets[name].derived and name not in seen:
+            seen.add(name)
+            name = self.assets[name].derived["from"]
+        return weapon_key(name)
+
+    def siblings(self, name: str) -> list[str]:
+        """The other assets of the same weapon (v_/p_/w_ and derived ones)."""
+        key = self.weapon_of(name)
+        return sorted(n for n in self.assets if n != name and self.weapon_of(n) == key)
+
+    def _sibling_category(self, name: str) -> str:
+        key = weapon_key(name)
+        for other in sorted(self.assets):
+            if other != name and self.weapon_of(other) == key and self.assets[other].category:
+                return self.assets[other].category
+        return ""
+
+    def add_category(self, name: str, *, save: bool = True) -> str:
+        name = _valid_category(name)
+        existing = {c.lower(): c for c in self.categories}
+        if name.lower() in existing:
+            return existing[name.lower()]
+        self.categories.append(name)
+        if save:
+            self.save()
+        return name
+
+    def category_assets(self, category: str) -> list[str]:
+        return sorted(n for n, a in self.assets.items() if a.category == category)
+
+    def set_category(self, names: list[str], category: str, *,
+                     with_siblings: bool = True) -> list[str]:
+        """File ``names`` (and, by default, every other asset of the same
+        weapons) under ``category`` ("" = uncategorized). Returns every
+        asset that moved."""
+        if category:
+            category = self.add_category(category, save=False)
+        missing = [n for n in names if n not in self.assets]
+        if missing:
+            raise ProjectError(f"unknown assets {missing}")
+        targets = dict.fromkeys(names)
+        if with_siblings:
+            for name in names:
+                targets.update(dict.fromkeys(self.siblings(name)))
+        moved = [n for n in targets if self.assets[n].category != category]
+        for name in moved:
+            self.assets[name].category = category
+        self.save()
+        return moved
+
+    def rename_category(self, old: str, new: str) -> None:
+        if old not in self.categories:
+            raise ProjectError(f"no category {old!r}")
+        new = _valid_category(new)
+        if new != old and new.lower() in {c.lower() for c in self.categories if c != old}:
+            raise ProjectError(f"category {new!r} already exists")
+        self.categories = [new if c == old else c for c in self.categories]
+        for asset in self.assets.values():
+            if asset.category == old:
+                asset.category = new
+        for build in self.builds.values():
+            if build.category == old:
+                build.category = new
+        self.save()
+
+    def remove_category(self, name: str) -> None:
+        """Forget a category; its assets become uncategorized and builds that
+        selected it fall back to their kind's every asset."""
+        if name not in self.categories:
+            raise ProjectError(f"no category {name!r}")
+        self.categories.remove(name)
+        for asset in self.assets.values():
+            if asset.category == name:
+                asset.category = ""
+        for build in self.builds.values():
+            if build.category == name:
+                build.category = None
+        self.save()
+
+    def create_category_builds(self, category: str) -> list[Build]:
+        """One build per asset kind present in ``category`` (merge-v with
+        "on our hands first"), named ``<category>_<kind>``; existing names
+        are left alone."""
+        if category not in self.categories:
+            raise ProjectError(f"no category {category!r}")
+        slug = re.sub(r"[^0-9A-Za-z]+", "_", category).strip("_").lower() or "category"
+        kinds = {self.assets[n].kind for n in self.category_assets(category)}
+        made: list[Build] = []
+        for kind_name, spec in BUILD_KINDS.items():
+            if not (spec.asset_kinds & kinds):
+                continue
+            prefix = next(iter(sorted(spec.asset_kinds)))
+            name = f"{slug}_{prefix}"
+            if name in self.builds:
+                continue
+            options = ({"name": f"{prefix}_{slug}"} if prefix in ("v", "p", "w") else {})
+            build = Build(name=name, kind=kind_name, category=category, options=options,
+                          retarget=kind_name == "merge-v")
+            self._validate_build(build)
+            self.builds[name] = build
+            made.append(build)
+        self.save()
+        return made
 
     # -- derived assets ----------------------------------------------------
     def derive_asset(self, source: str, mode: str, options: dict[str, Any] | None = None,
@@ -342,7 +481,8 @@ class Project:
             shutil.move(str(staging / "output"), str(target))
             asset = Asset(name=name, kind=kind, path=relative.as_posix(),
                           notes=existing.notes if existing is not None else "",
-                          derived={"from": source, "mode": mode, "options": stored})
+                          derived={"from": source, "mode": mode, "options": stored},
+                          category=self.assets[source].category)
             self.assets[name] = asset
             self.save()
             return result, asset
@@ -442,6 +582,8 @@ class Project:
             raise ProjectError(f"build {build.name!r}: unknown kind {build.kind!r}")
         if build.retarget and build.kind != "merge-v":
             raise ProjectError(f"build {build.name!r}: retarget is merge-v only")
+        if build.category is not None and build.assets:
+            raise ProjectError(f"build {build.name!r}: pick assets OR a category, not both")
         # Fail early on unknown option names (placeholders for the paths).
         options_from_dict(kind.options, {**build.options, "models_dir": ".", "out": "."})
         if build.retarget:
@@ -476,7 +618,8 @@ class Project:
                 raise ProjectError(f"build {build.name!r}: unknown assets {missing}")
             chosen = [self.assets[n] for n in build.assets]
         else:
-            chosen = sorted((a for a in self.assets.values() if a.kind in accepted),
+            chosen = sorted((a for a in self.assets.values() if a.kind in accepted
+                             and (build.category is None or a.category == build.category)),
                             key=lambda a: a.name)
         wrong = [a.name for a in chosen if a.kind not in accepted]
         if wrong:
@@ -615,9 +758,17 @@ class Project:
         return total
 
 
+def _asset_dict(asset: Asset) -> dict[str, Any]:
+    data = vars(asset).copy()
+    if not data["category"]:
+        del data["category"]
+    return data
+
+
 def _build_dict(build: Build) -> dict[str, Any]:
     data: dict[str, Any] = {"name": build.name, "kind": build.kind,
-                            "assets": list(build.assets), "retarget": build.retarget}
+                            "assets": list(build.assets), "retarget": build.retarget,
+                            "category": build.category}
     if build.options:
         data["options"] = dict(build.options)
     if build.retarget_options:
@@ -636,4 +787,5 @@ __all__ = [
     "Settings",
     "classify",
     "refine_kinds",
+    "weapon_key",
 ]

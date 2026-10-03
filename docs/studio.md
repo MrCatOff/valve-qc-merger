@@ -62,7 +62,8 @@ MyPack/
 ```toml
 [project]
 name = "CSO Pack"
-format = 1
+format = 2                # 2 added categories; format-1 files open unchanged
+categories = ["pistols", "submachines"]   # kept even while empty
 
 [settings]
 studiomdl = "C:/tools/studiomdl.exe"
@@ -73,11 +74,13 @@ kind = "v"
 path = "assets/v/v_deagle"
 source = "D:/dump/v_deagle"
 notes = ""
+category = "pistols"      # absent = uncategorized
 
 [[builds]]
 name = "pistols"
 kind = "merge-v"          # merge-v | merge-p | merge-w | merge-players | merge-zhands
 assets = []               # empty: every asset of the kinds this build accepts
+category = "pistols"      # with assets = []: only that category's (absent = all)
 retarget = true           # merge-v only: retarget each asset, then merge with shared_hands
 
 [builds.options]          # the service options (models_dir/out are set by the build)
@@ -95,6 +98,31 @@ models into `zhands`. `Project.set_kind` overrides (and moves the folder).
 model folder or a folder of them), `remove_asset`, `set_kind`,
 `add_build(Build(...))` (validates the kind and every option name),
 `remove_build`, `run_build(name, reporter)`, `compile_build(name, reporter)`.
+
+## Categories
+
+Assets can be filed under ONE category each (`pistols`, `submachines`, …);
+the Explorer then shows `Assets ▸ <category> ▸ View models / Player-held /
+World ▸ assets`, with `Uncategorized` last (no categories: the flat kind
+groups as before). A category is project metadata only — the files stay in
+`assets/<kind>/<name>`, so renaming or moving is instant.
+
+- **Weapon link**: `v_deagle`, `p_deagle`, `w_deagle` (name without the
+  `v_`/`p_`/`w_` prefix) and assets derived from them are one weapon. Moving
+  one offers to move the others; an import without a category joins the
+  category its weapon already has (`w_deagle` follows `v_deagle`); a derived
+  asset takes its source's category.
+- **Filing**: the import dialog asks for a category (automatic / pick /
+  type a new one); Explorer ▸ right-click ▸ **Move to category** (several
+  selected at once), or drag assets onto a category, a kind group or an
+  asset inside it. Right-click a category: New / Rename / Delete (its assets
+  become uncategorized) / **Create builds for this category**.
+- **Category builds**: a build with no picked assets can take every asset of
+  its kinds in one category (Settings ▸ Assets), so new pistols join the
+  pistols build by themselves. *Create builds for this category* makes one
+  build per kind present — `<category>_v` (merge-v, "on our hands first",
+  output `v_<category>`), `<category>_p`, `<category>_w`, … — skipping
+  names that exist.
 
 ## `.mdl` import (M1)
 

@@ -36,6 +36,9 @@ KIND_TITLES = {
 }
 ROLE_KIND = Qt.ItemDataRole.UserRole
 ROLE_NAME = Qt.ItemDataRole.UserRole + 1
+ROLE_CATEGORY = Qt.ItemDataRole.UserRole + 2  # the category a row sits in
+UNCATEGORIZED = "Uncategorized"
+NEW_CATEGORY = "\x00new"  # move_to_category target: ask for a new name
 
 
 # --------------------------------------------------------------------------- #
@@ -55,11 +58,21 @@ class Explorer(QTreeWidget):
     build_delete_requested = Signal(str)
     derive_requested = Signal(list)  # asset names: open the Retarget dialog
     rederive_requested = Signal(str, bool)  # derived asset, edit settings first
+    category_move_requested = Signal(list, str)  # assets, category ("" / NEW_CATEGORY)
+    category_new_requested = Signal()
+    category_rename_requested = Signal(str)
+    category_delete_requested = Signal(str)
+    category_builds_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setHeaderHidden(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        # drag assets onto a category (handled in dropEvent; nothing moves by itself)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
         self.currentItemChanged.connect(self._on_current)
@@ -74,22 +87,18 @@ class Explorer(QTreeWidget):
             return
         assets = QTreeWidgetItem(self, [f"Assets ({len(project.assets)})"])
         assets.setData(0, ROLE_KIND, "assets")
-        for kind in ASSET_KINDS:
-            members = sorted(a.name for a in project.assets.values() if a.kind == kind)
-            if not members:
-                continue
-            group = QTreeWidgetItem(assets, [f"{KIND_TITLES[kind]}  ·  {len(members)}"])
-            group.setData(0, ROLE_KIND, "group")
-            for name in members:
-                derived = project.assets[name].derived
-                item = QTreeWidgetItem(group, [f"{name}  ↳ {derived['from']}" if derived
-                                               else name])
-                item.setData(0, ROLE_KIND, "asset")
-                item.setData(0, ROLE_NAME, name)
-                if derived:
-                    item.setToolTip(0, f"{derived['mode']} from {derived['from']}")
-                if name == selected:
-                    self.setCurrentItem(item)
+        if project.categories:
+            uncategorized = [a for a in project.assets.values() if not a.category]
+            names = sorted(project.categories, key=str.lower)
+            for category in names + ([""] if uncategorized else []):
+                count = sum(1 for a in project.assets.values() if a.category == category)
+                node = QTreeWidgetItem(assets, [f"{category or UNCATEGORIZED}  ·  {count}"])
+                node.setData(0, ROLE_KIND, "category")
+                node.setData(0, ROLE_NAME, category)
+                node.setData(0, ROLE_CATEGORY, category)
+                self._fill_kinds(node, project, category, selected)
+        else:
+            self._fill_kinds(assets, project, None, selected)
         builds = QTreeWidgetItem(self, [f"Builds ({len(project.builds)})"])
         builds.setData(0, ROLE_KIND, "builds")
         for name, build in sorted(project.builds.items()):
@@ -99,6 +108,55 @@ class Explorer(QTreeWidget):
             if name == selected_build:
                 self.setCurrentItem(item)
         self.expandAll()
+
+    def _fill_kinds(self, parent: QTreeWidgetItem, project: Project,
+                    category: str | None, selected: str) -> None:
+        """Kind groups with their assets (of one category, or all)."""
+        for kind in ASSET_KINDS:
+            members = sorted(a.name for a in project.assets.values() if a.kind == kind
+                             and (category is None or a.category == category))
+            if not members:
+                continue
+            group = QTreeWidgetItem(parent, [f"{KIND_TITLES[kind]}  ·  {len(members)}"])
+            group.setData(0, ROLE_KIND, "group")
+            group.setData(0, ROLE_CATEGORY, category)
+            for name in members:
+                derived = project.assets[name].derived
+                item = QTreeWidgetItem(group, [f"{name}  ↳ {derived['from']}" if derived
+                                               else name])
+                item.setData(0, ROLE_KIND, "asset")
+                item.setData(0, ROLE_NAME, name)
+                item.setData(0, ROLE_CATEGORY, category)
+                if derived:
+                    item.setToolTip(0, f"{derived['mode']} from {derived['from']}")
+                if name == selected:
+                    self.setCurrentItem(item)
+
+    def current_category(self) -> str | None:
+        """The category of the current row (None: no categories / not inside one)."""
+        item = self.currentItem()
+        return item.data(0, ROLE_CATEGORY) if item is not None else None
+
+    # -- drag & drop onto a category -----------------------------------------
+    def _drop_category(self, pos) -> str | None:  # noqa: ANN001 - QPoint
+        item = self.itemAt(pos)
+        if item is None or item.data(0, ROLE_KIND) not in ("category", "group", "asset"):
+            return None
+        return item.data(0, ROLE_CATEGORY)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if self.selected_assets() and self._drop_category(event.position().toPoint()) \
+                is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        category = self._drop_category(event.position().toPoint())
+        names = self.selected_assets()
+        event.ignore()  # the tree is rebuilt from the project, never moved by Qt
+        if category is not None and names:
+            self.category_move_requested.emit(names, category)
 
     def current_asset(self) -> str:
         item = self.currentItem()
@@ -151,6 +209,21 @@ class Explorer(QTreeWidget):
 
     def _context_menu(self, pos) -> None:  # noqa: ANN001 - QPoint
         item = self.itemAt(pos)
+        if item is not None and item.data(0, ROLE_KIND) in ("assets", "category"):
+            menu = QMenu(self)
+            menu.addAction("New category…", self.category_new_requested.emit)
+            category = item.data(0, ROLE_NAME) if item.data(0, ROLE_KIND) == "category" \
+                else None
+            if category:
+                menu.addAction("Create builds for this category",
+                               lambda: self.category_builds_requested.emit(category))
+                menu.addSeparator()
+                menu.addAction("Rename category…",
+                               lambda: self.category_rename_requested.emit(category))
+                menu.addAction("Delete category (assets stay)…",
+                               lambda: self.category_delete_requested.emit(category))
+            menu.exec(self.viewport().mapToGlobal(pos))
+            return
         if item is not None and item.data(0, ROLE_KIND) == "build":
             name = str(item.data(0, ROLE_NAME))
             menu = QMenu(self)
@@ -177,6 +250,20 @@ class Explorer(QTreeWidget):
             menu.addAction("Retarget settings…",
                            lambda: self.rederive_requested.emit(name, True))
         menu.addSeparator()
+        move = menu.addMenu("Move to category")
+        current = self._project.assets[name].category if self._project else ""
+        for category in sorted(self._project.categories if self._project else [],
+                               key=str.lower):
+            action = move.addAction(category,
+                                    lambda c=category: self.category_move_requested.emit(
+                                        selected, c))
+            action.setEnabled(category != current or len(selected) > 1)
+        move.addAction("New category…",
+                       lambda: self.category_move_requested.emit(selected, NEW_CATEGORY))
+        if self._project and self._project.categories:
+            move.addSeparator()
+            move.addAction(UNCATEGORIZED,
+                           lambda: self.category_move_requested.emit(selected, ""))
         kinds = menu.addMenu("Change kind")
         for kind in ASSET_KINDS:
             action = QAction(KIND_TITLES[kind], kinds)
@@ -262,6 +349,7 @@ class Inspector(QTabWidget):
         self.path_label = QLabel("—")
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.path_label.setWordWrap(True)
+        self.category_label = QLabel("—")
         self.source_label = QLabel("—")
         self.source_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.source_label.setWordWrap(True)
@@ -276,6 +364,7 @@ class Inspector(QTabWidget):
         self.warnings_label.setStyleSheet("color: #c58a00")
         form.addRow("Name", self.name_label)
         form.addRow("Kind", self.kind_box)
+        form.addRow("Category", self.category_label)
         form.addRow("Folder", self.path_label)
         form.addRow("Source", self.source_label)
         form.addRow("Contents", self.stats_label)
@@ -319,6 +408,7 @@ class Inspector(QTabWidget):
             widget.setEnabled(enabled)
         if asset is None:
             self.name_label.setText("—")
+            self.category_label.setText("—")
             self.path_label.setText("—")
             self.source_label.setText("—")
             self.stats_label.setText("Select an asset in the Explorer")
@@ -329,6 +419,7 @@ class Inspector(QTabWidget):
             self.texture_preview.set_image(None)
             return
         self.name_label.setText(asset.name)
+        self.category_label.setText(asset.category or UNCATEGORIZED)
         self.kind_box.setCurrentIndex(ASSET_KINDS.index(asset.kind))
         self.path_label.setText(str(project.root / asset.path))
         derived = asset.derived
