@@ -87,6 +87,8 @@ class MainWindow(QMainWindow):
         self.explorer.build_delete_requested.connect(self.delete_build)
         self.viewport.compare_toggled.connect(self._compare)
         self.build_panel.run_requested.connect(self.run_build)
+        self.build_panel.plan_requested.connect(self.plan_build)
+        self.build_panel.asset_requested.connect(self._reveal_asset)
         self.build_panel.compile_requested.connect(self.compile_build)
         self.build_panel.preview_requested.connect(self.preview_output)
         self.build_panel.preview_body_requested.connect(self.preview_body)
@@ -170,6 +172,9 @@ class MainWindow(QMainWindow):
         self.act_run_build = build_menu.addAction(
             "Run selected build", lambda: self.run_build(self.explorer.current_build()),
             QKeySequence("F5"))
+        self.act_plan_build = build_menu.addAction(
+            "Plan selected build", lambda: self.plan_build(self.explorer.current_build()),
+            QKeySequence("F6"))
         self.act_compile_build = build_menu.addAction(
             "Compile selected build",
             lambda: self.compile_build(self.explorer.current_build()), QKeySequence("F7"))
@@ -189,6 +194,7 @@ class MainWindow(QMainWindow):
                        self.act_settings, self.act_reveal, self.act_close,
                        self.act_derive, self.act_rederive, self.act_new_category,
                        self.act_new_build, self.act_run_build, self.act_compile_build,
+                       self.act_plan_build,
                        self.act_run_compile_build, self.act_delete_build):
             action.setEnabled(has and idle)
         for action in (self.act_new, self.act_open):
@@ -680,6 +686,27 @@ class MainWindow(QMainWindow):
         title = f"Build + compile {name}" if then_compile else f"Build {name}"
         self.jobs.start(title, work)
 
+    def plan_build(self, name: str) -> None:
+        project = self.project
+        if project is None or not name or self.jobs.busy:
+            return
+        if project.builds[name].kind not in project.PLANNABLE:
+            self.statusBar().showMessage("only merge-v builds can be planned", 5000)
+            return
+        self._pending_build = name
+        self._pending_tab = "plan"
+        self.jobs.start(f"Plan {name}", lambda r: project.plan_build(name, r))
+
+    def _reveal_asset(self, name: str) -> None:
+        """Select an asset in the Explorer (clearing a filter that hides it)."""
+        if self.project is None or name not in self.project.assets:
+            return
+        if not self.explorer.select("asset", name):
+            self.explorer_panel.search.clear()
+            self.explorer_panel.status_box.setCurrentIndex(0)
+            self.explorer.select("asset", name)
+        self._select_asset(name)
+
     def _studiomdl_ready(self) -> bool:
         if self.project is not None and self.project.settings.studiomdl:
             return True
@@ -864,8 +891,11 @@ class MainWindow(QMainWindow):
                 self.explorer.select("build", pending)
                 self.build_panel.show_build(self.project, pending)
                 self.right.setCurrentWidget(self.build_panel)
-                self.build_panel.setCurrentIndex(1)  # Results
+                tab = getattr(self, "_pending_tab", "")
+                self.build_panel.setCurrentIndex(self.build_panel.plan_tab if tab == "plan"
+                                                 else 1)  # Results
             self._pending_build = ""
+            self._pending_tab = ""
         self._update_actions()
 
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override

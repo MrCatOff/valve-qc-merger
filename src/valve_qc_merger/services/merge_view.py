@@ -86,6 +86,9 @@ class MergeViewOptions:
     max_decimation: float = 0.15  # --shared-hands: fold multi-part weapons
     no_verify: bool = False
     dry_run: bool = False
+    # stop once the parts are known: result.data["plan"], nothing written but
+    # inventory.json (the studio's Plan button)
+    plan_only: bool = False
 
 
 def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> ServiceResult:
@@ -155,15 +158,16 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
                 failures.append(message)
                 reporter.log(f"  {model.name:<20} POSE-FAIL  {message}")
                 continue
-            out_model = opts.out / "canonical" / model.name
-            (out_model / "anims").mkdir(parents=True, exist_ok=True)
-            for stem, mesh_smd in model.meshes.items():
-                target = out_model / (Path(stem.replace("\\", "/")).name + ".smd")
-                write_smd_file(mesh_smd, target)
-            for seq_name, anim_smd in model.anims.items():
-                write_smd_file(anim_smd, out_model / "anims" / f"{seq_name}.smd")
-            (out_model / model.qc_path.name).write_text(model.qc_text,
-                                                        encoding="latin-1")
+            if not opts.plan_only:
+                out_model = opts.out / "canonical" / model.name
+                (out_model / "anims").mkdir(parents=True, exist_ok=True)
+                for stem, mesh_smd in model.meshes.items():
+                    target = out_model / (Path(stem.replace("\\", "/")).name + ".smd")
+                    write_smd_file(mesh_smd, target)
+                for seq_name, anim_smd in model.anims.items():
+                    write_smd_file(anim_smd, out_model / "anims" / f"{seq_name}.smd")
+                (out_model / model.qc_path.name).write_text(model.qc_text,
+                                                            encoding="latin-1")
             parts = collapse_bodygroups(
                 model, max_decimation=opts.max_decimation if opts.shared_hands else 0.0)
             if parts.fold_report is not None:
@@ -271,6 +275,31 @@ def _drop_foreign_hands(
     return [(model, parts) for model, parts in pairs if model.name in keep]
 
 
+def _plan_rows(opts: MergeViewOptions, resolved: list) -> list[dict[str, object]]:
+    """Per part: name, models in weapon order with their pev_body (shared
+    hands only — the base value, hand 0) and the bone pooling it will use."""
+    multi = len(resolved) > 1
+    rows: list[dict[str, object]] = []
+    for number, (part_pairs, part_plan, mode) in enumerate(resolved, 1):
+        models = [model.name for model, _parts in part_pairs]
+        folded = [model.name for model, parts in part_pairs if parts.fold_report is not None]
+        # shared hands: the hands group is the low dimension, so pev_body =
+        # weapon x (hand variants) + hand (merger.merge_models); per-weapon
+        # hands depend on every model's group layout -> known after the run
+        variants = max(len(part_pairs[0][1].hand_variants), 1)
+        bodies = ({name: index * variants for index, name in enumerate(models)}
+                  if opts.shared_hands else {})
+        rows.append({
+            "part": f"{opts.name}_p{number}" if multi else opts.name,
+            "models": models,
+            "pev_body": bodies,
+            "folded": folded,
+            "pool": mode,
+            "bones": part_plan.size if part_plan is not None else None,
+        })
+    return rows
+
+
 def _merge_parts(
     opts: MergeViewOptions,
     reporter: Reporter,
@@ -356,6 +385,12 @@ def _merge_parts(
     if multi:
         reporter.log(f"  split: {len(resolved)} parts "
                      f"(studiomdl caps one model at 32 submodels)")
+    if opts.plan_only:
+        result.data["plan"] = _plan_rows(opts, resolved)
+        for row in result.data["plan"]:
+            reporter.log(f"  plan {row['part']}: {len(row['models'])} models, "
+                         f"bones {row['bones']} ({row['pool']})")
+        return EXIT_FAIL if failures else EXIT_OK
     aggregate: dict[str, dict[str, object]] = {}
     for number, (part_pairs, part_plan, mode) in enumerate(resolved, 1):
         reporter.check()

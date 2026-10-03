@@ -81,3 +81,25 @@ def test_build_retargets_only_what_needs_it(models: Path, tmp_path: Path) -> Non
     record = json.loads((project.build_dir("pack") / "last_run.json").read_text())
     assert any("v_raw_hands and its source v_raw" in w for w in record["warnings"])
     assert result.gates and all(g.passed for g in result.gates)
+
+
+def test_plan_build_predicts_without_merging(models: Path, tmp_path: Path) -> None:
+    project = Project.create(tmp_path / "pack")
+    for name in ("v_raw", "v_rt", "v_rt_moved"):
+        project.import_decompiled(models / name)
+    project.add_build(Build("shared", "merge-v", options={"shared_hands": True,
+                                                         "name": "v_pack"}))
+    result = project.plan_build("shared", CollectingReporter())
+    record = json.loads((project.build_dir("shared") / "plan.json").read_text())
+    (part,) = record["parts"]
+    assert part["part"] == "v_pack" and part["models"] == ["v_rt", "v_rt_moved"]
+    assert part["pev_body"] == {"v_rt": 0, "v_rt_moved": 1}  # one hand variant
+    assert any("v_raw" in f for f in record["failures"]) and not result.ok
+    assert not (project.build_dir("shared") / "output").exists()  # nothing merged
+    assert not (project.build_dir("shared") / "plan").exists()  # staging cleaned
+    # the run agrees with the plan
+    project.run_build("shared", CollectingReporter())
+    ini = (project.build_dir("shared") / "output" / "models.ini").read_text()
+    assert "[v_rt_moved]\npev_body = 1" in ini  # one part: no model line
+    with pytest.raises(KeyError):
+        project.plan_build("nope")

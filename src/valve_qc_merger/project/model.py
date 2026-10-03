@@ -631,26 +631,23 @@ class Project:
     def build_dir(self, name: str) -> Path:
         return self.root / "builds" / name
 
-    def run_build(self, name: str, reporter: Reporter | None = None) -> ServiceResult:
-        """Stage the build's assets, run its service, record ``last_run.json``."""
-        reporter = reporter or Reporter()
+    def _stage(self, name: str, work: Path, reporter: Reporter
+               ) -> tuple[list[Asset], Path, dict[str, Any], list[str]] | None:
+        """Copy the build's assets to ``work/input`` (retargeting into
+        ``work/retarget`` when asked). Returns (assets, models_dir, service
+        options, notes) or None when the build has no assets."""
         build = self.builds[name]
-        kind = BUILD_KINDS[build.kind]
         assets = self.build_assets(build)
         if not assets:
             reporter.log(f"error: build {name!r} has no assets")
-            return ServiceResult(exit_code=EXIT_DISCOVERY)
-        base = self.build_dir(name)
-        staged = base / "input"
-        output = base / "output"
-        for directory in (staged, output, base / "retarget"):
+            return None
+        staged = work / "input"
+        for directory in (staged, work / "retarget"):
             shutil.rmtree(directory, ignore_errors=True)
         staged.mkdir(parents=True)
-        started = time.time()
         for asset in assets:
             shutil.copytree(self.asset_dir(asset.name), staged / asset.name)
         reporter.log(f"build {name}: {build.kind} over {len(assets)} asset(s)")
-
         options = dict(build.options)
         models_dir = staged
         notes: list[str] = []
@@ -663,20 +660,74 @@ class Project:
         for note in notes:
             reporter.log(f"  warn: {note}")
         if build.retarget:
-            notes += self._retarget_for_build(assets, staged, base / "retarget", build,
+            notes += self._retarget_for_build(assets, staged, work / "retarget", build,
                                               reporter)
-            models_dir = base / "retarget"
+            models_dir = work / "retarget"
             options["shared_hands"] = True
-        opts = options_from_dict(kind.options, {
-            **options, "models_dir": str(models_dir), "out": str(output),
-        })
-        result = kind.run(opts, reporter)
+        return assets, models_dir, options, notes
+
+    @staticmethod
+    def _fold_notes(result: ServiceResult, notes: list[str]) -> None:
         result.warnings[:0] = notes
         failed_retargets = [n for n in notes if n.startswith("retarget ")]
         if failed_retargets:
             result.failures[:0] = failed_retargets
             if result.exit_code == EXIT_OK:
                 result.exit_code = EXIT_FAIL
+
+    PLANNABLE = frozenset({"merge-v"})
+
+    def plan_build(self, name: str, reporter: Reporter | None = None) -> ServiceResult:
+        """Everything a run decides — parts, who goes where, pev_body, who is
+        rejected and why — without writing the merge (merge-v only). Staged
+        under ``builds/<name>/plan/`` so the last run's output is untouched;
+        recorded in ``plan.json``."""
+        reporter = reporter or Reporter()
+        build = self.builds[name]
+        if build.kind not in self.PLANNABLE:
+            reporter.log(f"error: {build.kind} builds cannot be planned")
+            return ServiceResult(exit_code=EXIT_DISCOVERY)
+        work = self.build_dir(name) / "plan"
+        started = time.time()
+        try:
+            staged = self._stage(name, work, reporter)
+            if staged is None:
+                return ServiceResult(exit_code=EXIT_DISCOVERY)
+            _assets, models_dir, options, notes = staged
+            opts = options_from_dict(BUILD_KINDS[build.kind].options, {
+                **options, "models_dir": str(models_dir), "out": str(work / "out"),
+                "plan_only": True,
+            })
+            result = BUILD_KINDS[build.kind].run(opts, reporter)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        self._fold_notes(result, notes)
+        record = {"build": name, "exit_code": result.exit_code, "started": started,
+                  "seconds": round(time.time() - started, 2),
+                  "parts": result.data.get("plan", []), "failures": result.failures,
+                  "warnings": notes}
+        (self.build_dir(name) / "plan.json").write_text(json.dumps(record, indent=1),
+                                                        encoding="utf-8")
+        return result
+
+    def run_build(self, name: str, reporter: Reporter | None = None) -> ServiceResult:
+        """Stage the build's assets, run its service, record ``last_run.json``."""
+        reporter = reporter or Reporter()
+        build = self.builds[name]
+        kind = BUILD_KINDS[build.kind]
+        base = self.build_dir(name)
+        output = base / "output"
+        shutil.rmtree(output, ignore_errors=True)
+        started = time.time()
+        staged = self._stage(name, base, reporter)
+        if staged is None:
+            return ServiceResult(exit_code=EXIT_DISCOVERY)
+        _assets, models_dir, options, notes = staged
+        opts = options_from_dict(kind.options, {
+            **options, "models_dir": str(models_dir), "out": str(output),
+        })
+        result = kind.run(opts, reporter)
+        self._fold_notes(result, notes)
         record = {
             "build": name,
             "kind": build.kind,

@@ -133,10 +133,12 @@ class BuildPanel(QTabWidget):
     """Settings / Results / Manifest / Outputs of one build."""
 
     run_requested = Signal(str)
+    plan_requested = Signal(str)
     compile_requested = Signal(str)
     preview_requested = Signal(str)  # absolute QC path
     preview_body_requested = Signal(str, int, int)  # QC path, pev_body, sequence (-1)
     open_requested = Signal(str)  # absolute path (folder or .mdl)
+    asset_requested = Signal(str)  # select this asset (from a plan row)
     changed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -169,6 +171,23 @@ class BuildPanel(QTabWidget):
         layout.addWidget(self.gates, 2)
         layout.addWidget(self.failures)
         self.addTab(results, "Results")
+        # -- plan
+        plan = QWidget()
+        plan_layout = QVBoxLayout(plan)
+        self.plan_summary = QLabel("Plan shows the parts a run would make — who goes "
+                                   "where, pev_body, who is rejected — without merging.")
+        self.plan_summary.setWordWrap(True)
+        self.plan_table = _table(["Part", "pev_body", "Model", "Note"])
+        self.plan_table.setToolTip("double-click: select the asset")
+        self.plan_table.cellDoubleClicked.connect(self._plan_row_activated)
+        self.plan_rejected = QLabel("")
+        self.plan_rejected.setWordWrap(True)
+        self.plan_rejected.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        plan_layout.addWidget(self.plan_summary)
+        plan_layout.addWidget(self.plan_table, 1)
+        plan_layout.addWidget(self.plan_rejected)
+        self.plan_tab = self.addTab(plan, "Plan")
         # -- manifest
         self.manifest = QTableWidget()
         self.manifest.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -199,6 +218,7 @@ class BuildPanel(QTabWidget):
         self.project, self.build_name = project, name
         self._build_settings()
         self.refresh_results()
+        self.refresh_plan()
 
     def _clear_settings(self) -> None:
         while self.settings_layout.count():
@@ -274,9 +294,15 @@ class BuildPanel(QTabWidget):
         save.clicked.connect(self.save)
         run = QPushButton("Save && Run")
         run.clicked.connect(lambda: self.save() and self.run_requested.emit(self.build_name))
+        plan_button = QPushButton("Save && Plan")
+        plan_button.setToolTip("what a run would make (parts, pev_body, rejections) "
+                               "without merging")
+        plan_button.setVisible(build.kind in Project.PLANNABLE)
+        plan_button.clicked.connect(
+            lambda: self.save() and self.plan_requested.emit(self.build_name))
         compile_button = QPushButton("Compile")
         compile_button.clicked.connect(lambda: self.compile_requested.emit(self.build_name))
-        for button in (save, run, compile_button):
+        for button in (save, plan_button, run, compile_button):
             row.addWidget(button)
         holder = QWidget()
         holder.setLayout(row)
@@ -311,6 +337,42 @@ class BuildPanel(QTabWidget):
             return False
         self.changed.emit(self.build_name)
         return True
+
+    # -- plan ----------------------------------------------------------------
+    def refresh_plan(self) -> None:
+        project = self.project
+        self.plan_table.setRowCount(0)
+        self.plan_rejected.setText("")
+        if project is None or self.build_name not in project.builds:
+            return
+        record = load_record(project.build_dir(self.build_name) / "plan.json")
+        if record is None:
+            self.plan_summary.setText("Not planned yet: Save & Plan (merge-v builds).")
+            return
+        parts = record.get("parts", [])
+        models = sum(len(p["models"]) for p in parts)
+        failures = record.get("failures", [])
+        self.plan_summary.setText(
+            f"<b>{len(parts)} part(s)</b> · {models} model(s) · "
+            f"{len(failures)} rejected · planned in {record.get('seconds', '?')} s")
+        rows: list[list[object]] = []
+        for part in parts:
+            bodies = part.get("pev_body", {})
+            folded = set(part.get("folded", []))
+            for model in part["models"]:
+                note = "parts folded into one submodel" if model in folded else ""
+                rows.append([part["part"], bodies.get(model, "after run"), model, note])
+        _fill(self.plan_table, rows)
+        warnings = [w for w in record.get("warnings", []) if w not in failures]
+        text = "\n".join(f"✗ {f}" for f in failures)
+        if warnings:
+            text += ("\n" if text else "") + "\n".join(f"• {w}" for w in warnings)
+        self.plan_rejected.setText(text)
+
+    def _plan_row_activated(self, row: int, _column: int) -> None:
+        item = self.plan_table.item(row, 2)
+        if item is not None:
+            self.asset_requested.emit(item.text())
 
     # -- results -----------------------------------------------------------
     def refresh_results(self) -> None:

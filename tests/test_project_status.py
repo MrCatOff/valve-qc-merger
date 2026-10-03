@@ -97,3 +97,26 @@ def test_explorer_badges_and_inspector(project: Project, tmp_path: Path) -> None
         assert "own hands" in win.inspector.status_label.text()
     finally:
         win.close()
+
+
+def test_plan_tab(project: Project, tmp_path: Path) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings
+
+    from valve_qc_merger.studio.main_window import MainWindow
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = MainWindow(QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    try:
+        win.set_project(project)
+        win.plan_build("view")
+        assert win.jobs.wait(120_000)
+        panel = win.build_panel
+        assert panel.currentIndex() == panel.plan_tab
+        assert panel.plan_table.rowCount() == 2
+        assert "1 part(s)" in panel.plan_summary.text()
+        assert "the same weapon twice" in panel.plan_rejected.text()
+        panel._plan_row_activated(1, 0)
+        assert win.explorer.current_asset() == panel.plan_table.item(1, 2).text()
+        assert not (project.build_dir("view") / "output").exists()
+    finally:
+        win.close()

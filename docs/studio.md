@@ -329,6 +329,19 @@ problems in builds, in no build, made by Retarget. Matching assets keep their
 parents visible (a derived asset shows under its source); empty categories
 and kind groups hide; Esc clears both. The filter survives refreshes.
 
+## Plan (merge-v)
+
+**Save & Plan** (Build ▸ Plan selected build, F6) runs a merge-v build up to
+the moment its parts are decided — staging, retarget-first, canonicalisation,
+folding, the shared-hands check, the part split and bone pooling — and stops
+before writing anything. The **Plan** tab lists every part with its models in
+weapon order, their `pev_body` (shared hands: weapon × hand variants; per-weapon
+hands only after a run), folded weapons, and every rejection with its reason
+(double-click a row to select the asset). It stages under
+`builds/<name>/plan/` (removed afterwards; the last run's output stays) and
+records `plan.json`. On the 56-pistol corpus the plan matched the real run
+for every model (part and `pev_body`).
+
 ## Asset status
 
 Every asset in the Explorer carries a dot (details in its tooltip and in

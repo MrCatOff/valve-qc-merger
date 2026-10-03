@@ -20,7 +20,6 @@ parent per slot by construction.
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -268,14 +267,12 @@ def preview_pool_sizes(
 
     fakes: list[ModelInput] = []
     for model, _parts in pairs:
-        fullest = copy.deepcopy(
-            max(model.meshes.values(), key=lambda m: len(m.nodes))
-        )
+        fullest = max(model.meshes.values(), key=lambda m: len(m.nodes)).clone()
         clone = ModelInput(
             name=model.name, directory=model.directory,
             qc_path=model.qc_path, qc_text="", bodygroups={}, sequences=[],
             meshes={"_": fullest},
-            anims={k: copy.deepcopy(v) for k, v in model.anims.items()},
+            anims={k: v.clone() for k, v in model.anims.items()},
         )
         slot_of = plan.assignments[model.name]
         for smd in {**clone.meshes, **clone.anims}.values():

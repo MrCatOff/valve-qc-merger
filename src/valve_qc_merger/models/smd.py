@@ -86,6 +86,13 @@ class Smd:
     frames: list[Frame] = field(default_factory=list)
     triangles: list[Triangle] = field(default_factory=list)
 
+    def clone(self) -> Smd:
+        """An independent copy: new lists, shared (immutable) nodes, frames
+        and triangles — every edit replaces elements, never mutates them, so
+        this equals a deep copy at a fraction of the cost."""
+        return Smd(self.version, list(self.nodes), list(self.frames),
+                   list(self.triangles))
+
     @property
     def bone_count(self) -> int:
         """Number of bones declared in the ``nodes`` block."""
