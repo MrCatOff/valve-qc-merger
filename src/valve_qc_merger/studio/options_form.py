@@ -100,7 +100,7 @@ class OptionsForm(QWidget):
             spin.setRange(-1_000_000, 1_000_000)
             spin.setValue(int(value or 0))
             return spin
-        if base == "float":
+        if base == "float" and "|None" not in annotation:
             spin = QDoubleSpinBox()
             spin.setRange(-1e6, 1e6)
             spin.setDecimals(3)

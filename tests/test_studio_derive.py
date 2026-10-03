@@ -273,3 +273,64 @@ def test_switching_assets_never_resizes_the_docks(app, tmp_path: Path) -> None:
             assert sizes() == start, name
     finally:
         win.close()
+
+
+def test_curl_closes_on_both_hands_and_works_without_snug() -> None:
+    """+ closes a finger on either hand (the flexion axis is mirrored), and a
+    manual curl is not zeroed by --no-snug."""
+    import numpy as np
+
+    from valve_qc_merger.handswap import asset as am
+    from valve_qc_merger.handswap import build as b
+    from valve_qc_merger.handswap import retarget as rt
+    asset = am.load(am.DEFAULT_ASSET)
+    model = b.load_weapon(str(_ANACONDA), None, log=lambda *a: None)
+    setup = b.anim_world_frames(model.anims[model.qc.sequences[0]["smd"]], model.skel)[0]
+
+    def tip_to_palm(manual, side, finger, max_deg):
+        plan = rt.build_plan(asset, model.skel, model.hands, setup, log=lambda *a: None)
+        rt.refine_finger_fit(plan, model.skel, setup, max_deg=max_deg, manual=manual,
+                             log=lambda *a: None)
+        w = rt.solve_frame(plan, setup)
+        s = "R" if side == "right" else "L"
+        roots = np.mean([w[f"{f}00.{s}"][:3, 3] for f in
+                         ("BigFinger", "ForeFinger", "MiddleFinger", "RingFinger",
+                          "PinkyFinger")], axis=0)
+        palm = (w[f"Hand.{s}"][:3, 3] + roots) / 2
+        return float(np.linalg.norm(w[f"{finger}02.{s}"][:3, 3] - palm))
+
+    for side in ("left", "right"):
+        for finger in ("BigFinger", "ForeFinger", "PinkyFinger"):
+            base = tip_to_palm(None, side, finger, 18.0)
+            assert tip_to_palm({(side, finger): 8}, side, finger, 18.0) < base
+            assert tip_to_palm({(side, finger): -8}, side, finger, 18.0) > base
+    loose = tip_to_palm(None, "left", "ForeFinger", 0.0)
+    assert tip_to_palm({("left", "ForeFinger"): 10}, "left", "ForeFinger", 0.0) < loose
+
+
+def test_tuning_keeps_curls_and_snug_limit(tmp_path: Path) -> None:
+    from valve_qc_merger.handswap import tuning
+    path = str(tmp_path / "grip_tuning.json")
+    tuning.save_entry(path, "v_x", weapon_offset=[0, 0.5, 0],
+                      curl={"left": {"ForeFinger": 8, "RingFinger": 0}}, snug_max_deg=30)
+    assert tuning.load_entry(path, "v_x") == {
+        "weapon_offset": [0.0, 0.5, 0.0], "curl": {"left": {"ForeFinger": 8.0}},
+        "snug_max_deg": 30.0}
+    tuning.save_entry(path, "v_x", weapon_offset=[0, 0, 1])  # curls kept when not given
+    assert tuning.load_entry(path, "v_x")["curl"] == {"left": {"ForeFinger": 8.0}}
+    assert tuning.curl_specs({"left": {"ForeFinger": 8.0}}) == ["left:ForeFinger:8"]
+
+
+def test_dialog_fingers_round_trip(app, tmp_path: Path, monkeypatch) -> None:
+    from valve_qc_merger.handswap import tuning
+    from valve_qc_merger.studio import derive_dialog
+    path = tmp_path / "grip_tuning.json"
+    monkeypatch.setattr(derive_dialog, "grip_tuning_file", lambda asset=None: path)
+    tuning.save_entry(str(path), "v_x", curl={"right": {"PinkyFinger": -4}})
+    dialog = derive_dialog.DeriveDialog(["v_x"])  # prefilled from the table
+    assert dialog.curl_spins[("right", "PinkyFinger")].value() == -4
+    dialog.curl_spins[("left", "ForeFinger")].setValue(8)
+    assert sorted(dialog.options()["curl"]) == ["left:ForeFinger:8", "right:PinkyFinger:-4"]
+    dialog.save_tuning()
+    assert tuning.load_entry(str(path), "v_x")["curl"] == {
+        "right": {"PinkyFinger": -4.0}, "left": {"ForeFinger": 8.0}}

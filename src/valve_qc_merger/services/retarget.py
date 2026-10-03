@@ -29,7 +29,7 @@ class RetargetOptions:
     compile: bool = False
     verify: bool = True
     snug: bool = True
-    snug_max_deg: float = 18.0
+    snug_max_deg: float | None = None  # None: grip tuning, else the default
     curl: list[str] = field(default_factory=list)
     grip_offset: list[str] = field(default_factory=list)
     weapon_offset: list[float] = field(default_factory=list)  # [dx, dy, dz], model space

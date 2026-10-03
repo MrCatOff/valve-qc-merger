@@ -20,6 +20,9 @@ from . import smd as smdmod
 from . import tuning as tuningmod
 from .retarget import build_plan, refine_finger_fit
 
+# per-joint limit of the automatic finger fit (grip_tuning.json may set its own)
+DEFAULT_SNUG_MAX_DEG = 35.0  # corpus: mean tip error 0.183 -> 0.153 vs 18, fewer clamped joints
+
 def _project_root() -> str:
     """Where ``storage/`` lives: the checkout, or the exe's bundle when frozen."""
     from valve_qc_merger.resources import data_root
@@ -57,8 +60,10 @@ def parse_args(argv=None):
                     help="curl fingers until they touch the weapon/other "
                          "hand (on by default)")
     ap.add_argument("--no-snug", dest="snug", action="store_false")
-    ap.add_argument("--snug-max-deg", type=float, default=18.0,
-                    help="per-joint clamp for the automatic snug curl")
+    ap.add_argument("--snug-max-deg", type=float, default=None,
+                    help="per-joint clamp for the automatic snug curl "
+                         "(default: the weapon's grip tuning, else %g)"
+                         % DEFAULT_SNUG_MAX_DEG)
     ap.add_argument("--curl", action="append", default=[],
                     metavar="side:finger:deg",
                     help="manual extra curl per joint, e.g. "
@@ -137,13 +142,17 @@ def convert(args, log=log) -> dict:
     if not plan.sides:
         raise RuntimeError("no hand could be retargeted")
 
-    if args.snug or args.curl:
-        manual = {}
-        for spec in args.curl:
-            side, finger, deg = spec.split(":")
-            manual[(side.strip().lower(), finger.strip())] = float(deg)
+    # finger curls: the tuning table first, explicit --curl per finger wins
+    manual = {}
+    for spec in tuningmod.curl_specs(tuned.get("curl", {})) + list(args.curl):
+        side, finger, deg = spec.split(":")
+        manual[(side.strip().lower(), finger.strip())] = float(deg)
+    max_deg = getattr(args, "snug_max_deg", None)
+    if max_deg is None:
+        max_deg = tuned.get("snug_max_deg", DEFAULT_SNUG_MAX_DEG)
+    if args.snug or manual:
         refine_finger_fit(plan, model.skel, setup_world,
-                          max_deg=args.snug_max_deg if args.snug else 0.0,
+                          max_deg=max_deg if args.snug else 0.0,
                           manual=manual, log=log)
 
     asm = buildmod.assemble(model, plan, setup_world, log=log)

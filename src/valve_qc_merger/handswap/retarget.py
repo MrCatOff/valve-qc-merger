@@ -223,6 +223,9 @@ def build_plan(asset: HandsAsset, skel: OrigSkeleton, hands: list[HandInfo],
     return plan
 
 
+MANUAL_CURL_RANGE = np.radians(45.0)  # what --curl may add beyond the auto clamp
+
+
 def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                       setup_world_old: dict[str, np.ndarray],
                       *, max_deg: float = 18.0, min_err: float = 0.35,
@@ -244,7 +247,8 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
     per-joint clamp, fingers already within min_err are left alone.
 
     manual: {(side, finger_prefix): extra_degrees} applied per joint on
-    top of the automatic result (still clamped)."""
+    top of the automatic result: positive closes the finger, negative opens
+    it, on either hand (clamped to max_deg + 45 deg)."""
     asset = plan.asset
     step = np.radians(2.0)
     max_auto = np.radians(max_deg)
@@ -327,8 +331,22 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                             m_finger.lower() in chain[0].lower():
                         extra = np.radians(deg)
             if extra:
-                lim = max_auto * 1.5
-                thetas = [max(-lim, min(lim, t + extra)) for t in thetas]
+                # "+" always closes the finger: the flexion axis is mirrored
+                # between the hands (right closes at +, left at -), so take
+                # the sign that brings the tip toward the palm centre (half
+                # way from the wrist to the finger roots: right for the
+                # thumb too, which closes across the palm, not toward the wrist)
+                roots = np.mean([base_cso[c[0]][:3, 3] for _o, c in sp.pairs if c], axis=0)
+                palm = (hand_w[:3, 3] + roots) / 2.0
+
+                def reach(delta):
+                    w = fk([t + delta for t in thetas])[-1]
+                    return float(np.linalg.norm(w[:3, :3] @ tip_local + w[:3, 3] - palm))
+                closing = 1.0 if reach(np.radians(5)) < reach(-np.radians(5)) else -1.0
+                # the manual range does not depend on the automatic clamp
+                # (it used to be 1.5 x max_deg: zero under --no-snug)
+                lim = max_auto + MANUAL_CURL_RANGE
+                thetas = [max(-lim, min(lim, t + closing * extra)) for t in thetas]
 
             if any(abs(t) > 1e-6 for t in thetas):
                 worlds = fk(thetas)

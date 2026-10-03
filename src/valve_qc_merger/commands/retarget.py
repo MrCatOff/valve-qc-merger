@@ -61,11 +61,13 @@ class RetargetCommand(Command):
                             default=True,
                             help="disable the automatic finger snug-to-weapon "
                                  "curl (on by default)")
-        parser.add_argument("--snug-max-deg", type=float, default=18.0,
-                            help="per-joint clamp for the automatic snug curl")
+        parser.add_argument("--snug-max-deg", type=float, default=None,
+                            help="per-joint clamp for the automatic snug curl "
+                                 "(default: the weapon's grip tuning, else 35)")
         parser.add_argument("--curl", action="append", default=[],
                             metavar="side:finger:deg",
-                            help="manual extra finger curl, e.g. "
+                            help="extra curl per joint of one finger, + closes, - "
+                                 "opens (either hand), e.g. "
                                  "'left:ForeFinger:+8' (repeatable)")
         parser.add_argument("--grip-offset", action="append", default=[],
                             metavar="side:dx,dy,dz",

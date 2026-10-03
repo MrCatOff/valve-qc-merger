@@ -13,13 +13,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -27,6 +28,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
+    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -40,7 +43,9 @@ from valve_qc_merger.services.retarget import RetargetOptions
 from valve_qc_merger.studio.options_form import OptionsForm
 
 # fields of RetargetOptions the dialog shows as spin boxes, or never
-_OFFSET_FIELDS = frozenset({"weapon_offset", "grip_offset"})
+_OFFSET_FIELDS = frozenset({"weapon_offset", "grip_offset", "curl"})
+FINGER_TITLES = {"BigFinger": "Thumb", "ForeFinger": "Index", "MiddleFinger": "Middle",
+                 "RingFinger": "Ring", "PinkyFinger": "Pinky"}
 _RETARGET_FIXED = frozenset({"category", "compile", "studiomdl", "modelname"})
 SIDES = ("left", "right")
 
@@ -84,6 +89,20 @@ def parse_grip_offsets(specs: list[str]) -> dict[str, list[float]]:
             continue
         if side.strip().lower() in SIDES and len(values) == 3:
             out[side.strip().lower()] = values
+    return out
+
+
+def parse_curls(specs: list[str]) -> dict[str, dict[str, float]]:
+    """``["left:ForeFinger:8"]`` -> ``{"left": {"ForeFinger": 8.0}}``."""
+    out: dict[str, dict[str, float]] = {}
+    for spec in specs or []:
+        parts = str(spec).split(":")
+        if len(parts) != 3 or parts[0].strip().lower() not in SIDES:
+            continue
+        try:
+            out.setdefault(parts[0].strip().lower(), {})[parts[1].strip()] = float(parts[2])
+        except ValueError:
+            continue
     return out
 
 
@@ -156,12 +175,15 @@ class DeriveDialog(QDialog):
         hands_layout = QVBoxLayout(hands_page)
         hands_layout.setContentsMargins(0, 0, 0, 0)
         prefilled = False
-        if (name is None and len(sources) == 1
-                and not options.get("weapon_offset") and not options.get("grip_offset")):
+        if (name is None and len(sources) == 1 and not options.get("weapon_offset")
+                and not options.get("grip_offset") and not options.get("curl")):
             tuned = tuning.load_entry(str(grip_tuning_file(options.get("asset"))), sources[0])
             if tuned:
                 options["weapon_offset"] = tuned.get("weapon_offset", [])
                 options["grip_offset"] = format_grip_offsets(tuned.get("grip_offset", {}))
+                options["curl"] = tuning.curl_specs(tuned.get("curl", {}))
+                if "snug_max_deg" in tuned and "snug_max_deg" not in options:
+                    options["snug_max_deg"] = tuned["snug_max_deg"]
                 prefilled = True
         offsets = QGroupBox("Grip offsets")
         offsets_form = QFormLayout(offsets)
@@ -193,6 +215,7 @@ class DeriveDialog(QDialog):
         tuning_layout.addWidget(self.save_tuning_button)
         offsets_form.addRow(tuning_row)
         hands_layout.addWidget(offsets)
+        hands_layout.addWidget(self._fingers_box(parse_curls(options.get("curl", []))))
         self.retarget_form = OptionsForm(
             RetargetOptions, "retarget",
             {k: v for k, v in options.items() if k not in _OFFSET_FIELDS},
@@ -210,7 +233,13 @@ class DeriveDialog(QDialog):
         canon_layout.addWidget(self.canon_form)
         canon_layout.addStretch(1)
         self.pages.addWidget(canon_page)
-        layout.addWidget(self.pages, 1)
+        # the options scroll on a short screen instead of being squeezed
+        scroll = QScrollArea()
+        scroll.setWidget(self.pages)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        layout.addWidget(scroll, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Apply
@@ -229,7 +258,8 @@ class DeriveDialog(QDialog):
         self.mode_group.idToggled.connect(self._mode_toggled)
         self.mode_group.button(self._mode_keys.index(mode)).setChecked(True)
         self._mode_toggled(self._mode_keys.index(mode), True)
-        self.resize(560, 0)
+        self.resize(580, min(860, self.screen().availableGeometry().height() - 60)
+                    if self.screen() is not None else 760)
 
     @property
     def mode(self) -> str:
@@ -263,7 +293,45 @@ class DeriveDialog(QDialog):
         grips = format_grip_offsets({s: e.value() for s, e in self.grip_offsets.items()})
         if grips:
             values["grip_offset"] = grips
+        curls = tuning.curl_specs(self.curls())
+        if curls:
+            values["curl"] = curls
         return values
+
+    def _fingers_box(self, curls: dict[str, dict[str, float]]) -> QGroupBox:
+        box = QGroupBox("Fingers — extra curl per joint, degrees (+ closes, − opens)")
+        outer = QVBoxLayout(box)
+        grid = QGridLayout()
+        outer.addLayout(grid)
+        for column, title in enumerate(FINGER_TITLES.values(), start=1):
+            grid.addWidget(QLabel(title), 0, column)
+        self.curl_spins: dict[tuple[str, str], QSpinBox] = {}
+        for row, side in enumerate(SIDES, start=1):
+            grid.addWidget(QLabel(side.capitalize()), row, 0)
+            for column, finger in enumerate(FINGER_TITLES, start=1):
+                spin = QSpinBox()
+                spin.setRange(-45, 45)
+                spin.setSingleStep(2)
+                spin.setValue(int(round(curls.get(side, {}).get(finger, 0))))
+                spin.setMinimumHeight(spin.sizeHint().height())
+                spin.setToolTip(f"{side} {FINGER_TITLES[finger].lower()}: added to every "
+                                "joint after the automatic fit (it re-snugs too)")
+                grid.addWidget(spin, row, column)
+                self.curl_spins[(side, finger)] = spin
+        hint = QLabel("A loose grip (our hands are bigger than most originals): close the "
+                      "fingers a few degrees, or raise 'snug max deg' below so the automatic "
+                      "fit may curl further.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray")
+        outer.addWidget(hint)
+        return box
+
+    def curls(self) -> dict[str, dict[str, float]]:
+        out: dict[str, dict[str, float]] = {}
+        for (side, finger), spin in self.curl_spins.items():
+            if spin.value():
+                out.setdefault(side, {})[finger] = float(spin.value())
+        return out
 
     def tuning_file(self) -> Path:
         return grip_tuning_file(self.retarget_form.values().get("asset"))
@@ -277,7 +345,8 @@ class DeriveDialog(QDialog):
             entry = tuning.save_entry(
                 str(path), self.sources[0],
                 grip_offset={s: e.value() for s, e in self.grip_offsets.items()},
-                weapon_offset=self.weapon_offset.value())
+                weapon_offset=self.weapon_offset.value(), curl=self.curls(),
+                snug_max_deg=self.retarget_form.values().get("snug_max_deg"))
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Grip tuning", f"Cannot write {path}: {exc}")
             return None
