@@ -199,9 +199,12 @@ re-scores an existing work folder with the current metric.
 |---|---|---|---|
 | joint-based finger fit (before) | 0.095 u | 0.161 u | 0.071 u |
 | finger fit on skin (distal centroid, then the finger's whole surface) | 0.069 u | 0.081 u | 0.060 u |
-| + small abduction per joint (±10°) | **0.064 u** | **0.066 u** | **0.058 u** |
+| + small abduction per joint (±10°) | 0.064 u | 0.066 u | 0.058 u |
+| + weapon chains off the wrist no longer evict a finger | **0.063 u** | **0.063 u** | **0.054 u** |
 
-Better on every weapon (no regression). Tried and rejected on the numbers:
+Better on every weapon (no regression). The last row fixed 8 weapons whose
+blade / pin / second gun hangs off a wrist like a sixth finger and used to
+push the middle finger out (giantknife, dualkriss, the grenades). Tried and rejected on the numbers:
 seating the palm from skin centroids (worse: centroids depend on each rig's
 weights) and refining the palm by ICP onto the original palm skin (the
 identity seat is already within 0.03 u; on foreign hands it turned the palm
