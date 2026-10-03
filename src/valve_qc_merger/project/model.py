@@ -481,7 +481,8 @@ class Project:
             shutil.move(str(staging / "output"), str(target))
             asset = Asset(name=name, kind=kind, path=relative.as_posix(),
                           notes=existing.notes if existing is not None else "",
-                          derived={"from": source, "mode": mode, "options": stored},
+                          derived={"from": source, "mode": mode, "options": stored,
+                                   "at": round(time.time(), 3)},
                           category=self.assets[source].category)
             self.assets[name] = asset
             self.save()

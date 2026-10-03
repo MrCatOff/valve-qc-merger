@@ -5,7 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QIcon,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -39,6 +49,30 @@ ROLE_NAME = Qt.ItemDataRole.UserRole + 1
 ROLE_CATEGORY = Qt.ItemDataRole.UserRole + 2  # the category a row sits in
 UNCATEGORIZED = "Uncategorized"
 NEW_CATEGORY = "\x00new"  # move_to_category target: ask for a new name
+
+# status badge per AssetStatus.level
+STATUS_COLORS = {"problem": "#d64545", "stale": "#e0a030", "ours": "#3fa34d",
+                 "own": "#8a8f98"}
+STATUS_HINTS = {"problem": "failed or rejected in its last build",
+                "stale": "its source changed: re-run",
+                "ours": "on our hands", "own": "own hands (not retargeted)"}
+_ICONS: dict[str, QIcon] = {}
+
+
+def status_icon(level: str) -> QIcon:
+    """A small filled dot in the level's colour (empty icon for "plain")."""
+    if level not in _ICONS:
+        pixmap = QPixmap(12, 12)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        if level in STATUS_COLORS:
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(STATUS_COLORS[level]))
+            painter.drawEllipse(2, 2, 8, 8)
+            painter.end()
+        _ICONS[level] = QIcon(pixmap)
+    return _ICONS[level]
 
 
 # --------------------------------------------------------------------------- #
@@ -78,9 +112,12 @@ class Explorer(QTreeWidget):
         self.customContextMenuRequested.connect(self._context_menu)
         self.currentItemChanged.connect(self._on_current)
         self._project: Project | None = None
+        self.statuses: dict = {}  # asset -> project.status.AssetStatus
 
     def show_project(self, project: Project | None) -> None:
+        from valve_qc_merger.project.status import project_status
         self._project = project
+        self.statuses = project_status(project) if project is not None else {}
         selected = self.current_asset()
         selected_build = self.current_build()
         self.clear()
@@ -213,8 +250,11 @@ class Explorer(QTreeWidget):
         item.setData(0, ROLE_KIND, "asset")
         item.setData(0, ROLE_NAME, name)
         item.setData(0, ROLE_CATEGORY, category)
-        if derived:
-            item.setToolTip(0, f"{derived['mode']} from {derived['from']}")
+        status = self.statuses.get(name)
+        if status is not None:
+            item.setIcon(0, status_icon(status.level))
+            tip = [f"{derived['mode']} from {derived['from']}"] if derived else []
+            item.setToolTip(0, "\n".join(tip + status.lines()))
         if name == selected:
             self.setCurrentItem(item)
         for child in children.get(name, []):
@@ -440,6 +480,9 @@ class Inspector(QTabWidget):
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.path_label.setWordWrap(True)
         self.category_label = QLabel("—")
+        self.status_label = QLabel("—")
+        self.status_label.setWordWrap(True)
+        self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.source_label = QLabel("—")
         self.source_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.source_label.setWordWrap(True)
@@ -455,6 +498,7 @@ class Inspector(QTabWidget):
         form.addRow("Name", self.name_label)
         form.addRow("Kind", self.kind_box)
         form.addRow("Category", self.category_label)
+        form.addRow("Status", self.status_label)
         form.addRow("Folder", self.path_label)
         form.addRow("Source", self.source_label)
         form.addRow("Contents", self.stats_label)
@@ -499,6 +543,7 @@ class Inspector(QTabWidget):
         if asset is None:
             self.name_label.setText("—")
             self.category_label.setText("—")
+            self.status_label.setText("—")
             self.path_label.setText("—")
             self.source_label.setText("—")
             self.stats_label.setText("Select an asset in the Explorer")
@@ -510,6 +555,7 @@ class Inspector(QTabWidget):
             return
         self.name_label.setText(asset.name)
         self.category_label.setText(asset.category or UNCATEGORIZED)
+        self.status_label.setText("—")
         self.kind_box.setCurrentIndex(ASSET_KINDS.index(asset.kind))
         self.path_label.setText(str(project.root / asset.path))
         derived = asset.derived
@@ -539,6 +585,16 @@ class Inspector(QTabWidget):
         self.texture_preview.set_image(None)
         if info.textures:
             self.textures.setCurrentCell(0, 0)
+
+    def show_status(self, status: object) -> None:
+        """The asset's AssetStatus (from the Explorer's last refresh)."""
+        if status is None:
+            self.status_label.setText("—")
+            return
+        color = STATUS_COLORS.get(status.level)
+        lines = status.lines()
+        head = (f"<span style='color:{color}'>●</span> " if color else "") + lines[0]
+        self.status_label.setText("<br>".join([head] + lines[1:]))
 
     def _kind_activated(self, index: int) -> None:
         if self._asset:

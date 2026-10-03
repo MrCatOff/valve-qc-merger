@@ -788,6 +788,7 @@ class MainWindow(QMainWindow):
         keep = bool(self._shown_asset) and self._shown_asset in (name, source)
         self._shown_asset = name
         self.inspector.show_asset(self.project, info, name)
+        self.inspector.show_status(self.explorer.statuses.get(name))
         self.viewport.set_compare(source if source in self.project.assets else None)
         self.viewport.set_scene(scene, keep_view=keep)
 

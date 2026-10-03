@@ -321,6 +321,27 @@ is rejected. A derived asset goes into
 builds like any other; note merge-v names manifest entries after the asset
 (`v_janus1_hands`), so name it as the game should see it if that matters.
 
+## Asset status
+
+Every asset in the Explorer carries a dot (details in its tooltip and in
+Inspector ▸ Overview ▸ Status):
+
+| dot | meaning |
+|---|---|
+| red | its last build run failed or rejected it (multi-part, other hands, failed retarget) |
+| orange | derived, and its source changed since (re-run it) |
+| green | a view model on our hands (ready for shared-hands merges) |
+| grey | a view model with its own hands (not retargeted yet) |
+
+"On our hands" is decided by GEOMETRY, never by bone names (rigs name bones
+freely — `Hand.L` is just Blender's convention): a reference SMD must be the
+CSO hand mesh (`storage/handswap/cso_reference_hands.smd`) vertex for vertex
+in bone space. Only meshes with exactly its triangle count are parsed, and
+every verdict is cached by file time, so a refresh stays instant. The same
+name-blind comparison backs merge-v's shared-hands check and the build's
+"already on our hands" skip. Staleness compares the source's newest QC/SMD
+edit with the time the derived asset was made (`derived.at`).
+
 ## Packaging (M6)
 
 ```bat

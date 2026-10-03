@@ -56,12 +56,17 @@ def shape_distance(a: HandShape, b: HandShape) -> float:
     """Largest vertex mismatch (inf when the meshes are not comparable)."""
     if len(a.bones) != len(b.bones):
         return float("inf")
-    if a.bones == b.bones:  # same triangle order: compare directly
-        return float(np.abs(a.local - b.local).max()) if len(a.bones) else 0.0
+    if not len(a.bones):
+        return 0.0
+    # same triangle order: compare vertex by vertex, whatever the bones are
+    # called (names are only a rig convention)
+    direct = float(np.abs(a.local - b.local).max())
+    if a.bones == b.bones or direct <= TOLERANCE:
+        return direct
     sa, sb = _per_bone_sorted(a), _per_bone_sorted(b)
     if sa.keys() != sb.keys() or any(len(sa[k]) != len(sb[k]) for k in sa):
-        return float("inf")
-    return max((float(np.abs(sa[k] - sb[k]).max()) for k in sa), default=0.0)
+        return direct
+    return min(direct, max((float(np.abs(sa[k] - sb[k]).max()) for k in sa), default=0.0))
 
 
 def same_hands(a: list[HandShape], b: list[HandShape], tol: float = TOLERANCE) -> bool:
@@ -86,23 +91,74 @@ def group_by_hands(entries: list[tuple[str, list[HandShape]]],
     return [clusters[i][1] for i in order]
 
 
-def wears_hands(meshes: list[Smd], reference: Smd, tol: float = TOLERANCE) -> bool:
-    """True when one of ``meshes`` is the ``reference`` hand mesh (bone-local)."""
-    want = hand_shape(reference)
-    return any(shape_distance(hand_shape(m), want) <= tol for m in meshes
-               if len(m.triangles) == len(reference.triangles))
+def local_distance(a: HandShape, b: HandShape) -> float:
+    """Like :func:`shape_distance` but blind to bone NAMES: the meshes match
+    when every vertex sits at the same place in its bone's frame, whatever
+    the bones are called (rigs rename freely; ``Hand.L`` is just Blender's
+    convention)."""
+    if a.local.shape != b.local.shape:
+        return float("inf")
+    return float(np.abs(a.local - b.local).max()) if len(a.local) else 0.0
+
+
+def triangle_count(path: Path) -> int:
+    """Triangles of an SMD, counted from its lines (no parsing)."""
+    count = 0
+    inside = False
+    try:
+        with open(path, encoding="latin-1") as handle:
+            for line in handle:
+                text = line.strip()
+                if not inside:
+                    inside = text == "triangles"
+                elif text == "end":
+                    break
+                elif text:
+                    count += 1
+    except OSError:
+        return 0
+    return count // 4
+
+
+_REFERENCES: dict[tuple[str, int], HandShape] = {}
+_VERDICTS: dict[tuple[str, int, int, str], bool] = {}
+
+
+def _reference_shape(reference: Path) -> HandShape:
+    from valve_qc_merger.parsers.smd import parse_smd_file
+    key = (str(reference), reference.stat().st_mtime_ns)
+    if key not in _REFERENCES:
+        _REFERENCES[key] = hand_shape(parse_smd_file(reference))
+    return _REFERENCES[key]
+
+
+def smd_is_reference(path: Path, reference: Path, tol: float = TOLERANCE) -> bool:
+    """Is the SMD at ``path`` the ``reference`` hand mesh (bone-local, names
+    ignored)? Cached by file time and size; files with another triangle
+    count are rejected without being parsed."""
+    from valve_qc_merger.parsers.smd import parse_smd_file
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    key = (str(path), stat.st_mtime_ns, stat.st_size, str(reference))
+    if key not in _VERDICTS:
+        want = _reference_shape(reference)
+        verdict = False
+        if triangle_count(path) * 3 == len(want.local):
+            try:
+                verdict = local_distance(hand_shape(parse_smd_file(path)), want) <= tol
+            except Exception:  # noqa: BLE001 - an unreadable mesh is not our hands
+                verdict = False
+        _VERDICTS[key] = verdict
+    return _VERDICTS[key]
 
 
 def dir_wears_hands(model_dir: Path, reference: Path, tol: float = TOLERANCE) -> bool:
-    """:func:`wears_hands` over every reference SMD of a decompiled model."""
-    from valve_qc_merger.merge_view.discovery import load_model
-    from valve_qc_merger.parsers.smd import parse_smd_file
-    try:
-        model = load_model(model_dir, require_anims=False)
-    except Exception:  # noqa: BLE001 - an unreadable model simply doesn't qualify
-        return False
-    return wears_hands(list(model.meshes.values()), parse_smd_file(reference), tol)
+    """One of the model's reference SMDs (next to its QC) is ``reference``."""
+    return any(smd_is_reference(p, reference, tol) for p in sorted(model_dir.glob("*.smd")))
 
 
 __all__ = ["HandShape", "TOLERANCE", "dir_wears_hands", "group_by_hands", "hand_shape",
-           "same_hands", "shape_distance", "wears_hands"]
+           "local_distance", "same_hands", "shape_distance", "smd_is_reference",
+           "triangle_count"]

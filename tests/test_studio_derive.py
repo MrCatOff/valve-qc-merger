@@ -58,9 +58,10 @@ def test_derive_swap_with_weapon_offset_then_rerun(project: Project) -> None:
     assert project.can_undo(base.name)  # the re-run snapshotted the old output
 
     reopened = Project.open(project.root)
-    assert reopened.assets[base.name].derived == {
-        "from": "v_anaconda", "mode": "hands",
-        "options": {"weapon_offset": [0.0, 0.0, 1.0]}}
+    derived = dict(reopened.assets[base.name].derived)
+    assert derived.pop("at") > 0  # when it was made (staleness)
+    assert derived == {"from": "v_anaconda", "mode": "hands",
+                       "options": {"weapon_offset": [0.0, 0.0, 1.0]}}
 
 
 def test_derive_canon_and_guards(project: Project) -> None:
