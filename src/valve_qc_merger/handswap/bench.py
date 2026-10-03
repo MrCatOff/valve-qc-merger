@@ -9,12 +9,17 @@ the CSO corpus). Two retargets are compared with it, frame by frame:
   classic v_deagle, :mod:`.foreign`) -> ours: the real job, size change and
   back.
 
-Error = distance between the same hand segment in the native model and in
-the result, every frame of every sequence. A segment is measured where it is
-VISIBLE: the centroid of the hand-mesh vertices skinned to that bone (bone
-joints of two different rigs need not coincide, the skin does: our hands are
-the CSO 2009 mesh 1:1). Bones pair the way the engine pairs them (the plan of
-the native hands against our asset).
+Error = distance from our hand's SKIN to the native hand's skin: for sampled
+skin vertices of ours, the distance to the nearest point of the native
+surface, at sampled frames of every sequence. ``mean`` is the GRIP — palm
+and fingers; the arm is reported apart (``arm``): its direction follows the
+weapon by design (off-screen shoulders), the same whatever the hand size,
+and it would otherwise drown the grip. It needs no correspondence
+between the rigs — two rigs of the same mesh weight its vertices differently,
+so bone-based measures (segment centroids) have a floor even for a perfect
+result; surface distance is zero exactly when the hands look the same. Our
+hands are the CSO 2009 male mesh 1:1, so the native male mesh is compared;
+``tips`` restricts our side to the distal finger segments.
 """
 
 from __future__ import annotations
@@ -29,8 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from . import asset as assetmod
-from . import build as buildmod
-from .retarget import build_plan
+from .surface import points_to_mesh
 
 
 @dataclass
@@ -51,6 +55,7 @@ class BenchResult:
     p95: float = float("nan")
     max: float = float("nan")
     tips_mean: float = float("nan")
+    arm_mean: float = float("nan")
     worst_sequence: str = ""
     sequences: list[SequenceError] = field(default_factory=list)
     error: str = ""
@@ -66,75 +71,66 @@ def is_native(weapon_dir: Path) -> bool:
     return bool(native_hand_meshes(weapon_dir))
 
 
-def pairing(weapon_dir: Path) -> dict[str, str]:
-    """native bone -> our asset bone, as the engine pairs them."""
-    model = buildmod.load_weapon(str(weapon_dir), None, log=lambda *a: None)
-    first = model.qc.sequences[0]["smd"]
-    setup = buildmod.anim_world_frames(model.anims[first], model.skel)[0]
-    plan = build_plan(assetmod.load(), model.skel, model.hands, setup, log=lambda *a: None)
-    out: dict[str, str] = {}
-    for sp in plan.sides:
-        out[sp.hand.wrist] = sp.rig.wrist
-        for old_chain, cso_chain in sp.pairs:
-            out.update(zip(old_chain, cso_chain, strict=False))
-    return out
+FRAME_SAMPLES = 3  # frames measured per sequence (first, middle, last)
+POINT_SAMPLES = 200  # skin vertices sampled per hand mesh
 
 
-def segment_centroids(weapon_dir: Path, stems: set[str], bones: list[str]
-                      ) -> dict[str, np.ndarray]:
-    """sequence -> (frames, len(bones), 3) world centroid of each bone's
-    skinned vertices in the given meshes (NaN where a bone has none)."""
-    from valve_qc_merger.studio.scene import build_scene
-    scene = build_scene(Path(weapon_dir))
-    index = {n: i for i, n in enumerate(scene.bone_names)}
-    wanted = [index.get(b, -1) for b in bones]
-    batches = [b for b in scene.batches if b.stem in stems]
-    out: dict[str, np.ndarray] = {}
-    for s, seq in enumerate(scene.sequences):
-        frames = np.full((seq.frames, len(bones), 3), np.nan)
-        for f in range(seq.frames):
-            rot, trans = scene.world(*scene.local_pose(s, float(f)))
-            sums = np.zeros((len(scene.bone_names), 3))
-            counts = np.zeros(len(scene.bone_names))
-            for batch in batches:
-                pos, _n = scene.skin(batch, rot, trans)
-                np.add.at(sums, batch.bones, pos)
-                np.add.at(counts, batch.bones, 1)
-            for j, i in enumerate(wanted):
-                if i >= 0 and counts[i]:
-                    frames[f, j] = sums[i] / counts[i]
-        out[seq.name] = frames
-    return out
+def _posed_hands(scene, stems: set[str], seq: int, frame: float):  # noqa: ANN001
+    """(triangles (T,3,3), vertices (V,3), bone index per vertex) of a pose."""
+    rot, trans = scene.world(*scene.local_pose(seq, frame))
+    tris, verts, bones = [], [], []
+    for batch in scene.batches:
+        if batch.stem in stems:
+            pos, _n = scene.skin(batch, rot, trans)
+            tris.append(pos.reshape(-1, 3, 3))
+            verts.append(pos)
+            bones.append(batch.bones)
+    return np.concatenate(tris), np.concatenate(verts), np.concatenate(bones)
 
 
 def compare(native_dir: Path, result_dir: Path, mode: str) -> BenchResult:
-    """Per-frame segment error of ``result_dir`` against ``native_dir``."""
-    pairs = pairing(native_dir)
-    native_bones = list(pairs)
-    ours_bones = [pairs[b] for b in native_bones]
+    """Hand-surface error of ``result_dir`` against ``native_dir``."""
+    from valve_qc_merger.studio.scene import build_scene
     meshes = native_hand_meshes(native_dir)
     male = [m for m in meshes if "female" not in m.lower()] or meshes
-    native = segment_centroids(native_dir, {male[0]}, native_bones)
-    ours = segment_centroids(result_dir, {"hands"}, ours_bones)
-    tips = np.array([b.endswith(("02.L", "02.R")) for b in ours_bones])
+    native = build_scene(Path(native_dir))
+    ours = build_scene(Path(result_dir))
+    tip_bones = {i for i, n in enumerate(ours.bone_names) if n.endswith(("02.L", "02.R"))}
+    arm_bones = {i for i, n in enumerate(ours.bone_names)
+                 if n.startswith(("UpperArm", "Arm0", "Arm1"))}
+    rng = np.random.default_rng(0)
     result = BenchResult(weapon=Path(native_dir).name, mode=mode)
     every: list[np.ndarray] = []
     tip_all: list[np.ndarray] = []
-    for name, frames in native.items():
-        other = ours.get(name)
-        if other is None or other.shape != frames.shape:
+    arm_all: list[np.ndarray] = []
+    ours_index = {s.name: i for i, s in enumerate(ours.sequences)}
+    for s, seq in enumerate(native.sequences):
+        o = ours_index.get(seq.name)
+        if o is None or ours.sequences[o].frames != seq.frames:
             continue
-        err = np.linalg.norm(frames - other, axis=2)  # (frames, bones)
-        valid = err[~np.isnan(err)]
-        if not len(valid):
-            continue
-        tip_err = err[:, tips]
-        tip_err = tip_err[~np.isnan(tip_err)]
-        every.append(valid)
-        tip_all.append(tip_err)
+        frames = np.unique(np.linspace(0, seq.frames - 1, min(FRAME_SAMPLES, seq.frames))
+                           .round().astype(int))
+        errs, tips, arms = [], [], []
+        for f in frames:
+            n_tris, _nv, _nb = _posed_hands(native, {male[0]}, s, float(f))
+            _ot, o_verts, o_bones = _posed_hands(ours, {"hands"}, o, float(f))
+            is_arm = np.isin(o_bones, list(arm_bones))
+            grip, arm = np.flatnonzero(~is_arm), np.flatnonzero(is_arm)
+            pick = rng.choice(grip, min(POINT_SAMPLES, len(grip)), replace=False)
+            to_native = points_to_mesh(o_verts[pick], n_tris)
+            errs.append(to_native)
+            tips.append(to_native[np.isin(o_bones[pick], list(tip_bones))])
+            if len(arm):
+                pick_arm = rng.choice(arm, min(POINT_SAMPLES // 4, len(arm)), replace=False)
+                arms.append(points_to_mesh(o_verts[pick_arm], n_tris))
+        err = np.concatenate(errs)
+        tip = np.concatenate(tips)
+        every.append(err)
+        tip_all.append(tip)
+        arm_all.extend(arms)
         result.sequences.append(SequenceError(
-            name, frames.shape[0], float(valid.mean()), float(np.percentile(valid, 95)),
-            float(valid.max()), float(tip_err.mean()) if len(tip_err) else float("nan")))
+            seq.name, seq.frames, float(err.mean()), float(np.percentile(err, 95)),
+            float(err.max()), float(tip.mean()) if len(tip) else float("nan")))
     if every:
         allv = np.concatenate(every)
         result.mean, result.p95, result.max = (float(allv.mean()),
@@ -142,6 +138,8 @@ def compare(native_dir: Path, result_dir: Path, mode: str) -> BenchResult:
                                                float(allv.max()))
         tipv = np.concatenate(tip_all)
         result.tips_mean = float(tipv.mean()) if len(tipv) else float("nan")
+        if arm_all:
+            result.arm_mean = float(np.concatenate(arm_all).mean())
         result.worst_sequence = max(result.sequences, key=lambda s: s.mean).name
     return result
 
@@ -185,8 +183,8 @@ def write_report(results: list[BenchResult], path: Path) -> None:
     by_weapon: dict[str, dict[str, BenchResult]] = {}
     for r in results:
         by_weapon.setdefault(r.weapon, {})[r.mode] = r
-    lines = ["| weapon | identity mean | round trip mean | round trip p95 | tips mean | "
-             "worst sequence |", "|---|---|---|---|---|---|"]
+    lines = ["| weapon | identity grip | round trip grip | round trip p95 | tips | arm | "
+             "worst sequence |", "|---|---|---|---|---|---|---|"]
     rows = sorted(by_weapon.items(),
                   key=lambda kv: -(kv[1].get("roundtrip").mean
                                    if kv[1].get("roundtrip") and not kv[1]["roundtrip"].error
@@ -200,15 +198,20 @@ def write_report(results: list[BenchResult], path: Path) -> None:
             return "error" if r.error else f"{getattr(r, attr):.3f}"
         lines.append(f"| {weapon} | {cell(ident, 'mean')} | {cell(trip, 'mean')} | "
                      f"{cell(trip, 'p95')} | {cell(trip, 'tips_mean')} | "
+                     f"{cell(trip, 'arm_mean')} | "
                      f"{trip.worst_sequence if trip and not trip.error else ''} |")
     ok = [m["roundtrip"] for m in by_weapon.values()
           if "roundtrip" in m and not m["roundtrip"].error]
     if ok:
-        lines.insert(0, f"Round trip over {len(ok)} weapons: mean "
+        idents = [m["identity"] for m in by_weapon.values()
+                  if "identity" in m and not m["identity"].error]
+        lines.insert(0, f"Round trip over {len(ok)} weapons: grip "
                         f"{np.mean([r.mean for r in ok]):.3f} u, tips "
-                        f"{np.nanmean([r.tips_mean for r in ok]):.3f} u\n")
+                        f"{np.nanmean([r.tips_mean for r in ok]):.3f} u, arm "
+                        f"{np.nanmean([r.arm_mean for r in ok]):.3f} u; identity grip "
+                        f"{np.mean([r.mean for r in idents]):.3f} u\n")
     path.with_suffix(".md").write_text("\n".join(lines) + "\n")
 
 
-__all__ = ["BenchResult", "compare", "is_native", "native_hand_meshes", "pairing",
-           "run_weapon", "segment_centroids", "write_report"]
+__all__ = ["BenchResult", "compare", "is_native", "native_hand_meshes", "run_weapon",
+           "write_report"]

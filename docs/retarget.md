@@ -185,13 +185,28 @@ original frame by frame:
   classic `v_deagle`, i.e. the old small Valve hands; a rig with a forearm
   only gets its upper arm synthesised on the forearm's line, no mesh on it).
 
-The error is the distance between the same hand segment in both models: the
-centroid of the hand-mesh vertices skinned to each paired bone (pairs as the
-engine pairs them), every frame of every sequence; `tips` is the distal
-segments only. `report.md` ranks weapons by round-trip error; `report.json`
-has every sequence. First numbers (v_p228): identity 0.22 u mean, round trip
-0.38 u (tips 0.36 u), nearly constant over the sequences — the error is the
-static grip, not the motion.
+The error is measured on the SKIN, so it needs no agreement between the two
+rigs (they weight the same mesh differently): sampled vertices of our hand →
+the nearest point of the native hand's surface, at three frames of every
+sequence. `grip` is palm + fingers, `tips` the distal segments, `arm` the
+rest — reported apart because the arm's direction follows the weapon by
+design and is the same whatever the hand size. `tools/rescore_bench.py`
+re-scores an existing work folder with the current metric.
+
+**What the benchmark has decided so far (174 native weapons):**
+
+| engine | round-trip grip | tips | identity grip |
+|---|---|---|---|
+| joint-based finger fit (before) | 0.095 u | 0.161 u | 0.071 u |
+| finger fit on skin (distal centroid, then the finger's whole surface) | 0.069 u | 0.081 u | 0.060 u |
+| + small abduction per joint (±10°) | **0.064 u** | **0.066 u** | **0.058 u** |
+
+Better on every weapon (no regression). Tried and rejected on the numbers:
+seating the palm from skin centroids (worse: centroids depend on each rig's
+weights) and refining the palm by ICP onto the original palm skin (the
+identity seat is already within 0.03 u; on foreign hands it turned the palm
+5° and got worse). The error is nearly constant across sequences (median
+spread 0.016 u): what remains is the static grip.
 
 ## Troubleshooting
 

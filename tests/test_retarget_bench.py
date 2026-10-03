@@ -72,3 +72,22 @@ def test_round_trip_measures_an_error(native: Path, foreign: str, tmp_path: Path
     write_report([identity, trip], tmp_path / "report")
     table = (tmp_path / "report.md").read_text()
     assert "v_anaconda" in table and "Round trip over 1 weapons" in table
+
+
+def test_skin_centroids_on_both_hands(native: Path) -> None:
+    """The finger fit compares skin with skin: our asset knows where each
+    segment's flesh sits (rest frame), the original hands at the grip."""
+    from valve_qc_merger.handswap import build as buildmod
+    hands = assetmod.load()
+    for rig in hands.sides.values():
+        for chain in rig.chains:
+            assert chain[-1] in hands.centroids_local
+    model = buildmod.load_weapon(str(native), None, log=lambda *a: None)
+    setup = buildmod.anim_world_frames(model.anims[model.qc.sequences[0]["smd"]],
+                                       model.skel)[0]
+    centroids = buildmod.skin_centroids(model, ["CSO_Hand_Male_L_2009"], setup)
+    for hand in model.hands:
+        for chain in hand.chains:
+            assert chain[-1] in centroids
+            # a fingertip's flesh sits near its bone, not at the origin
+            assert np.linalg.norm(centroids[chain[-1]] - setup[chain[-1]][:3, 3]) < 3.0

@@ -61,6 +61,11 @@ class HandsAsset:
     order: list[str]
     triangles: list[dict]            # {mat, corners:[{pos,normal,uv,weights}]}
     sides: dict[str, SideRig] = field(default_factory=dict)  # "right"/"left"
+    # bone -> centroid of the skin it carries (dominant weight), in the
+    # bone's rest frame: where that segment's flesh is, rig-independent
+    centroids_local: dict[str, np.ndarray] = field(default_factory=dict)
+    # bone -> its skin vertices (dominant weight) in the bone's rest frame
+    skin_local: dict[str, np.ndarray] = field(default_factory=dict)
 
     def bind_inv(self, name: str) -> np.ndarray:
         return inv_rigid(self.bones[name].rest_world)
@@ -92,6 +97,25 @@ def load(path: str = DEFAULT_ASSET) -> HandsAsset:
             b.rest_local = b.rest_world.copy()
 
     asset = HandsAsset(bones=bones, order=order, triangles=raw["triangles"])
+    sums: dict[str, np.ndarray] = {}
+    counts: dict[str, int] = {}
+    points: dict[str, set] = {}
+    for tri in asset.triangles:
+        for corner in tri["corners"]:
+            dom = max(corner["weights"], key=lambda bw: bw[1])[0]
+            sums[dom] = sums.get(dom, np.zeros(3)) + np.asarray(corner["pos"], dtype=float)
+            counts[dom] = counts.get(dom, 0) + 1
+            points.setdefault(dom, set()).add(tuple(corner["pos"]))
+    for name, pts in points.items():
+        if name in bones:
+            inv = inv_rigid(bones[name].rest_world)
+            arr = np.asarray(sorted(pts), dtype=float)
+            asset.skin_local[name] = arr @ inv[:3, :3].T + inv[:3, 3]
+    for name, total in sums.items():
+        if name in bones:
+            world = total / counts[name]
+            asset.centroids_local[name] = inv_rigid(bones[name].rest_world) @ np.append(world, 1.0)
+            asset.centroids_local[name] = asset.centroids_local[name][:3]
 
     for side, sfx in (("right", ".R"), ("left", ".L")):
         wrist = WRIST + sfx

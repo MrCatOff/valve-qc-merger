@@ -137,6 +137,13 @@ def convert(args, log=log) -> dict:
         log("Weapon offset: %s" % list(weapon_offset))
 
     log("Retarget plan (setup: %r frame 0):" % first_seq)
+    # skin centroids of the original hands at the grip: the finger fit
+    # compares skin, not two rigs' joints. One hand mesh only: male and
+    # female variants differ in size and our asset hand is the male one.
+    # (Seating the PALM from centroids, or by ICP onto the original palm skin,
+    # was measured worse on the corpus benchmark: the joint-based seat stays.)
+    fit_meshes = [m for m in dropped if "female" not in m.lower()] or dropped
+    centroids = buildmod.skin_centroids(model, fit_meshes[:1], setup_world)
     plan = build_plan(asset, model.skel, model.hands, setup_world, log=log,
                       grip_offsets=grip_offsets, weapon_offset=weapon_offset)
     if not plan.sides:
@@ -153,7 +160,10 @@ def convert(args, log=log) -> dict:
     if args.snug or manual:
         refine_finger_fit(plan, model.skel, setup_world,
                           max_deg=max_deg if args.snug else 0.0,
-                          manual=manual, log=log)
+                          manual=manual, log=log,
+                          old_centroids=centroids,
+                          old_skin=buildmod.skin_triangles(model, fit_meshes[:1],
+                                                           setup_world))
 
     asm = buildmod.assemble(model, plan, setup_world, log=log)
     log("Merged skeleton: %d CSO + %d weapon bones (%d original removed)"

@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .anatomy import bone_anat_3x3, hand_frame
+from .surface import points_to_mesh
 from .asset import HandsAsset, SideRig
 from .identify import HandInfo, OrigSkeleton
 from .math3d import (axis_angle, compose, inv_rigid, normalized,
@@ -158,9 +159,9 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
                     [(old_rest[a], cso_rest[pick[a]]) for a in range(k)]
                 total = sum(cost[i, j] for i, j in assign)
                 if best is None or total < best[0]:
-                    best = (total, thumb_i, assign, desired, a_old)
+                    best = (total, thumb_i, assign, desired, a_old, flip)
 
-    total, thumb_i, assign, desired, a_old = best
+    total, thumb_i, assign, desired, a_old, _flip = best
     if weapon_offset is not None:
         desired = desired.copy()
         desired[:3, 3] -= np.asarray(weapon_offset, dtype=float)
@@ -224,12 +225,33 @@ def build_plan(asset: HandsAsset, skel: OrigSkeleton, hands: list[HandInfo],
 
 
 MANUAL_CURL_RANGE = np.radians(45.0)  # what --curl may add beyond the auto clamp
+SURFACE_MIN_ERR = 0.02  # a finger already this close to the original's skin is left alone
+ABDUCTION_DEG = 10.0  # sideways swing allowed per joint (surface fit only)
+
+
+
+def _search(err, current: float, lim: float, step: float) -> float:
+    """1-D search of ``err(t)`` over [-lim, lim]: a coarse grid (3 steps),
+    then the fine step around the coarse best. Prefers the smaller |t| on
+    near-ties (no gratuitous bending)."""
+    def scan(values, best):
+        for t in values:
+            e = err(t)
+            if e < best[0] - 1e-4 or (e < best[0] + 1e-4 and abs(t) < abs(best[1])):
+                best = (e, t)
+        return best
+    best = (err(current), current)
+    coarse = step * 3
+    best = scan(np.arange(-lim, lim + 1e-9, coarse), best)
+    centre = best[1]
+    fine = np.arange(max(-lim, centre - coarse), min(lim, centre + coarse) + 1e-9, step)
+    return float(scan(fine, best)[1])
 
 
 def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                       setup_world_old: dict[str, np.ndarray],
                       *, max_deg: float = 18.0, min_err: float = 0.35,
-                      manual=None, log=print):
+                      manual=None, old_centroids=None, old_skin=None, log=print):
     """Snug the fingers against the weapon (polish pass, run once).
 
     The CSO fingers are longer/chunkier than the originals, so driving
@@ -245,6 +267,18 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
     Constrained by design (lesson from the old pipeline: unconstrained
     surface fitting folds hands into garbage): curl is the only DOF, hard
     per-joint clamp, fingers already within min_err are left alone.
+
+    old_centroids: bone -> world skin centroid of the ORIGINAL hands at the
+    setup grip (build.skin_centroids). When given, the fit compares like with
+    like — the centroid of the distal segment's skin on both hands — instead
+    of two rigs' different notions of a "fingertip" (a Blender tail vs. an
+    SMD direction estimate), which bent fingers even between identical hands.
+
+    old_skin: bone -> (T,3,3) original skin triangles at the setup grip
+    (build.skin_triangles). When given, each finger is fitted to the
+    ORIGINAL finger's surface — the mean distance from our finger's skin to
+    it — rather than through one tip point: the whole finger lies where the
+    original did. Same single DOF (flexion) and the same per-joint clamp.
 
     manual: {(side, finger_prefix): extra_degrees} applied per joint on
     top of the automatic result: positive closes the finger, negative opens
@@ -268,7 +302,7 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
             target = _chain_cloud_old(skel, setup_world_old, sp.hand,
                                       old_chain)[-1]
 
-            local_rot, local_t, axis_local = [], [], []
+            local_rot, local_t, axis_local, abd_local = [], [], [], []
             parent_w = hand_w
             for i, c in enumerate(chain):
                 w = base_cso[c]
@@ -280,48 +314,76 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                     y = asset.head(cso_chain[i + 1]) - asset.head(c)
                 else:
                     y = asset.tail(c) - asset.head(c)
-                ax_world = bone_anat_3x3(y, rig.palm_world[:3, 1])[:, 0]
+                anat = bone_anat_3x3(y, rig.palm_world[:3, 1])
                 axis_local.append(
-                    asset.bones[c].rest_world[:3, :3].T @ ax_world)
+                    asset.bones[c].rest_world[:3, :3].T @ anat[:, 0])
+                # abduction: about the axis normal to the bone and to flexion
+                abd_local.append(asset.bones[c].rest_world[:3, :3].T @ anat[:, 2])
                 parent_w = w
             leaf = chain[-1]
             tip_local = asset.bones[leaf].rest_world[:3, :3].T \
                 @ (asset.tail(leaf) - asset.head(leaf))
+            old_leaf = old_chain[n_pair - 1]
+            if old_centroids and old_leaf in old_centroids \
+                    and leaf in asset.centroids_local:
+                target = old_centroids[old_leaf]
+                tip_local = asset.centroids_local[leaf]
 
-            def fk(thetas):
+            def fk(thetas, phis=None):
                 out, wp = [], hand_w
                 for i in range(len(chain)):
                     m = np.eye(4)
                     m[:3, :3] = local_rot[i] @ axis_angle(axis_local[i],
                                                           thetas[i])
+                    if phis is not None and phis[i]:
+                        m[:3, :3] = m[:3, :3] @ axis_angle(abd_local[i], phis[i])
                     m[:3, 3] = local_t[i]
                     wp = wp @ m
                     out.append(wp)
                 return out
 
+            surface = None
+            if old_skin is not None:
+                old_tris = [old_skin[b] for b in old_chain if b in old_skin]
+                ours_local = [asset.skin_local.get(c) for c in chain]
+                if old_tris and all(p is not None and len(p) for p in ours_local):
+                    surface = (np.concatenate(old_tris),
+                               [p[:: max(1, len(p) // 24)] for p in ours_local])
+
             def tip_err(worlds):
+                if surface is not None:
+                    old_tris_all, pts = surface
+                    world_pts = np.concatenate([
+                        p @ w[:3, :3].T + w[:3, 3] for p, w in zip(pts, worlds, strict=True)])
+                    return float(points_to_mesh(world_pts, old_tris_all).mean())
                 w = worlds[-1]
                 tip = w[:3, :3] @ tip_local + w[:3, 3]
                 return float(np.linalg.norm(tip - target))
 
             thetas = [0.0] * len(chain)
+            phis = None
             err0 = tip_err(fk(thetas))
-            if err0 > min_err:
+            if err0 > (SURFACE_MIN_ERR if surface is not None else min_err):
                 for _pass in range(3):        # coordinate descent
                     for i in range(len(chain)):
-                        best = (tip_err(fk(thetas)), thetas[i])
-                        t = -max_auto
-                        while t <= max_auto + 1e-9:
+                        def err_flex(t, i=i):
                             cand = list(thetas)
                             cand[i] = t
-                            e = tip_err(fk(cand))
-                            # prefer the smaller curl on near-ties
-                            if e < best[0] - 1e-4 or \
-                                    (e < best[0] + 1e-4
-                                     and abs(t) < abs(best[1])):
-                                best = (e, t)
-                            t += step
-                        thetas[i] = best[1]
+                            return tip_err(fk(cand))
+                        thetas[i] = _search(err_flex, thetas[i], max_auto, step)
+                # fingers also swing sideways (the thumb opposes, the others
+                # splay): with a surface to fit, a small abduction per joint
+                # after the flexion passes (corpus: grip 0.069 -> 0.064 u)
+                if surface is not None:
+                    phis = [0.0] * len(chain)
+                    lim = np.radians(ABDUCTION_DEG)
+                    for _pass in range(2):
+                        for i in range(len(chain)):
+                            def err_abd(t, i=i):
+                                cand = list(phis)
+                                cand[i] = t
+                                return tip_err(fk(thetas, cand))
+                            phis[i] = _search(err_abd, phis[i], lim, step)
 
             finger = chain[0].split("Finger")[0].replace("00", "")
             extra = 0.0
@@ -340,7 +402,7 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                 palm = (hand_w[:3, 3] + roots) / 2.0
 
                 def reach(delta):
-                    w = fk([t + delta for t in thetas])[-1]
+                    w = fk([t + delta for t in thetas], phis)[-1]
                     return float(np.linalg.norm(w[:3, :3] @ tip_local + w[:3, 3] - palm))
                 closing = 1.0 if reach(np.radians(5)) < reach(-np.radians(5)) else -1.0
                 # the manual range does not depend on the automatic clamp
@@ -348,8 +410,8 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                 lim = max_auto + MANUAL_CURL_RANGE
                 thetas = [max(-lim, min(lim, t + closing * extra)) for t in thetas]
 
-            if any(abs(t) > 1e-6 for t in thetas):
-                worlds = fk(thetas)
+            if any(abs(t) > 1e-6 for t in thetas) or (phis and any(phis)):
+                worlds = fk(thetas, phis)
                 for i in range(len(chain)):
                     new_k[chain[i]] = (
                         setup_world_old[old_chain[i]][:3, :3].T

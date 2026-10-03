@@ -137,6 +137,56 @@ def anim_world_frames(anim: Smd, skel: OrigSkeleton) -> list[dict[str, np.ndarra
 # bone bookkeeping
 
 
+def skin_centroids(model: WeaponModel, meshes, world: dict[str, np.ndarray]
+                   ) -> dict[str, np.ndarray]:
+    """bone -> world centroid of the skin it carries (dominant weight) in
+    ``meshes`` posed by ``world`` (bone name -> 4x4)."""
+    sums: dict[str, np.ndarray] = {}
+    counts: dict[str, int] = {}
+    skel = model.skel
+    for mesh in meshes:
+        smd = model.refs.get(mesh)
+        if smd is None:
+            continue
+        name_of = smd.name_of()
+        for tri in smd.triangles:
+            for v in tri.verts:
+                bone = name_of[v.dominant_bone()]
+                if bone not in world or bone not in skel.bind_world:
+                    continue
+                m = world[bone] @ inv_rigid(skel.bind_world[bone])
+                p = m[:3, :3] @ np.asarray(v.pos, dtype=float) + m[:3, 3]
+                sums[bone] = sums.get(bone, np.zeros(3)) + p
+                counts[bone] = counts.get(bone, 0) + 1
+    return {b: sums[b] / counts[b] for b in sums}
+
+
+def skin_triangles(model: WeaponModel, meshes, world: dict[str, np.ndarray]
+                   ) -> dict[str, np.ndarray]:
+    """bone -> (T,3,3) posed triangles whose first corner it dominates, in
+    ``meshes`` posed by ``world`` (linear blend skinning)."""
+    skel = model.skel
+    out: dict[str, list] = {}
+    for mesh in meshes:
+        smd = model.refs.get(mesh)
+        if smd is None:
+            continue
+        name_of = smd.name_of()
+        for tri in smd.triangles:
+            corners = []
+            for v in tri.verts:
+                pos = np.zeros(3)
+                for b, w in v.weights():
+                    name = name_of[b]
+                    if name not in world:
+                        continue
+                    m = world[name] @ inv_rigid(skel.bind_world[name])
+                    pos += w * (m[:3, :3] @ np.asarray(v.pos, dtype=float) + m[:3, 3])
+                corners.append(pos)
+            out.setdefault(name_of[tri.verts[0].dominant_bone()], []).append(corners)
+    return {b: np.asarray(t, dtype=float) for b, t in out.items()}
+
+
 def hand_bone_set(model: WeaponModel, log=print) -> set[str]:
     """All original bones owned by the hands: the palm cores plus arm
     ancestors that have no weighted descendants outside the hand set."""
