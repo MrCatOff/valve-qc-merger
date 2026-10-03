@@ -290,7 +290,12 @@ whose source sits in another category stands alone as `v_x_hands ↳ v_x`:
 hands, in model space at the grip frame (`retarget --weapon-offset dx,dy,dz`);
 *Left/Right palm* shift one palm in its own axes — x fingers-forward, y toward
 the thumb, z palm normal (`--grip-offset side:dx,dy,dz`). The fingers re-snug
-to the weapon after an offset, so nudge, re-run, look, repeat.
+to the weapon after an offset, so nudge, re-run, look, repeat. The dialog is
+modeless: **Apply** runs and stays open (the viewport keeps orbiting, and
+reloads the result with the same camera, sequence and frame), **Run** runs
+and closes. For a derived asset the viewport bar shows **Before: <source>**
+(key `B`): it flips to the source model in the same camera, sequence and
+frame, and back.
 
 **Save to grip_tuning.json** stores the offsets as the weapon's tuning in
 `storage/handswap/grip_tuning.json` (keyed by the source asset name =

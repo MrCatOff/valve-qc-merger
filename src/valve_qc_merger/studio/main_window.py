@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self._info_cache: dict[str, ModelInfo] = {}
         self._pending_build = ""
         self._pending_asset = ""
+        self._shown_asset = ""  # the asset the viewport shows ("" = none / an output)
         self.jobs = JobRunner(self)
         self.setWindowTitle(project_title(None))
         self.resize(1400, 860)
@@ -82,6 +83,7 @@ class MainWindow(QMainWindow):
         self.explorer.build_run_compile_requested.connect(
             lambda name: self.run_build(name, then_compile=True))
         self.explorer.build_delete_requested.connect(self.delete_build)
+        self.viewport.compare_toggled.connect(self._compare)
         self.build_panel.run_requested.connect(self.run_build)
         self.build_panel.compile_requested.connect(self.compile_build)
         self.build_panel.preview_requested.connect(self.preview_output)
@@ -533,7 +535,8 @@ class MainWindow(QMainWindow):
 
     # -- retarget (derived assets) --------------------------------------------
     def derive_assets(self, names: list[str]) -> None:
-        """Retarget dialog over the selected asset(s), then run it as a job."""
+        """Retarget dialog over the selected asset(s) (modeless: Apply keeps it
+        open for the tuning loop, Run closes it)."""
         from valve_qc_merger.studio.derive_dialog import DeriveDialog
         project = self.project
         if project is None or self.jobs.busy:
@@ -542,11 +545,7 @@ class MainWindow(QMainWindow):
         if not names:
             self.statusBar().showMessage("select an asset in the Explorer", 4000)
             return
-        dialog = DeriveDialog(names, self, existing=set(project.assets))
-        if dialog.exec() != DeriveDialog.DialogCode.Accepted:
-            return
-        mode, name, options = dialog.result_spec()
-        self._run_derive([(source, name) for source in names], mode, options)
+        self._open_derive_dialog(DeriveDialog(names, self, existing=set(project.assets)))
 
     def rederive_asset(self, name: str, edit: bool) -> None:
         """Re-run a derived asset from its source; ``edit`` opens its settings first."""
@@ -565,12 +564,42 @@ class MainWindow(QMainWindow):
             return
         options = dict(derived.get("options", {}))
         if edit:
-            dialog = DeriveDialog([derived["from"]], self, mode=derived["mode"],
-                                  options=options, name=name)
-            if dialog.exec() != DeriveDialog.DialogCode.Accepted:
-                return
-            _mode, _name, options = dialog.result_spec()
+            self._open_derive_dialog(DeriveDialog([derived["from"]], self,
+                                                  mode=derived["mode"], options=options,
+                                                  name=name))
+            return
         self._run_derive([(derived["from"], name)], derived["mode"], options)
+
+    def _open_derive_dialog(self, dialog) -> None:  # noqa: ANN001 - DeriveDialog
+        previous = getattr(self, "_derive_dialog", None)
+        if previous is not None:
+            previous.close()
+        self._derive_dialog = dialog
+        dialog.setModal(False)
+
+        def run() -> None:
+            mode, name, options = dialog.result_spec()
+            self._run_derive([(source, name) for source in dialog.sources], mode, options)
+
+        def busy(_title: str) -> None:
+            dialog.set_busy(True)
+
+        def idle(*_args: object) -> None:
+            dialog.set_busy(False)
+
+        def finished(_code: int) -> None:
+            self.jobs.started.disconnect(busy)
+            self.jobs.done.disconnect(idle)
+            if getattr(self, "_derive_dialog", None) is dialog:
+                self._derive_dialog = None
+            dialog.deleteLater()
+
+        dialog.apply_requested.connect(run)
+        dialog.accepted.connect(run)
+        self.jobs.started.connect(busy)
+        self.jobs.done.connect(idle)
+        dialog.finished.connect(finished)
+        dialog.show()
 
     def _run_derive(self, jobs: list[tuple[str, str | None]], mode: str,
                     options: dict) -> None:
@@ -690,6 +719,8 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 - shown, not fatal
             self.log.append_line(f"preview failed: {exc}")
             return
+        self._shown_asset = ""
+        self.viewport.set_compare(None)
         self.viewport.set_scene(scene)
         self.log.append_line(f"preview {Path(qc_path).name}: {len(scene.batches)} batches, "
                              f"{len(scene.sequences)} sequences")
@@ -716,16 +747,12 @@ class MainWindow(QMainWindow):
                 return
         self._open_path(target)
 
-    def _select_asset(self, name: str) -> None:
-        self.right.setCurrentWidget(self.inspector)
-        if self.project is None or not name:
-            self.inspector.show_asset(self.project, None)
-            self.viewport.set_scene(None)
-            return
+    def _asset_scene(self, name: str) -> tuple[ModelInfo, ModelScene] | None:
+        """Parsed info + scene of an asset (cached); None if it cannot be read."""
+        assert self.project is not None
         info = self._info_cache.get(name)
         scene = self._scene_cache.get(name)
         if info is None or scene is None:
-            self.inspector.show_asset(self.project, None, name)
             directory = self.project.asset_dir(name)
             try:
                 model = load_model(directory, require_anims=False)
@@ -733,12 +760,48 @@ class MainWindow(QMainWindow):
                 scene = build_scene(directory, model)
             except Exception as exc:  # noqa: BLE001 - a broken asset must not kill the UI
                 self.log.append_line(f"{name}: cannot read model ({exc})")
-                self.viewport.set_scene(None)
-                return
+                return None
             self._info_cache[name] = info
             self._scene_cache[name] = scene
+        return info, scene
+
+    def _select_asset(self, name: str) -> None:
+        self.right.setCurrentWidget(self.inspector)
+        if self.project is None or not name:
+            self.inspector.show_asset(self.project, None)
+            self._shown_asset = ""
+            self.viewport.set_compare(None)
+            self.viewport.set_scene(None)
+            return
+        if name not in self._scene_cache:
+            self.inspector.show_asset(self.project, None, name)
+        loaded = self._asset_scene(name)
+        if loaded is None:
+            self._shown_asset = ""
+            self.viewport.set_compare(None)
+            self.viewport.set_scene(None)
+            return
+        info, scene = loaded
+        asset = self.project.assets[name]
+        source = asset.derived["from"] if asset.derived else None
+        # the same model again (re-run, edit) or its own new version: keep the view
+        keep = bool(self._shown_asset) and self._shown_asset in (name, source)
+        self._shown_asset = name
         self.inspector.show_asset(self.project, info, name)
-        self.viewport.set_scene(scene)
+        self.viewport.set_compare(source if source in self.project.assets else None)
+        self.viewport.set_scene(scene, keep_view=keep)
+
+    def _compare(self, show_source: bool) -> None:
+        """Before/after: swap the viewport to the shown asset's source and back,
+        same camera, sequence and frame."""
+        project, name = self.project, self._shown_asset
+        if project is None or not name or name not in project.assets:
+            return
+        derived = project.assets[name].derived
+        target = derived["from"] if show_source and derived else name
+        loaded = self._asset_scene(target)
+        if loaded is not None:
+            self.viewport.set_scene(loaded[1], keep_view=True)
 
     def _reveal(self, name: str) -> None:
         if self.project is not None:

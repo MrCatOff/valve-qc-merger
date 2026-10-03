@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -101,7 +102,10 @@ def grip_tuning_file(asset: str | None = None) -> Path:
 
 class DeriveDialog(QDialog):
     """Pick the mode, the new asset's name and the options; ``result_spec()``
-    then gives ``(mode, name or None, options)``."""
+    then gives ``(mode, name or None, options)``. Modeless in the studio:
+    ``apply_requested`` runs without closing (the tuning loop)."""
+
+    apply_requested = Signal()
 
     def __init__(self, sources: list[str], parent: QWidget | None = None, *,
                  mode: str = "hands", options: dict[str, Any] | None = None,
@@ -209,8 +213,15 @@ class DeriveDialog(QDialog):
         layout.addWidget(self.pages, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Apply
                                    | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Run")
+        self.run_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.run_button.setText("Run")
+        self.run_button.setToolTip("run and close")
+        self.apply_button = buttons.button(QDialogButtonBox.StandardButton.Apply)
+        self.apply_button.setToolTip("run and keep this dialog open: nudge the offsets, "
+                                     "Apply again, compare in the viewport (B = before)")
+        self.apply_button.clicked.connect(self._apply)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -282,16 +293,39 @@ class DeriveDialog(QDialog):
             return None
         return self.name_edit.text().strip() or self._default_name(self.mode)
 
+    def set_busy(self, busy: bool) -> None:
+        """A job is running: Run/Apply wait for it."""
+        self.run_button.setEnabled(not busy)
+        self.apply_button.setEnabled(not busy)
+
+    def _apply(self) -> None:
+        if not self._validate():
+            return
+        self.apply_requested.emit()
+        # later Applies re-run the asset(s) just made: no more replace prompts,
+        # and the mode/name are now those of the result
+        if self._fixed_name is None:
+            if len(self.sources) == 1:
+                self._fixed_name = self.target_name()
+                self.name_edit.setEnabled(False)
+            self._existing = set()
+            for index, key in enumerate(self._mode_keys):
+                self.mode_group.button(index).setEnabled(key == self.mode)
+
     def _accept(self) -> None:
+        if self._validate():
+            self.accept()
+
+    def _validate(self) -> bool:
         try:
             self.options()
         except ValueError as exc:
             QMessageBox.warning(self, "Retarget", f"Invalid option: {exc}")
-            return
+            return False
         name = self.target_name()
         if name is not None and name in self.sources:
             QMessageBox.warning(self, "Retarget", "The new asset needs its own name.")
-            return
+            return False
         if self._fixed_name is None:
             names = [name] if name is not None else [
                 f"{s}{DERIVE_MODES[self.mode].suffix}" for s in self.sources]
@@ -300,8 +334,8 @@ class DeriveDialog(QDialog):
                 answer = QMessageBox.question(
                     self, "Retarget", f"Replace existing asset(s): {', '.join(taken[:6])}?")
                 if answer != QMessageBox.StandardButton.Yes:
-                    return
-        self.accept()
+                    return False
+        return True
 
     def result_spec(self) -> tuple[str, str | None, dict[str, Any]]:
         return self.mode, self.target_name(), self.options()

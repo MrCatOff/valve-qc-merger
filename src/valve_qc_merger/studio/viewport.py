@@ -80,7 +80,9 @@ class Viewport(QOpenGLWidget):
         self.renderer.render(int(self.width() * ratio), int(self.height() * ratio), self.state)
 
     # -- scene -------------------------------------------------------------
-    def set_scene(self, scene: ModelScene | None) -> None:
+    def set_scene(self, scene: ModelScene | None, *, keep_view: bool = False) -> None:
+        """Show ``scene``; ``keep_view`` keeps the camera (the caller restores
+        sequence/frame), for flipping between two versions of one model."""
         self.scene = scene
         self.makeCurrent()
         self.renderer.set_scene(scene)
@@ -89,7 +91,7 @@ class Viewport(QOpenGLWidget):
         self.state.sequence = 0 if scene is not None and scene.sequences else None
         self.state.bodygroups = {}
         self.state.highlight_bone = None
-        if scene is not None:
+        if scene is not None and not keep_view:
             self.frame_model()
         self.update()
 
@@ -145,6 +147,7 @@ class ViewportPanel(QWidget):
     """Viewport plus playback, bodygroup and display controls."""
 
     frame_changed = Signal(float)
+    compare_toggled = Signal(bool)  # True: show the source instead of the asset
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -190,6 +193,14 @@ class ViewportPanel(QWidget):
         fp_button.clicked.connect(self.viewport.first_person)
         bottom.addWidget(frame_button)
         bottom.addWidget(fp_button)
+        self.compare_button = QPushButton("Before")
+        self.compare_button.setCheckable(True)
+        self.compare_button.setShortcut("B")
+        self.compare_button.setToolTip("show the source model in the same pose and camera "
+                                       "(B flips before/after)")
+        self.compare_button.toggled.connect(self.compare_toggled)
+        self.compare_button.setVisible(False)
+        bottom.addWidget(self.compare_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -211,10 +222,30 @@ class ViewportPanel(QWidget):
                                         self.viewport.update()))
         return box
 
+    def set_compare(self, source: str | None) -> None:
+        """Offer the before/after flip against ``source`` (None: hide it)."""
+        self.compare_button.blockSignals(True)
+        self.compare_button.setChecked(False)
+        self.compare_button.blockSignals(False)
+        self.compare_button.setVisible(source is not None)
+        if source is not None:
+            self.compare_button.setText(f"Before: {source}")
+
     # -- scene -------------------------------------------------------------
-    def set_scene(self, scene: ModelScene | None) -> None:
+    def set_scene(self, scene: ModelScene | None, *, keep_view: bool = False) -> None:
+        """Load ``scene``. ``keep_view`` keeps the camera, the sequence (by
+        name), the frame, playback and same-named bodygroup choices."""
+        state = self.viewport.state
+        old = self.viewport.scene
+        playing = self.play_button.isChecked()
+        sequence_name = (old.sequences[state.sequence].name
+                         if keep_view and old is not None and state.sequence is not None
+                         and state.sequence < len(old.sequences) else None)
+        frame = state.frame
+        groups = {g: self.group_boxes[g].currentText() for g in self.group_boxes} \
+            if keep_view else {}
         self.play_button.setChecked(False)
-        self.viewport.set_scene(scene)
+        self.viewport.set_scene(scene, keep_view=keep_view and scene is not None)
         self.sequence_box.blockSignals(True)
         self.sequence_box.clear()
         if scene is not None:
@@ -243,6 +274,24 @@ class ViewportPanel(QWidget):
         for widget in (self.sequence_box, self.play_button, self.slider, self.speed_box):
             widget.setEnabled(has)
         self._sequence_changed(0)
+        if keep_view and scene is not None:
+            for group, text in groups.items():
+                box = self.group_boxes.get(group)
+                if box is not None and box.findText(text) >= 0:
+                    box.setCurrentIndex(box.findText(text))
+            names = [seq.name for seq in scene.sequences]
+            if sequence_name in names:
+                index = names.index(sequence_name)
+                self.sequence_box.setCurrentIndex(index)
+                total = scene.sequences[index].frames
+                state.frame = min(frame, max(total - 1, 0))
+                self.slider.blockSignals(True)
+                self.slider.setValue(int(state.frame))
+                self.slider.blockSignals(False)
+                self._update_label()
+            if playing and has:
+                self.play_button.setChecked(True)
+            self.viewport.update()
 
     def highlight_bone(self, name: str) -> None:
         scene = self.viewport.scene

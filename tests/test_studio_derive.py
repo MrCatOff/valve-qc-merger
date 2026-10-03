@@ -122,11 +122,14 @@ def test_window_retargets_selected_asset(app, tmp_path: Path, monkeypatch) -> No
     try:
         win.set_project(project)
         assert win.explorer.select("asset", "v_anaconda")
-        monkeypatch.setattr(derive_dialog.DeriveDialog, "exec",
-                            lambda self: self.mode_group.button(1).setChecked(True) or
-                            derive_dialog.DeriveDialog.DialogCode.Accepted)
         win.derive_assets(win.explorer.selected_assets())
+        dialog = win._derive_dialog
+        assert isinstance(dialog, derive_dialog.DeriveDialog) and not dialog.isModal()
+        dialog.mode_group.button(1).setChecked(True)
+        dialog.apply_button.click()  # Apply: runs, the dialog stays
         assert win.jobs.wait(120_000)
+        assert dialog.isVisible() and dialog.run_button.isEnabled()
+        assert not dialog.name_edit.isEnabled()  # later Applies re-run this asset
         assert "v_anaconda_canon" in project.assets
         assert win.explorer.current_asset() == "v_anaconda_canon"
         assert "canon from asset v_anaconda" in win.inspector.source_label.text()
@@ -201,3 +204,41 @@ def test_dialog_prefills_and_saves_tuning(app, tmp_path: Path, monkeypatch) -> N
     # editing a derived asset shows ITS stored options, not the table
     stored = derive_dialog.DeriveDialog(["v_x"], options={}, name="v_x_hands")
     assert stored.weapon_offset.value() == [0.0, 0.0, 0.0]
+
+
+def test_before_after_keeps_camera_pose_and_frame(app, tmp_path: Path) -> None:
+    from PySide6.QtCore import QSettings
+
+    from valve_qc_merger.studio.main_window import MainWindow
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(_ANACONDA)
+    project.derive_asset("v_anaconda", "canon")
+    win = MainWindow(QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    try:
+        win.set_project(project)
+        panel = win.viewport
+        assert win.explorer.select("asset", "v_anaconda")
+        assert not panel.compare_button.isVisibleTo(panel)  # not derived: no flip
+        assert win.explorer.select("asset", "v_anaconda_canon")
+        assert panel.compare_button.isVisibleTo(panel)
+        assert "v_anaconda" in panel.compare_button.text()
+        names = [panel.sequence_box.itemText(i) for i in range(panel.sequence_box.count())]
+        reload = next(i for i, n in enumerate(names) if "reload" in n)
+        panel.sequence_box.setCurrentIndex(reload)
+        panel.slider.setValue(5)
+        panel.viewport.state.camera.distance = 12.5
+        derived_scene = panel.viewport.scene
+
+        panel.compare_button.setChecked(True)  # before
+        assert panel.viewport.scene is not derived_scene
+        assert panel.sequence_box.currentIndex() == reload
+        assert panel.viewport.state.frame == 5.0
+        assert panel.viewport.state.camera.distance == 12.5
+        panel.compare_button.setChecked(False)  # after
+        assert panel.viewport.scene is derived_scene
+
+        win._select_asset("v_anaconda_canon")  # e.g. after a re-run: view kept
+        assert panel.viewport.state.camera.distance == 12.5
+        assert panel.sequence_box.currentIndex() == reload
+    finally:
+        win.close()
