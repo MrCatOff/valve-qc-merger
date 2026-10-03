@@ -9,6 +9,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -194,6 +195,12 @@ def convert(args, log=log) -> dict:
     qc_text = qcmod.rewrite(model.qc, drop_studios=drop_studios,
                             attachment_fixes=fixes, survivors=survivors,
                             modelname=args.modelname)
+    if asset.render_modes:  # an asset with its own textures (zombie hands)
+        lines = "".join(f'$texrendermode "{mat}" {mode}\n'
+                        for mat, mode in sorted(asset.render_modes.items()))
+        anchor = re.search(r"^\s*\$(?:body|bodygroup)\b", qc_text, re.MULTILINE)
+        at = anchor.start() if anchor else len(qc_text)
+        qc_text = qc_text[:at] + lines + qc_text[at:]
     qc_name = os.path.basename(model.qc.path)
     with open(os.path.join(out_dir, qc_name), "w", encoding="utf-8",
               newline="\n") as f:
@@ -222,6 +229,9 @@ def convert(args, log=log) -> dict:
                 % hands_bmp)
         hands_bmp = sorted(cands)[0]
     shutil.copy2(hands_bmp, os.path.join(out_dir, "hands.bmp"))
+    for mat, path in sorted(asset.textures.items()):  # the hands' own textures
+        if os.path.isfile(path):
+            shutil.copy2(path, os.path.join(out_dir, mat))
     log("Copied %d weapon BMPs + hands.bmp (%s)"
         % (n_bmp, os.path.basename(hands_bmp)))
 

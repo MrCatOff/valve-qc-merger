@@ -40,6 +40,7 @@ from valve_qc_merger.project import DERIVE_MODES
 from valve_qc_merger.resources import resource_path
 from valve_qc_merger.services.canonicalize import CanonicalizeOptions
 from valve_qc_merger.services.retarget import RetargetOptions
+from valve_qc_merger.services.zhands_grenade import ZhandsGrenadeOptions
 from valve_qc_merger.studio.options_form import OptionsForm
 
 # fields of RetargetOptions the dialog shows as spin boxes, or never
@@ -128,13 +129,19 @@ class DeriveDialog(QDialog):
 
     def __init__(self, sources: list[str], parent: QWidget | None = None, *,
                  mode: str = "hands", options: dict[str, Any] | None = None,
-                 name: str | None = None, existing: set[str] | None = None) -> None:
+                 name: str | None = None, existing: set[str] | None = None,
+                 kinds: set[str] | None = None) -> None:
         super().__init__(parent)
         self.sources = sources
         self._existing = existing or set()
         self._fixed_name = name  # re-running a derived asset keeps its name
         self.setWindowTitle("Retarget" if name is None else f"Retarget settings — {name}")
         options = dict(options or {})
+        # a mode is offered only when every source is a kind it applies to
+        allowed = {key for key, spec in DERIVE_MODES.items()
+                   if spec.kinds is None or (kinds is not None and kinds <= spec.kinds)}
+        if name is None and kinds and kinds <= DERIVE_MODES["grenade"].kinds:
+            mode = "grenade"  # zombie hands: making the grenade is the point
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
             f"Source: <b>{sources[0]}</b>" if len(sources) == 1
@@ -150,6 +157,8 @@ class DeriveDialog(QDialog):
                      "animation onto them — ready for merge-v --shared-hands",
             "canon": "keep the model's own hands; rename/reparent the bones onto the "
                      "canonical rig (Bip01 root, ValveBiped hand names, no Nubs)",
+            "grenade": "zombie hands without a grenade: put these hands on the bundled "
+                       "donor grenade (frog bomb + idle/pullpin/throw/deploy)",
         }
         for index, key in enumerate(self._mode_keys):
             radio = QRadioButton(DERIVE_MODES[key].title)
@@ -160,7 +169,7 @@ class DeriveDialog(QDialog):
             hint.setWordWrap(True)
             hint.setStyleSheet("color: gray; margin-left: 22px")
             modes_layout.addWidget(hint)
-            radio.setEnabled(name is None or key == mode)
+            radio.setEnabled(key == mode if name is not None else key in allowed)
         layout.addWidget(modes)
 
         name_row = QFormLayout()
@@ -233,6 +242,16 @@ class DeriveDialog(QDialog):
         canon_layout.addWidget(self.canon_form)
         canon_layout.addStretch(1)
         self.pages.addWidget(canon_page)
+        # -- grenade ---------------------------------------------------------
+        self.grenade_form = OptionsForm(ZhandsGrenadeOptions, "zhands-grenade",
+                                        options if mode == "grenade" else {},
+                                        exclude=frozenset({"knife_dir", "out", "modelname"}))
+        grenade_page = QWidget()
+        grenade_layout = QVBoxLayout(grenade_page)
+        grenade_layout.setContentsMargins(0, 0, 0, 0)
+        grenade_layout.addWidget(self.grenade_form)
+        grenade_layout.addStretch(1)
+        self.pages.addWidget(grenade_page)
         # the options scroll on a short screen instead of being squeezed
         scroll = QScrollArea()
         scroll.setWidget(self.pages)
@@ -266,7 +285,7 @@ class DeriveDialog(QDialog):
         return self._mode_keys[max(self.mode_group.checkedId(), 0)]
 
     def _default_name(self, mode: str) -> str:
-        return f"{self.sources[0]}{DERIVE_MODES[mode].suffix}"
+        return DERIVE_MODES[mode].default_name(self.sources[0])
 
     def _mode_toggled(self, index: int, checked: bool) -> None:
         if not checked:
@@ -280,12 +299,14 @@ class DeriveDialog(QDialog):
             if not current or current in {self._default_name(m) for m in DERIVE_MODES}:
                 self.name_edit.setText(self._default_name(mode))
         else:
-            self.name_edit.setText(f"<source>{DERIVE_MODES[mode].suffix}")
+            self.name_edit.setText(DERIVE_MODES[mode].default_name("<source>"))
 
     def options(self) -> dict[str, Any]:
         """The chosen options (only non-defaults); raises ValueError on bad input."""
         if self.mode == "canon":
             return self.canon_form.values()
+        if self.mode == "grenade":
+            return self.grenade_form.values()
         values = self.retarget_form.values()
         weapon = self.weapon_offset.value()
         if any(weapon):
@@ -397,7 +418,7 @@ class DeriveDialog(QDialog):
             return False
         if self._fixed_name is None:
             names = [name] if name is not None else [
-                f"{s}{DERIVE_MODES[self.mode].suffix}" for s in self.sources]
+                DERIVE_MODES[self.mode].default_name(s) for s in self.sources]
             taken = [n for n in names if n in self._existing]
             if taken:
                 answer = QMessageBox.question(

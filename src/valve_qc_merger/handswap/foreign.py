@@ -19,6 +19,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import re
 
 import numpy as np
 
@@ -42,12 +43,45 @@ def _frame(origin: np.ndarray, y: np.ndarray, hint: np.ndarray) -> np.ndarray:
     return m
 
 
-def asset_from_weapon(weapon_dir: str, *, prefer: str = "male", log=lambda *a: None) -> dict:
-    """The raw asset dict (``cso_hands.json.gz`` format) of a weapon's hands."""
+def _ascii_key(name: str) -> str:
+    """A file name compared without its non-ASCII characters: decompilers
+    write odd bytes (Korean/latin-1) that reach the SMD and the file system
+    in different encodings."""
+    return "".join(c for c in name.lower() if c.isascii())
+
+
+def _texture_file(weapon_dir: str, material: str) -> str | None:
+    wanted, folded = material.lower(), _ascii_key(material)
+    fallback = None
+    for root, _dirs, files in os.walk(weapon_dir):
+        for name in files:
+            if name.lower() == wanted:
+                return os.path.join(root, name)
+            if fallback is None and _ascii_key(name) == folded:
+                fallback = os.path.join(root, name)
+    return fallback
+
+
+def asset_from_weapon(weapon_dir: str, *, prefer: str = "male", keep_materials: bool = False,
+                      log=lambda *a: None) -> dict:
+    """The raw asset dict (``cso_hands.json.gz`` format) of a weapon's hands.
+
+    ``keep_materials``: the hands keep their own textures (zombie hands carry
+    several — skin, claws, effects) instead of the single ``hands.bmp`` slot;
+    the asset then lists each material's file and render mode, and the
+    engine copies them and writes the ``$texrendermode`` lines."""
     model = buildmod.load_weapon(weapon_dir, None, log=log)
     hand_bones = buildmod.hand_bone_set(model, log=log)
     hand_mats = buildmod.hand_materials(model, hand_bones)
     dropped, _kept = buildmod.classify_meshes(model, hand_bones, hand_mats, log=log)
+    if not dropped:
+        # hands and weapon in ONE mesh (sting_finger: the syringe): take the
+        # mesh mostly on hand bones; the triangle filters below cut the rest
+        def share(name: str) -> float:
+            weights = model.weights.get(name, {})
+            total = sum(weights.values())
+            return sum(w for b, w in weights.items() if b in hand_bones) / total if total else 0.0
+        dropped = [m for m in model.refs if share(m) > 0.5]
     if not dropped:
         raise ValueError(f"no hand mesh found in {weapon_dir}")
     skel = model.skel
@@ -111,16 +145,82 @@ def asset_from_weapon(weapon_dir: str, *, prefer: str = "male", log=lambda *a: N
     smd = model.refs[mesh]
     name_of = smd.name_of()
 
+    owners: dict[str, str] = {}
+
     def owner(bone_id: int) -> str:
-        name = name_of[bone_id]
+        """The hand-rig bone a vertex's bone rides: its nearest mapped
+        ancestor, else (forearm twist bones hanging off the upper arm, as in
+        3ds Max Biped rigs) the mapped bone nearest to it."""
+        start = name_of[bone_id]
+        if start in owners:
+            return owners[start]
+        name = start
         while name is not None and name not in rename:
             name = skel.parent.get(name)
         if name is None:
-            raise ValueError(f"hand vertex on {name_of[bone_id]!r}, outside the hand rig")
-        return rename[name]
+            here = head(start)
+            name = min(rename, key=lambda b: float(np.linalg.norm(head(b) - here)))
+        owners[start] = rename[name]
+        return owners[start]
+
+    textures: dict[str, str] = {}
+    render_modes: dict[str, str] = {}
+    if keep_materials:
+        qc_text = open(model.qc.path, encoding="latin-1").read()
+        modes = {m.group(1).lower(): m.group(2) for m in re.finditer(
+            r'\$texrendermode\s+"?([^"\n]+?\.bmp)"?\s+(\w+)', qc_text, re.IGNORECASE)}
+
+    def material(name: str) -> str:
+        if not keep_materials:
+            return "hands.bmp"
+        clean = re.sub(r"[^A-Za-z0-9_.-]", "_", name).lstrip("_") or "hand.bmp"
+        if clean not in textures:
+            found = _texture_file(weapon_dir, name)
+            if found:
+                textures[clean] = found
+            if name.lower() in modes:
+                render_modes[clean] = modes[name.lower()]
+        return clean
+
+    # props hanging off the hand (voodoo's doll on the wrist): a separate
+    # piece of mesh none of whose vertices sits on the hand's own bones
+    # (wrist, fingers, arm) is not hand, whatever bone carries it
+    anatomical = set(rename)
+    piece = list(range(len(smd.triangles)))
+
+    def root(i: int) -> int:
+        while piece[i] != i:
+            piece[i] = piece[piece[i]]
+            i = piece[i]
+        return i
+    seen: dict[tuple, int] = {}
+    for i, tri in enumerate(smd.triangles):
+        for v in tri.verts:
+            key = tuple(np.round(np.asarray(v.pos, dtype=float), 4))
+            if key in seen:
+                piece[root(i)] = root(seen[key])
+            else:
+                seen[key] = i
+    hand_pieces = {root(i) for i, tri in enumerate(smd.triangles)
+                   if any(name_of[v.dominant_bone()] in anatomical for v in tri.verts)}
 
     triangles = []
-    for tri in smd.triangles:
+    skipped = 0
+    for index, tri in enumerate(smd.triangles):
+        if root(index) not in hand_pieces:
+            skipped += 1
+            continue
+        # only the HANDS: a weapon modelled into the hand mesh (v_heavy_knife:
+        # the blade rides 'Bone_Knife' with its own texture) must stay out
+        if hand_mats and tri.material not in hand_mats \
+                or any(name_of[v.dominant_bone()] not in hand_bones for v in tri.verts):
+            skipped += 1
+            continue
+        # a triangle bridging the two arms (voodoo's sleeves are stitched
+        # together) tears as soon as the hands move apart: leave it out
+        if len({owner(v.dominant_bone())[-2:] for v in tri.verts}) > 1:
+            skipped += 1
+            continue
         corners = []
         for v in tri.verts:
             weights: dict[str, float] = {}
@@ -130,11 +230,14 @@ def asset_from_weapon(weapon_dir: str, *, prefer: str = "male", log=lambda *a: N
                             "normal": [float(c) for c in v.normal],
                             "uv": [float(c) for c in v.uv],
                             "weights": [[k, w] for k, w in weights.items()]})
-        triangles.append({"mat": "hands.bmp", "corners": corners})
-    log("foreign hands from %s: mesh %r, %d bones, %d triangles"
-        % (os.path.basename(weapon_dir), mesh, len(bones), len(triangles)))
-    return {"source_blend": f"weapon:{os.path.basename(os.path.abspath(weapon_dir))}/{mesh}",
-            "bones": bones, "triangles": triangles}
+        triangles.append({"mat": material(tri.material), "corners": corners})
+    log("foreign hands from %s: mesh %r, %d bones, %d triangles (%d weapon/prop triangles left out)"
+        % (os.path.basename(weapon_dir), mesh, len(bones), len(triangles), skipped))
+    raw = {"source_blend": f"weapon:{os.path.basename(os.path.abspath(weapon_dir))}/{mesh}",
+           "bones": bones, "triangles": triangles}
+    if keep_materials:
+        raw["textures"], raw["render_modes"] = textures, render_modes
+    return raw
 
 
 def _complete_arms(bones: list[dict], plan) -> list[dict]:  # noqa: ANN001

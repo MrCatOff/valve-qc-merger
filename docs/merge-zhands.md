@@ -93,3 +93,30 @@ within 0.08u (ghost: 0.6u, its own grenade is a different model).
 | `--grenade-prefix TEXT` | texture prefix marking grenade triangles (default `frogbomb`) |
 | `--grenade-texture BMP` | take the shared grenade from a model using this texture (default `frogbomb.bmp`) |
 | `--manifest-format` | `ini` (default), `json` or `toml` |
+
+## Zombie hands without a grenade: `zhands-grenade`
+
+A zombie that ships only `v_<zombie>_knife` gets its grenade generated: the
+bundled donor (`storage/zhands/grenade_donor/v_banshee_grenade` — frog bomb +
+`idle`/`pullpin`/`throw`/`deploy`, community-made banshee hands) has its hands
+swapped for the zombie's with the retarget engine. The zombie's hands come
+from the knife model as-is (own textures and `$texrendermode`, so a ghost
+`alternate` stays additive); extra props are left out — the heavy's blade,
+the voodoo doll, triangles bridging the two arms; a syringe sharing the hand
+mesh (sting finger) is split off by bone.
+
+```bash
+python -m valve_qc_merger zhands-grenade --knife-dir decompiled/v_heavy_knife
+# -> decompiled/v_heavy_grenade (QC + SMD + BMP), then merge-zhands as usual
+```
+
+| Option | Meaning |
+|---|---|
+| `--knife-dir DIR` | decompiled zombie knife model (the hands) |
+| `--out DIR` | output (default: next to it, `_knife` → `_grenade`) |
+| `--donor DIR` | another grenade model to take the grenade + motion from |
+| `--modelname NAME` | `$modelname` (default `<out name>.mdl`) |
+| `--snug-max-deg`, `--curl`, `--grip-offset`, `--weapon-offset` | as in `retarget` |
+
+Studio: right-click a `zhands` asset ▸ **Retarget…** ▸ *Make grenade (zombie
+hands)* (the default mode for zombie hands) → `v_<zombie>_grenade`.

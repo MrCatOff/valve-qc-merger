@@ -15,7 +15,7 @@ Project documentation lives here, one page per topic.
   donor's animations (unneeded slots voided with a placeholder).
 - [`merge-w`](merge-w.md) — merge decompiled w_ (dropped-weapon)
   models onto a single hitboxed weapon bone.
-- [`merge-zhands`](merge-zhands.md) — merge CSO zombie hand view models
+- [`merge-zhands`](merge-zhands.md) — merge CSO zombie hand view models (+ `zhands-grenade` for zombies without one)
   (knife + grenade per zombie) into one model with a shared grenade bodygroup.
 - [Studio (GUI)](studio.md) — the desktop IDE plan, the service layer
   (`run_<op>(options, reporter)`) and the `project.toml` project format.

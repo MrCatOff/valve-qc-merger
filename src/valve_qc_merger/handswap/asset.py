@@ -64,6 +64,10 @@ class HandsAsset:
     # bone -> centroid of the skin it carries (dominant weight), in the
     # bone's rest frame: where that segment's flesh is, rig-independent
     centroids_local: dict[str, np.ndarray] = field(default_factory=dict)
+    # assets built from a model's own hands (foreign.py, keep_materials):
+    # material -> texture file to copy, material -> $texrendermode
+    textures: dict[str, str] = field(default_factory=dict)
+    render_modes: dict[str, str] = field(default_factory=dict)
     # bone -> its skin vertices (dominant weight) in the bone's rest frame
     skin_local: dict[str, np.ndarray] = field(default_factory=dict)
 
@@ -96,7 +100,9 @@ def load(path: str = DEFAULT_ASSET) -> HandsAsset:
         else:
             b.rest_local = b.rest_world.copy()
 
-    asset = HandsAsset(bones=bones, order=order, triangles=raw["triangles"])
+    asset = HandsAsset(bones=bones, order=order, triangles=raw["triangles"],
+                       textures=dict(raw.get("textures", {})),
+                       render_modes=dict(raw.get("render_modes", {})))
     sums: dict[str, np.ndarray] = {}
     counts: dict[str, int] = {}
     points: dict[str, set] = {}

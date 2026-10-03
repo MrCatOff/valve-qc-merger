@@ -46,6 +46,11 @@ from valve_qc_merger.services.merge_view import MergeViewOptions, run_merge_view
 from valve_qc_merger.services.merge_world import MergeWorldOptions, run_merge_world
 from valve_qc_merger.services.merge_zhands import MergeZhandsOptions, run_merge_zhands
 from valve_qc_merger.services.retarget import RetargetOptions, run_retarget
+from valve_qc_merger.services.zhands_grenade import (
+    ZhandsGrenadeOptions,
+    grenade_name,
+    run_zhands_grenade,
+)
 
 FORMAT_VERSION = 2  # 2: asset categories, category builds
 PROJECT_FILE = "project.toml"
@@ -85,6 +90,11 @@ class DeriveMode:
     run: Callable[..., ServiceResult]
     input_field: str  # the options field naming the source folder
     suffix: str  # default name: <source><suffix>
+    rename: Callable[[str], str] | None = None  # default name from the source name
+    kinds: frozenset[str] | None = None  # source kinds it applies to (None: any)
+
+    def default_name(self, source: str) -> str:
+        return self.rename(source) if self.rename else f"{source}{self.suffix}"
 
 
 DERIVE_MODES: dict[str, DeriveMode] = {
@@ -92,10 +102,13 @@ DERIVE_MODES: dict[str, DeriveMode] = {
                         "weapon_dir", "_hands"),
     "canon": DeriveMode("Canonical bones (own hands)", CanonicalizeOptions,
                         run_canonicalize, "model_dir", "_canon"),
+    "grenade": DeriveMode("Make grenade (zombie hands)", ZhandsGrenadeOptions,
+                          run_zhands_grenade, "knife_dir", "_grenade",
+                          rename=grenade_name, kinds=frozenset({"zhands"})),
 }
 # options the project sets itself; never stored with a derived asset
-_DERIVE_FIXED = {"weapon_dir", "model_dir", "out", "qc", "category", "compile",
-                 "studiomdl"}
+_DERIVE_FIXED = {"weapon_dir", "model_dir", "knife_dir", "out", "qc", "category",
+                 "compile", "studiomdl", "modelname"}
 
 _ZOMBIE_RE = re.compile(r"^v_(?P<zombie>.+?)_(?P<role>knife|grenade)(?:_.+)?$", re.IGNORECASE)
 
@@ -456,7 +469,7 @@ class Project:
         spec = DERIVE_MODES.get(mode)
         if spec is None:
             raise ProjectError(f"unknown derive mode {mode!r}")
-        name = (name or f"{source}{spec.suffix}").strip()
+        name = (name or spec.default_name(source)).strip()
         if not name or "/" in name or "\\" in name or name in {".", ".."}:
             raise ProjectError(f"invalid asset name {name!r}")
         if name == source:
@@ -476,11 +489,12 @@ class Project:
             shutil.copytree(self.asset_dir(source), staged)
             opts = options_from_dict(spec.options, {
                 **stored, spec.input_field: str(staged),
-                "out": str(staging / "output"),
+                "out": str(staging / "output" / name),
             })
             reporter.log(f"{spec.title}: {source} -> {name}")
             result = spec.run(opts, reporter)
-            if not result.ok or not any((staging / "output").glob("*.qc")):
+            produced = staging / "output" / name  # named like the asset ($modelname)
+            if not result.ok or not any(produced.glob("*.qc")):
                 if result.ok:
                     result.exit_code = EXIT_FAIL
                 return result, None
@@ -491,7 +505,7 @@ class Project:
                 shutil.rmtree(self.root / existing.path, ignore_errors=True)
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(staging / "output"), str(target))
+            shutil.move(str(produced), str(target))
             asset = Asset(name=name, kind=kind, path=relative.as_posix(),
                           notes=existing.notes if existing is not None else "",
                           derived={"from": source, "mode": mode, "options": stored,

@@ -621,7 +621,9 @@ class MainWindow(QMainWindow):
         if not names:
             self.statusBar().showMessage("select an asset in the Explorer", 4000)
             return
-        self._open_derive_dialog(DeriveDialog(names, self, existing=set(project.assets)))
+        self._open_derive_dialog(DeriveDialog(
+            names, self, existing=set(project.assets),
+            kinds={project.assets[n].kind for n in names}))
 
     def rederive_asset(self, name: str, edit: bool) -> None:
         """Re-run a derived asset from its source; ``edit`` opens its settings first."""

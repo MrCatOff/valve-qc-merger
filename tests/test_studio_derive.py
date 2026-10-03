@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from valve_qc_merger.merge_view.discovery import load_model
-from valve_qc_merger.project import Project, ProjectError
+from valve_qc_merger.project import DERIVE_MODES, Project, ProjectError
 from valve_qc_merger.services.base import CollectingReporter
 from valve_qc_merger.services.canonicalize import CanonicalizeOptions, run_canonicalize
 
@@ -334,3 +334,16 @@ def test_dialog_fingers_round_trip(app, tmp_path: Path, monkeypatch) -> None:
     dialog.save_tuning()
     assert tuning.load_entry(str(path), "v_x")["curl"] == {
         "right": {"PinkyFinger": -4.0}, "left": {"ForeFinger": 8.0}}
+
+
+def test_dialog_offers_the_grenade_only_for_zombie_hands(app) -> None:
+    from valve_qc_merger.studio.derive_dialog import DeriveDialog
+    grenade = list(DERIVE_MODES).index("grenade")
+    weapon = DeriveDialog(["v_x"], kinds={"weapon"})
+    assert not weapon.mode_group.button(grenade).isEnabled()
+    assert weapon.mode == "hands"
+    zombie = DeriveDialog(["v_heavy_knife"], kinds={"zhands"})
+    assert zombie.mode == "grenade"
+    assert zombie.result_spec() == ("grenade", "v_heavy_grenade", {})
+    batch = DeriveDialog(["v_a_knife", "v_b_knife"], kinds={"zhands"})
+    assert batch.name_edit.text() == "<source>_grenade"

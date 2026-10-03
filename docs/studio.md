@@ -29,6 +29,7 @@ Every operation is `run_<op>(options, reporter) -> ServiceResult` in
 | `run_merge_world` | `MergeWorldOptions` | `merge-w` |
 | `run_merge_players` | `MergePlayersOptions` | `merge-players` |
 | `run_merge_zhands` | `MergeZhandsOptions` | `merge-zhands` |
+| `run_zhands_grenade` | `ZhandsGrenadeOptions` | `zhands-grenade` |
 | `run_compile` | `CompileOptions` | — |
 | `run_decompile` | `DecompileOptions` | `decompile` |
 
@@ -287,6 +288,9 @@ whose source sits in another category stands alone as `v_x_hands ↳ v_x`:
   reference names, the `Bip01` root is added, the reference parentage is
   enforced and `*Nub` bones are removed (the per-model step of merge-v,
   FK-exact and pose-checked).
+- **Make grenade (zombie hands)** → `v_<zombie>_grenade` (only for `zhands`
+  assets, and their default): the `zhands-grenade` service — the bundled
+  banshee grenade wears the zombie's hands (see [merge-zhands](merge-zhands.md)).
 
 **Grip offsets** (swap mode): *Weapon* moves the weapon relative to BOTH
 hands, in model space at the grip frame (`retarget --weapon-offset dx,dy,dz`);
