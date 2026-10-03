@@ -65,6 +65,25 @@ def check_header(qc_text: str) -> HeaderCheck:
     return HeaderCheck(rejects, warnings)
 
 
+def check_sequences(model: ModelInput) -> HeaderCheck:
+    """Sequences merge-v cannot rebuild faithfully: a blend (several
+    animation SMDs in one block) would keep only its first animation —
+    rejected; other options (origin, rotate, motion extraction LX…) are not
+    carried — warned. (``ACT_*`` activities are carried.)"""
+    rejects: list[str] = []
+    options: dict[str, list[str]] = {}
+    for seq in model.sequences:
+        if seq.smd_count > 1:
+            rejects.append(f"sequence {seq.name!r} blends {seq.smd_count} animations "
+                           "(merge-v keeps one)")
+        for option in seq.options:
+            if option not in ("blend", "animation") or seq.smd_count <= 1:
+                options.setdefault(option, []).append(seq.name)
+    warnings = [f"sequence option {option!r} not carried ({', '.join(names[:4])}"
+                f"{'…' if len(names) > 4 else ''})" for option, names in sorted(options.items())]
+    return HeaderCheck(rejects, warnings)
+
+
 def _remap(smd: Smd, mapping: dict[str, str]) -> Smd:
     clone = smd.clone()
     clone.triangles = [
@@ -109,4 +128,5 @@ def skin_variants(model: ModelInput, parts: ModelParts
     return out
 
 
-__all__ = ["HeaderCheck", "SKIN_SUFFIX", "check_header", "skin_variants"]
+__all__ = ["HeaderCheck", "SKIN_SUFFIX", "check_header", "check_sequences",
+           "skin_variants"]

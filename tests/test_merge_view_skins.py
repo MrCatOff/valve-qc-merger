@@ -92,3 +92,31 @@ def test_scaled_model_is_rejected(models: Path, tmp_path: Path) -> None:
                             CollectingReporter())
     assert any("v_big" in f and "$scale 1.3" in f for f in result.failures)
     assert "v_big" not in _ini(out).sections()
+
+
+def _edit_qc(directory: Path, old: str, new: str) -> None:
+    qc = next(directory.glob("*.qc"))
+    text = qc.read_text(encoding="latin-1")
+    assert old in text
+    qc.write_text(text.replace(old, new, 1), encoding="latin-1")
+
+
+def test_activities_carried_blends_rejected_options_warned(models: Path,
+                                                          tmp_path: Path) -> None:
+    anaconda = models / "v_anaconda"
+    _edit_qc(anaconda, '"v_anaconda_anims\\idle1"\n\tfps 16',
+             '"v_anaconda_anims\\idle1"\n\tfps 16\n\tACT_VM_IDLE 1\n\torigin 0 0 2')
+    blender = models / "v_blend"
+    shutil.copytree(anaconda, blender)
+    (blender / "v_anaconda.qc").rename(blender / "v_blend.qc")
+    _edit_qc(blender, '"v_anaconda_anims\\shoot1"',
+             '"v_anaconda_anims\\shoot1" "v_anaconda_anims\\shoot2"\n\tblend XR -45 45')
+    out = tmp_path / "out"
+    reporter = CollectingReporter()
+    result = run_merge_view(MergeViewOptions(models_dir=models, out=out,
+                                             skin_variants=False), reporter)
+    assert any("v_blend" in f and "blends 2 animations" in f for f in result.failures)
+    assert any("option 'origin' not carried (idle1)" in line for line in reporter.lines)
+    qc = (out / "v_merged.qc").read_text(encoding="latin-1")
+    assert "\tACT_VM_IDLE 1" in qc  # carried into the merged block
+    assert _ini(out).sections() == ["v_anaconda"]

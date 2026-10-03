@@ -639,6 +639,8 @@ def merge_models(
                 lines.append(f"\tfps {fps}")
             if seq_meta.loop:
                 lines.append("\tloop")
+            if seq_meta.activity:
+                lines.append(f"\t{seq_meta.activity}")
         lines.append("}")
     (out_dir / f"{name}.qc").write_text("\n".join(lines) + "\n", encoding="latin-1")
 

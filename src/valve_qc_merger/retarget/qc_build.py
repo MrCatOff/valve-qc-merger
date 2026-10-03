@@ -28,6 +28,13 @@ _ATTACH_RE = re.compile(
 )
 _MODELNAME_RE = re.compile(r'\$modelname\s+"(?P<name>[^"]+)"')
 _SEQ_SMD_RE = re.compile(r'"(?P<path>[^"{}]+)"')  # first quoted token outside events
+_ACTIVITY_RE = re.compile(r"\b(ACT_[A-Za-z0-9_]+)(?:\s+([0-9.]+))?")
+# studiomdl $sequence options other than fps / loop / events / activities
+SEQUENCE_OPTIONS = frozenset({
+    "blend", "origin", "rotate", "scale", "frame", "frames", "node", "transition",
+    "rtransition", "pivot", "animation", "control", "deform",
+    "lx", "ly", "lz", "xr", "yr", "zr", "lxr", "lyr", "lzr", "lm", "lq",
+})
 _TEXRENDERMODE_RE = re.compile(
     r'\$texrendermode\s+"(?P<tex>[^"]+)"\s+(?P<mode>\w+)'
 )
@@ -40,6 +47,11 @@ class QcSequence:
     events: tuple[str, ...]
     smd: str | None = None  # animation SMD path as parsed from the QC (either separator)
     loop: bool = False  # ``loop`` flag (STUDIO_LOOPING): idles wrap instead of clamping
+    activity: str | None = None  # "ACT_IDLE 1": activity and its weight, verbatim
+    smd_count: int = 1  # animation SMDs in the block (> 1: a blend)
+    # other ``$sequence`` options present (blend, origin, rotate, LX, frame…):
+    # the merges that rebuild sequence blocks don't carry them
+    options: tuple[str, ...] = ()
 
 
 def _matching_brace(text: str, open_index: int) -> int:
@@ -82,8 +94,16 @@ def parse_sequences(qc_text: str) -> list[QcSequence]:
         events = tuple(e.strip() for e in _EVENT_RE.findall(body))
         smd_m = _SEQ_SMD_RE.search(_EVENT_RE.sub("", body))
         smd = smd_m.group("path") if smd_m else None
-        loop = _LOOP_RE.search(_EVENT_RE.sub("", body)) is not None
-        out.append(QcSequence(name, fps, events, smd, loop))
+        plain = _EVENT_RE.sub("", body)
+        loop = _LOOP_RE.search(plain) is not None
+        activity_m = _ACTIVITY_RE.search(plain)
+        activity = (" ".join(g for g in activity_m.groups() if g)
+                    if activity_m else None)
+        smd_count = len(_SEQ_SMD_RE.findall(plain))
+        words = re.sub(r'"[^"]*"', " ", plain).split()
+        options = tuple(sorted({w.lower() for w in words if w.lower() in SEQUENCE_OPTIONS}))
+        out.append(QcSequence(name, fps, events, smd, loop, activity,
+                              max(smd_count, 1), options))
     return out
 
 

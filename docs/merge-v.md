@@ -136,6 +136,14 @@ silently change once merged, so `$scale ≠ 1` and a non-zero `$origin` reject
 the model (merge it on its own, or bake the transform into its SMDs) and a
 non-zero `$flags` is dropped with a warning (one model-wide value).
 
+**Sequence options.** Merged `$sequence` blocks carry the animation, events,
+`fps`, `loop` and the `ACT_*` activity with its weight (the engine plays view
+model sequences by index, but the information stays). A **blend** (several
+animation SMDs in one block) would keep only its first animation, so such a
+model is rejected; other options merge-v does not rebuild (`origin`,
+`rotate`, motion extraction `LX`/`LY`…, frame ranges, `node`/`transition`)
+are reported as "not carried" warnings.
+
 ## The pipeline
 
 1. **Discovery + sanitise** — one `.qc` per subdirectory; byte-level encoding

@@ -46,7 +46,7 @@ from valve_qc_merger.merge_view.parts import (
     PartBudget,
     split_parts,
 )
-from valve_qc_merger.merge_view.skins import check_header, skin_variants
+from valve_qc_merger.merge_view.skins import check_header, check_sequences, skin_variants
 from valve_qc_merger.merge_view.verify import verify_part
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.resources import resource_path
@@ -135,9 +135,12 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
             reporter.log(f"  {model_dir.name:<20} FAIL  {exc}")
             continue
         header = check_header(model.qc_text)
+        sequences = check_sequences(model)
+        header.rejects.extend(sequences.rejects)
+        header.warnings.extend(sequences.warnings)
         if header.rejects:
-            message = (f"model {model.name!r}: {'; '.join(header.rejects)} — merge it "
-                       "on its own or bake the transform into its SMDs")
+            message = (f"model {model.name!r}: {'; '.join(header.rejects)} — "
+                       "merge it on its own")
             failures.append(message)
             reporter.log(f"  {model.name:<20} HEADER  {message}")
             continue
