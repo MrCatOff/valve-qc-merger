@@ -163,6 +163,14 @@ QFrame[role="tile"] {{
 QFrame[role="tile"] QLabel {{ background: transparent; border: none; }}
 QLabel[role="tile-value"] {{ font-size: 16px; font-weight: 600; color: {t['text']}; }}
 QWidget[role="header"] {{ background: {t['bg']}; border-bottom: 1px solid {t['border']}; }}
+QFrame[role="toast"] {{
+    background: {t['raised']}; border: 1px solid {t['border_strong']};
+    border-left: 3px solid {t['success']}; border-radius: 8px;
+}}
+QFrame[role="toast"][level="warning"] {{ border-left-color: {t['warning']}; }}
+QFrame[role="toast"][level="error"] {{ border-left-color: {t['danger']}; }}
+QFrame[role="toast"] QLabel {{ background: transparent; }}
+QTextBrowser {{ background: {t['panel']}; border: none; padding: 4px 8px; }}
 QWidget[role="page"] {{ background: {t['bg']}; }}
 
 /* -- buttons ------------------------------------------------------------ */

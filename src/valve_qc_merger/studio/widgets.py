@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
-    QFont,
     QIcon,
     QImage,
     QPainter,
@@ -972,26 +971,10 @@ class Inspector(QWidget):
 # --------------------------------------------------------------------------- #
 # Log
 # --------------------------------------------------------------------------- #
-class LogPanel(QPlainTextEdit):
-    """Read-only, monospaced job log (bounded)."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setReadOnly(True)
-        self.setMaximumBlockCount(20_000)
-        font = QFont("Consolas")
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        self.setFont(font)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-
-    def append_line(self, line: str) -> None:
-        self.appendPlainText(line)
-
-
 def project_title(project: Project | None, path: Path | None = None) -> str:
     if project is None:
         return "valve-qc-merger Studio"
     return f"{project.name} — valve-qc-merger Studio"
 
 
-__all__ = ["Explorer", "Inspector", "KIND_TITLES", "LogPanel", "project_title"]
+__all__ = ["Explorer", "Inspector", "KIND_TITLES", "project_title"]

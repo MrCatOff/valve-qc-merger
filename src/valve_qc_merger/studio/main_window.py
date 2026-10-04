@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, QUrl
@@ -32,6 +33,7 @@ from valve_qc_merger.studio.build_report import load_record, record_part_stats
 from valve_qc_merger.studio.dialogs import NewProjectDialog, SettingsDialog
 from valve_qc_merger.studio.icons import ICON_SIZE, icon
 from valve_qc_merger.studio.jobs import JobRunner
+from valve_qc_merger.studio.log_panel import LogPanel, Toast
 from valve_qc_merger.studio.model_info import ModelInfo, read_model_info
 from valve_qc_merger.studio.scene import ModelScene, build_scene
 from valve_qc_merger.studio.viewport import ViewportPanel
@@ -41,7 +43,6 @@ from valve_qc_merger.studio.widgets import (
     Explorer,
     ExplorerPanel,
     Inspector,
-    LogPanel,
     project_title,
 )
 
@@ -109,7 +110,14 @@ class MainWindow(QMainWindow):
         self.right.addWidget(self.inspector)
         self.right.addWidget(self.build_panel)
         self._dock("Inspector", self.right, Qt.DockWidgetArea.RightDockWidgetArea, 520)
-        self._dock("Log", self.log, Qt.DockWidgetArea.BottomDockWidgetArea, 180)
+        self._dock("Log", self.log, Qt.DockWidgetArea.BottomDockWidgetArea, 200)
+        # the log stays out of the way until asked for (or a job fails)
+        self.log_dock = self.docks[-1]
+        self.log_dock.hide()
+        self.log.asset_clicked.connect(self._reveal_asset)
+        self.toast = Toast(self)
+        self.toast.log_requested.connect(self.show_log)
+        self._job_mark = (0.0, 0, 0)  # job start: time, warnings, errors
 
         self.counts_label = QLabel()
         self.progress = QProgressBar()
@@ -122,6 +130,15 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress)
         self.statusBar().addPermanentWidget(self.cancel_button)
         self.statusBar().addPermanentWidget(self.counts_label)
+        self.log_button = QToolButton()
+        self.log_button.setIcon(icon("square-terminal", theme.TOKENS["muted"]))
+        self.log_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.log_button.setText("Log")
+        self.log_button.setCheckable(True)
+        self.log_button.setAutoRaise(True)
+        self.log_button.setToolTip("Show / hide the log")
+        self.log_button.clicked.connect(lambda on: self.log_dock.setVisible(on))
+        self.statusBar().addPermanentWidget(self.log_button)
         self.statusBar().setSizeGripEnabled(False)
 
         self._build_menus()
@@ -178,6 +195,8 @@ class MainWindow(QMainWindow):
         self.jobs.log.connect(self.log.append_line)
         self.jobs.progress.connect(self._job_progress)
         self.jobs.done.connect(self._job_done)
+        self.log_dock.visibilityChanged.connect(self.log_button.setChecked)
+        self.log.counts_changed.connect(self._log_counts)
         self._update_actions()
         self.center.setCurrentWidget(self.welcome)
         self._default_state = self.saveState()
@@ -324,8 +343,24 @@ class MainWindow(QMainWindow):
             dock.setFloating(False)
         self.restoreState(self._default_state)
         for dock in self.docks:
-            dock.show()
+            dock.setVisible(dock is not self.log_dock)
         self.toolbar.show()
+
+    def show_log(self) -> None:
+        self.log_dock.show()
+        self.log_dock.raise_()
+
+    def _log_counts(self, warnings: int, errors: int) -> None:
+        parts = ["Log"] + ([f"⚠ {warnings}"] if warnings else []) + \
+            ([f"✗ {errors}"] if errors else [])
+        self.log_button.setText("   ".join(parts))
+        self.log_button.setToolTip(f"Show / hide the log ({warnings} warning(s), "
+                                   f"{errors} error(s))")
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().resizeEvent(event)
+        if self.toast.isVisible():
+            self.toast.place()
 
     def _update_actions(self) -> None:
         has = self.project is not None
@@ -352,7 +387,9 @@ class MainWindow(QMainWindow):
         project = self.project
         if project is None:
             self.counts_label.setText("No project")
+            self.log.set_assets(frozenset())
             return
+        self.log.set_assets(frozenset(project.assets))
         assets, builds = len(project.assets), len(project.builds)
         self.counts_label.setText(f"{project.name}  ·  {assets} asset{'s' * (assets != 1)}"
                                   f"  ·  {builds} build{'s' * (builds != 1)}")
@@ -1109,6 +1146,7 @@ class MainWindow(QMainWindow):
 
     # -- jobs --------------------------------------------------------------
     def _job_started(self, title: str) -> None:
+        self._job_mark = (time.monotonic(), self.log.warnings, self.log.errors)
         self.log.append_line(f"── {title}")
         self.progress.setRange(0, 0)
         self.progress.setVisible(True)
@@ -1125,11 +1163,15 @@ class MainWindow(QMainWindow):
     def _job_done(self, title: str, ok: bool, payload: object) -> None:
         self.progress.setVisible(False)
         self.cancel_button.setVisible(False)
+        started, warnings, errors = self._job_mark
+        seconds = time.monotonic() - started if started else 0.0
         if ok:
             self.statusBar().showMessage(f"{title}: done", 5000)
         else:
             self.log.append_line(f"{title} failed: {payload}")
             self.statusBar().showMessage(f"{title}: {payload}", 8000)
+        self._report_job(title, ok, str(payload) if not ok else "", seconds,
+                         self.log.warnings - warnings, self.log.errors - errors)
         if self.project is not None:
             self._info_cache.clear()
             self._scene_cache.clear()
@@ -1151,6 +1193,23 @@ class MainWindow(QMainWindow):
             self._pending_build = ""
             self._pending_tab = ""
         self._update_actions()
+
+    def _report_job(self, title: str, ok: bool, why: str, seconds: float,
+                    warnings: int, errors: int) -> None:
+        """Toast what just finished; a failure (or error lines) opens the log."""
+        took = f"in {seconds:.1f} s" if seconds >= 0.05 else ""
+        if not ok:
+            self.toast.show_message("error", f"{title} failed", why[:240])
+            self.show_log()
+        elif errors:
+            self.toast.show_message("error", f"{title}: {errors} error(s)",
+                                    f"finished {took}; see the log for what failed")
+            self.show_log()
+        elif warnings:
+            self.toast.show_message("warning", f"{title}: done with {warnings} warning(s)",
+                                    took)
+        else:
+            self.toast.show_message("success", f"{title}: done", took)
 
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         if self.jobs.busy:

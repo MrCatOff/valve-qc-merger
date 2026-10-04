@@ -186,7 +186,14 @@ valve-qc-studio [project-folder]   # or: python -m valve_qc_merger.studio
   fps, frames, loop, events; attachments), Bones (hierarchy with vertex
   counts), QC. With nothing selected it says what to do instead of a form
   of dashes.
-- **Log** (bottom) + status-bar progress and **Cancel**. Every import runs
+- **Log** (bottom; hidden until asked for — the status-bar **Log** button,
+  which also counts warnings ⚠ and errors ✗ — or until a job fails): every
+  line coloured by level (error, warning, success, job header, info), filter
+  All / Warnings / Errors plus text, copy what is shown, clear. Asset names
+  are links that select the asset. A finished job shows a **toast** in the
+  bottom-right corner — done (with the time), done with warnings, or failed
+  (stays until closed; "Show log"); failures open the log. Status-bar
+  progress and **Cancel** while a job runs. Every import runs
   as a background job (`studio.jobs.JobRunner`, one at a time; actions that
   change the project are disabled meanwhile); cancelling stops the service
   at its next model.

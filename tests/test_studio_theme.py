@@ -213,3 +213,51 @@ def test_inspector_header_tiles_and_tabs(window, tmp_path: Path) -> None:
     inspector.notes.setText("tune the grip")
     inspector.notes.editingFinished.emit()
     assert project.assets["v_anaconda_hands"].notes == "tune the grip"
+
+
+# -- log and feedback (phase 5) ----------------------------------------------
+def test_log_levels_filters_and_asset_links(app) -> None:
+    from PySide6.QtCore import QUrl
+
+    from valve_qc_merger.studio.log_panel import LogPanel, classify
+    assert classify("── Run view") == "header"
+    assert classify("  warn: texture downscaled") == "warning"
+    assert classify("error: model 'v_x' rejected") == "error"
+    assert classify("retarget: 2 converted, 0 failed") == "info"  # "0 failed" is fine
+    assert classify("  verify budgets  PASS") == "success"
+    log = LogPanel()
+    counts: list[tuple[int, int]] = []
+    log.counts_changed.connect(lambda w, e: counts.append((w, e)))
+    log.set_assets({"v_elite", "v_elite_hands"})
+    for line in ("── Run", "v_elite_hands ok", "warn: big texture", "error: v_elite failed"):
+        log.append_line(line)
+    assert (log.warnings, log.errors) == (1, 1) and counts[-1] == (1, 1)
+    assert 'href="asset:v_elite_hands"' in log.view.toHtml()  # longest name wins
+    log.filter_buttons["error"].setChecked(True)
+    assert log.shown_text() == "error: v_elite failed"
+    log.filter_buttons["all"].setChecked(True)
+    log.search.setText("texture")
+    assert log.shown_text() == "warn: big texture"
+    clicked: list[str] = []
+    log.asset_clicked.connect(clicked.append)
+    log._link(QUrl("asset:v_elite"))
+    assert clicked == ["v_elite"]
+    assert log.toPlainText().splitlines()[0] == "── Run"  # filters never drop lines
+    log.clear()
+    assert log.toPlainText() == "" and counts[-1] == (0, 0)
+
+
+def test_log_hidden_until_a_job_fails(window) -> None:
+    window.show()
+    assert not window.log_dock.isVisible() and not window.log_button.isChecked()
+    window._report_job("Run view", True, "", 2.0, 0, 0)
+    assert window.toast.isVisible() and window.toast.property("level") == "success"
+    assert not window.log_dock.isVisible()
+    window._report_job("Run view", False, "merge failed: boom", 1.0, 0, 1)
+    assert window.toast.property("level") == "error"
+    assert "boom" in window.toast.detail.text()
+    assert window.log_dock.isVisible() and window.log_button.isChecked()
+    window.log.append_line("warn: something")
+    assert window.log_button.text().startswith("Log") and "⚠ 1" in window.log_button.text()
+    window.reset_layout()
+    assert not window.log_dock.isVisible()
