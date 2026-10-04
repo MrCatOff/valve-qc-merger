@@ -159,9 +159,12 @@ def _strip(layout: QHBoxLayout) -> QScrollArea:
     scroll.setFrameShape(QScrollArea.Shape.NoFrame)
     scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-    # room for the scroll bar a narrow window shows, so nothing gets clipped
-    scroll.setFixedHeight(holder.sizeHint().height()
-                          + scroll.horizontalScrollBar().sizeHint().height() + 2)
+    # tall enough for a row of combo boxes even when filled later (the
+    # bodygroup strip starts empty), plus room for the scroll bar a narrow
+    # window shows, so nothing gets clipped or scrolls vertically
+    row = max(holder.sizeHint().height(), QComboBox().sizeHint().height(),
+              QPushButton().sizeHint().height())
+    scroll.setFixedHeight(row + scroll.horizontalScrollBar().sizeHint().height() + 4)
     return scroll
 
 
