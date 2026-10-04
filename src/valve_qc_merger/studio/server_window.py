@@ -111,6 +111,9 @@ class ServerWindow(QDialog):
         from valve_qc_merger.studio.config_panel import ConfigPanel
         self.config = ConfigPanel(project)
         self.tabs.addTab(self.config, icon("sliders-horizontal"), "Config")
+        from valve_qc_merger.studio.entities_panel import EntitiesPanel
+        self.entities = EntitiesPanel(project)
+        self.tabs.addTab(self.entities, icon("map"), "Entities")
         self.resize(820, 720)
         self.refresh()
 

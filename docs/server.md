@@ -238,3 +238,27 @@ is not scaled up unless you pick that. Stock HLDS takes only 64 × 64 logos
 palette colour the colour), sprays — with a filter and *Export PNG…*.
 `valve_qc_merger.sprite.wad` reads and writes WAD3 (with the three mip
 levels) and makes sprays without Qt.
+
+## Map entities
+
+The Server window's **Entities** tab opens a map of the game folder's
+`maps/` (or any BSP): its entity classes with counts, the entities of a
+class (origin, model / name), and the keys of one — values editable, keys
+added or removed.
+
+- **Remove** drops the selected entities (never `worldspawn`).
+- **Replace…** puts something else in their place, keeping `origin` and
+  `angles`: a model of your own (`cycler_sprite` — drawn, not picked up;
+  e.g. `models/w_supplybox.mdl` where a ZM map had dropped-weapon spawns,
+  `armoury_entity`), a marker for a plugin (`info_target` with a
+  `targetname`, e.g. `vqm_supplybox`, where a plugin spawns its supply
+  boxes), or nothing. The status line counts the model slots a change adds.
+- **Save .ent** writes `maps/<map>.ent`: ReHLDS reads it instead of the
+  map's own entities with `sv_use_entity_file 1` — the BSP is untouched.
+  When a `.ent` exists the tab opens it, as the server would.
+- **Save BSP…** rewrites the entity lump (over the map: the original is kept
+  as `<map>.bsp.bak`). Every other lump is copied byte for byte, and the
+  engine's map CRC skips the entity lump, so players who already have the
+  original map still join.
+
+`valve_qc_merger.server.entities` does the reading and writing without Qt.
