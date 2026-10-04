@@ -235,6 +235,14 @@ offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
   Assets · Hands (merge-v: "Put every model on our hands first", which also
   locks Shared hands on) · Merge options · Deploy; a footer that never
   scrolls away: Save … Plan · Compile · Deploy · **Run** (each saves first).
+- **Dialogs** (`studio.dialog_kit`): each opens with a heading and one line
+  on what it does, groups fields under small-caps sections, and folds what
+  is rarely needed. Retarget picks its mode from cards (icon, title, what it
+  does) — a mode that does not apply to the selected assets is not shown —
+  with Grip offsets, a folding Fingers section (open when a curl is set) and
+  Options; New project shows the folder it will create; Project settings
+  explains what each tool is for. Numbers always use a decimal point
+  (`0.50`), whatever the system locale.
 - **New build**: the merge by what it takes ("View models (v_) · 3 assets")
   with a one-line description, assets from a category, name, Create.
 - `python tools/ui_screenshots.py OUT_DIR` grabs the main screens (welcome,

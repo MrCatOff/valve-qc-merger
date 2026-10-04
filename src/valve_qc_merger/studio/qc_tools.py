@@ -34,10 +34,12 @@ from valve_qc_merger.project.qc_edit import (
     SequenceEvent,
 )
 
-
 # --------------------------------------------------------------------------- #
 # Sequence dialog
 # --------------------------------------------------------------------------- #
+from valve_qc_merger.studio.dialog_kit import NUMBER_LOCALE
+
+
 class SequenceDialog(QDialog):
     """Name, fps, loop, activity and the event list of one sequence."""
 
@@ -54,6 +56,7 @@ class SequenceDialog(QDialog):
         self.fps_box = QCheckBox("fps")
         self.fps_box.setChecked(block.fps is not None)
         self.fps_spin = QDoubleSpinBox()
+        self.fps_spin.setLocale(NUMBER_LOCALE)
         self.fps_spin.setRange(0.1, 1000.0)
         self.fps_spin.setDecimals(2)
         self.fps_spin.setValue(block.fps or 30.0)

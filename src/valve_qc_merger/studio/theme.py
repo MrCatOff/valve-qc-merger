@@ -171,6 +171,20 @@ QFrame[role="toast"][level="warning"] {{ border-left-color: {t['warning']}; }}
 QFrame[role="toast"][level="error"] {{ border-left-color: {t['danger']}; }}
 QFrame[role="toast"] QLabel {{ background: transparent; }}
 QTextBrowser {{ background: {t['panel']}; border: none; padding: 4px 8px; }}
+QPushButton[role="card"] {{
+    background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 10px;
+    padding: 0; text-align: left; min-height: 0;
+}}
+QPushButton[role="card"]:hover {{ border-color: {t['border_strong']}; background: {t['raised']}; }}
+QPushButton[role="card"]:checked {{
+    border: 1px solid {t['accent']}; background: {t['accent_soft']};
+}}
+QPushButton[role="card"] QLabel {{ background: transparent; }}
+QToolButton[role="section"] {{
+    font-size: 11px; font-weight: 700; color: {t['muted']}; letter-spacing: 0.6px;
+    padding: 2px 0; border: none; background: transparent;
+}}
+QToolButton[role="section"]:hover {{ color: {t['text']}; }}
 QWidget[role="page"] {{ background: {t['bg']}; }}
 
 /* -- buttons ------------------------------------------------------------ */
@@ -423,7 +437,12 @@ QDockWidget > QWidget {{ background: {t['panel']}; }}
 
 
 def apply(app: QApplication) -> None:
-    """Fusion + the dark palette + the style sheet + the UI font size."""
+    """Fusion + the dark palette + the style sheet + the UI font size; numbers
+    with a decimal point whatever the system locale (QC/CLI use points)."""
+    from PySide6.QtCore import QLocale
+    number_locale = QLocale(QLocale.Language.C)
+    number_locale.setNumberOptions(QLocale.NumberOption.OmitGroupSeparator)
+    QLocale.setDefault(number_locale)
     app.setStyle("Fusion")
     app.setPalette(_palette())
     font = QFont(app.font())

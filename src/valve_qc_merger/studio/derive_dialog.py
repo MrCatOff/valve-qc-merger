@@ -19,15 +19,12 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QFormLayout,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QSpinBox,
     QStackedWidget,
@@ -41,10 +38,20 @@ from valve_qc_merger.resources import resource_path
 from valve_qc_merger.services.canonicalize import CanonicalizeOptions
 from valve_qc_merger.services.retarget import RetargetOptions
 from valve_qc_merger.services.zhands_grenade import ZhandsGrenadeOptions
+from valve_qc_merger.studio import dialog_kit as kit
 from valve_qc_merger.studio.options_form import OptionsForm
 
 # fields of RetargetOptions the dialog shows as spin boxes, or never
 _OFFSET_FIELDS = frozenset({"weapon_offset", "grip_offset", "curl"})
+# mode -> (card icon, what it does)
+MODE_CARDS = {
+    "hands": ("hand", "Our male/female hands replace the model's own; every animation is "
+                      "retargeted onto them. Ready for a shared-hands merge."),
+    "canon": ("bone", "The model keeps its own hands; its bones are renamed and "
+                      "reparented onto the canonical rig (Bip01 root, no Nubs)."),
+    "grenade": ("bomb", "Zombie hands without a grenade: these hands are put on the "
+                        "bundled frog bomb with its idle, pull-pin, throw and draw."),
+}
 FINGER_TITLES = {"BigFinger": "Thumb", "ForeFinger": "Index", "MiddleFinger": "Middle",
                  "RingFinger": "Ring", "PinkyFinger": "Pinky"}
 _RETARGET_FIXED = frozenset({"category", "compile", "studiomdl", "modelname"})
@@ -66,6 +73,7 @@ class Vec3Edit(QWidget):
             spin.setDecimals(2)
             spin.setSingleStep(step)
             spin.setPrefix(f"{axis} ")
+            kit.number_spin(spin)
             spin.setValue(float(value))
             spin.setToolTip(tooltip)
             layout.addWidget(spin)
@@ -142,40 +150,35 @@ class DeriveDialog(QDialog):
                    if spec.kinds is None or (kinds is not None and kinds <= spec.kinds)}
         if name is None and kinds and kinds <= DERIVE_MODES["grenade"].kinds:
             mode = "grenade"  # zombie hands: making the grenade is the point
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(
-            f"Source: <b>{sources[0]}</b>" if len(sources) == 1
-            else f"Sources: <b>{len(sources)} assets</b> ({', '.join(sources[:4])}"
-                 f"{'…' if len(sources) > 4 else ''})"))
+        layout = kit.dialog_layout(self)
+        what = (f"<b>{sources[0]}</b>" if len(sources) == 1
+                else f"<b>{len(sources)} assets</b> ({', '.join(sources[:4])}"
+                     f"{'…' if len(sources) > 4 else ''})")
+        title = "Retarget" if name is None else f"Retarget settings — {name}"
+        layout.addWidget(kit.header(title, f"Make a new asset from {what}; the source "
+                                    "stays as it is."))
 
-        modes = QGroupBox("Mode")
-        modes_layout = QVBoxLayout(modes)
+        # modes as cards; one that does not apply to the sources is not shown
+        layout.addWidget(kit.section("Mode"))
+        cards = QHBoxLayout()
+        cards.setSpacing(8)
         self.mode_group = QButtonGroup(self)
+        self.mode_group.setExclusive(True)
         self._mode_keys = list(DERIVE_MODES)
-        hints = {
-            "hands": "replace the model's hands with ours (male/female) and retarget every "
-                     "animation onto them — ready for merge-v --shared-hands",
-            "canon": "keep the model's own hands; rename/reparent the bones onto the "
-                     "canonical rig (Bip01 root, ValveBiped hand names, no Nubs)",
-            "grenade": "zombie hands without a grenade: put these hands on the bundled "
-                       "donor grenade (frog bomb + idle/pullpin/throw/deploy)",
-        }
         for index, key in enumerate(self._mode_keys):
-            radio = QRadioButton(DERIVE_MODES[key].title)
-            radio.setToolTip(hints.get(key, ""))
-            self.mode_group.addButton(radio, index)
-            modes_layout.addWidget(radio)
-            hint = QLabel(hints.get(key, ""))
-            hint.setWordWrap(True)
-            hint.setProperty("role", "hint")
-            hint.setContentsMargins(22, 0, 0, 0)
-            modes_layout.addWidget(hint)
-            radio.setEnabled(key == mode if name is not None else key in allowed)
-        layout.addWidget(modes)
+            icon_name, text = MODE_CARDS[key]
+            card = kit.OptionCard(icon_name, DERIVE_MODES[key].title, text)
+            self.mode_group.addButton(card, index)
+            usable = key == mode if name is not None else key in allowed
+            card.setEnabled(usable)
+            card.setVisible(usable)
+            cards.addWidget(card, 1)
+        layout.addLayout(cards)
 
-        name_row = QFormLayout()
+        name_row = kit.form()
         self.name_edit = QLineEdit()
         self.name_edit.setEnabled(len(sources) == 1 and name is None)
+        self.name_edit.setToolTip("name of the asset this makes (re-running keeps it)")
         name_row.addRow("New asset", self.name_edit)
         layout.addLayout(name_row)
 
@@ -195,8 +198,11 @@ class DeriveDialog(QDialog):
                 if "snug_max_deg" in tuned and "snug_max_deg" not in options:
                     options["snug_max_deg"] = tuned["snug_max_deg"]
                 prefilled = True
-        offsets = QGroupBox("Grip offsets")
-        offsets_form = QFormLayout(offsets)
+        hands_layout.setSpacing(8)
+        hands_layout.addWidget(kit.section("Grip offsets"))
+        hands_layout.addWidget(kit.hint("Nudge, Apply, compare with B in the viewport; the "
+                                        "fingers re-fit to the weapon after every offset."))
+        offsets_form = kit.form()
         self.weapon_offset = Vec3Edit(
             options.get("weapon_offset") or None,
             tooltip="move the weapon relative to both hands (model space, at the grip "
@@ -224,8 +230,13 @@ class DeriveDialog(QDialog):
         tuning_layout.addWidget(self.tuning_label, 1)
         tuning_layout.addWidget(self.save_tuning_button)
         offsets_form.addRow(tuning_row)
-        hands_layout.addWidget(offsets)
-        hands_layout.addWidget(self._fingers_box(parse_curls(options.get("curl", []))))
+        hands_layout.addLayout(offsets_form)
+        curls = parse_curls(options.get("curl", []))
+        self.fingers_section = kit.Collapsible(
+            "Fingers — extra curl per joint", self._fingers_box(curls),
+            open_=any(v for side in curls.values() for v in side.values()))
+        hands_layout.addWidget(self.fingers_section)
+        hands_layout.addWidget(kit.section("Options"))
         self.retarget_form = OptionsForm(
             RetargetOptions, "retarget",
             {k: v for k, v in options.items() if k not in _OFFSET_FIELDS},
@@ -266,6 +277,7 @@ class DeriveDialog(QDialog):
                                    | QDialogButtonBox.StandardButton.Cancel)
         self.run_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.run_button.setText("Run")
+        self.run_button.setDefault(True)  # Enter runs; the mode cards never take it
         self.run_button.setToolTip("run and close")
         self.apply_button = buttons.button(QDialogButtonBox.StandardButton.Apply)
         self.apply_button.setToolTip("run and keep this dialog open: nudge the offsets, "
@@ -324,9 +336,10 @@ class DeriveDialog(QDialog):
             values["curl"] = curls
         return values
 
-    def _fingers_box(self, curls: dict[str, dict[str, float]]) -> QGroupBox:
-        box = QGroupBox("Fingers — extra curl per joint, degrees (+ closes, − opens)")
+    def _fingers_box(self, curls: dict[str, dict[str, float]]) -> QWidget:
+        box = QWidget()
         outer = QVBoxLayout(box)
+        outer.setContentsMargins(0, 0, 0, 0)
         grid = QGridLayout()
         outer.addLayout(grid)
         for column, title in enumerate(FINGER_TITLES.values(), start=1):
@@ -344,12 +357,10 @@ class DeriveDialog(QDialog):
                                 "joint after the automatic fit (it re-snugs too)")
                 grid.addWidget(spin, row, column)
                 self.curl_spins[(side, finger)] = spin
-        hint = QLabel("A loose grip (our hands are bigger than most originals): close the "
-                      "fingers a few degrees, or raise 'Max finger fit' below so the automatic "
-                      "fit may curl further.")
-        hint.setWordWrap(True)
-        hint.setProperty("role", "hint")
-        outer.addWidget(hint)
+        outer.addWidget(kit.hint(
+            "Degrees added to every joint after the automatic fit: + closes, − opens. A "
+            "loose grip (our hands are bigger than most originals): close a few degrees, "
+            "or raise 'Max finger fit' below so the automatic fit may curl further."))
         return box
 
     def curls(self) -> dict[str, dict[str, float]]:

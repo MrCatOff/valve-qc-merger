@@ -261,3 +261,37 @@ def test_log_hidden_until_a_job_fails(window) -> None:
     assert window.log_button.text().startswith("Log") and "⚠ 1" in window.log_button.text()
     window.reset_layout()
     assert not window.log_dock.isVisible()
+
+
+# -- dialogs (phase 6) -------------------------------------------------------
+def test_retarget_dialog_cards_sections_and_decimal_point(app) -> None:
+    from valve_qc_merger.project import DERIVE_MODES
+    from valve_qc_merger.studio.derive_dialog import DeriveDialog, Vec3Edit
+    weapon = DeriveDialog(["v_x"], kinds={"v"})
+    grenade = weapon.mode_group.button(list(DERIVE_MODES).index("grenade"))
+    assert grenade.isHidden() and not grenade.isEnabled()  # not shown for a weapon
+    hands = weapon.mode_group.button(0)
+    assert hands.isChecked() and not hands.autoDefault()  # Enter still means Run
+    assert weapon.run_button.isDefault()
+    assert not weapon.fingers_section.is_open()  # no curls: folded
+    curled = DeriveDialog(["v_x"], options={"curl": ["left:ForeFinger:6"]}, kinds={"v"})
+    assert curled.fingers_section.is_open()
+    edit = Vec3Edit([0.5, 0.0, -1.25])
+    assert [s.text() for s in edit.spins] == ["x 0.50", "y 0.00", "z -1.25"]
+
+
+def test_new_project_and_settings_dialogs(app, tmp_path: Path) -> None:
+    from PySide6.QtWidgets import QDialogButtonBox
+
+    from valve_qc_merger.project import Settings
+    from valve_qc_merger.studio.dialogs import NewProjectDialog, SettingsDialog
+    dialog = NewProjectDialog(None, tmp_path)
+    dialog.name_edit.setText("Pistols")
+    assert dialog.where.text() == f"Creates {tmp_path / 'Pistols'}"
+    (tmp_path / "Pistols").mkdir()
+    dialog.name_edit.setText("Pistols ")
+    assert dialog.where.text().endswith("(already exists)")
+    settings = SettingsDialog(Settings(game_dir="/games/cstrike"))
+    box = settings.findChild(QDialogButtonBox)
+    assert box.button(QDialogButtonBox.StandardButton.Save) is not None
+    assert settings.game_edit.text() == "/games/cstrike"
