@@ -176,11 +176,16 @@ valve-qc-studio [project-folder]   # or: python -m valve_qc_merger.studio
   folder.
 - **Explorer** (left): assets grouped by kind, then builds. Context menu:
   change kind, show in folder, remove.
-- **Inspector** (right): Overview (kind, folders, counts, warnings, notes),
-  Bodygroups (entries in order incl. `blank`, triangles/vertices/textures),
-  Textures (size, render mode, users, preview — `masked` shows index 255 as
-  transparent), Sequences (fps, frames, loop, events), Bones (hierarchy with
-  vertex counts), Attachments.
+- **Inspector** (right): a header card — name, kind badge, status line and
+  the actions Retarget… / Re-run (derived assets) / Folder — over five tabs:
+  Overview (kind, category, status, folder relative to the project with
+  copy-path and show-folder buttons, source, contents as tiles, warnings,
+  multi-line notes saved when focus leaves), Geometry (bodygroups in order
+  incl. `blank`; textures with size, render mode, users and a crisp preview —
+  `masked` shows index 255 as transparent; skins), Animation (sequences with
+  fps, frames, loop, events; attachments), Bones (hierarchy with vertex
+  counts), QC. With nothing selected it says what to do instead of a form
+  of dashes.
 - **Log** (bottom) + status-bar progress and **Cancel**. Every import runs
   as a background job (`studio.jobs.JobRunner`, one at a time; actions that
   change the project are disabled meanwhile); cancelling stops the service

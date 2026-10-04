@@ -158,6 +158,9 @@ class MainWindow(QMainWindow):
         self.explorer.rederive_requested.connect(self.rederive_asset)
         self.inspector.kind_changed.connect(self.set_kind)
         self.inspector.notes_changed.connect(self._set_notes)
+        self.inspector.retarget_requested.connect(lambda name: self.derive_assets([name]))
+        self.inspector.rederive_requested.connect(lambda name: self.rederive_asset(name, False))
+        self.inspector.reveal_requested.connect(self._reveal)
         bones = self.inspector.bones_page
         bones.bone_selected.connect(self.viewport.highlight_bone)
         bones.rename_requested.connect(self.rename_bone)

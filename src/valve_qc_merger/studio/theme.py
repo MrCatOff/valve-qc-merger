@@ -157,6 +157,12 @@ QLabel[role="badge"] {{
     background: {t['warning']}; color: #1b1300; border-radius: 4px;
     padding: 3px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
 }}
+QFrame[role="tile"] {{
+    background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 8px;
+}}
+QFrame[role="tile"] QLabel {{ background: transparent; border: none; }}
+QLabel[role="tile-value"] {{ font-size: 16px; font-weight: 600; color: {t['text']}; }}
+QWidget[role="header"] {{ background: {t['bg']}; border-bottom: 1px solid {t['border']}; }}
 QWidget[role="page"] {{ background: {t['bg']}; }}
 
 /* -- buttons ------------------------------------------------------------ */

@@ -283,6 +283,7 @@ class SkinsPage(QWidget):
         if skins:
             self.table.selectRow(0)
         self.table.blockSignals(False)
+        self.table.setVisible(len(skins) > 1)  # one skin: the note says it all
         self.note.setText(
             "No $texturegroup: one skin." if len(skins) < 2 else
             "merge-v turns each extra skin into its own weapon entry <model>_skin<k> "

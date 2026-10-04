@@ -18,17 +18,26 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QFormLayout,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMenu,
     QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -37,6 +46,7 @@ from PySide6.QtWidgets import (
 
 from valve_qc_merger.project import ASSET_KINDS, Project
 from valve_qc_merger.studio import theme
+from valve_qc_merger.studio.icons import icon, pixmap
 from valve_qc_merger.studio.model_info import ModelInfo, texture_rgba
 
 KIND_TITLES = {
@@ -538,106 +548,314 @@ class PixmapLabel(QLabel):
         super().resizeEvent(event)
         self._rescale()
 
+    def showEvent(self, event) -> None:  # noqa: ANN001, N802 - set while on a hidden tab
+        super().showEvent(event)
+        self._rescale()
+
     def _rescale(self) -> None:
         if self._pixmap is None or self._pixmap.isNull():
             super().clear()
             return
-        # nearest-neighbour keeps the 8-bit texels crisp when enlarged
-        self.setPixmap(self._pixmap.scaled(
-            self.width(), self.height(), Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation))
+        # nearest-neighbour keeps the 8-bit texels crisp when enlarged; at the
+        # screen's pixel ratio so a HiDPI display is not blurred
+        ratio = self.devicePixelRatioF() or 1.0
+        scaled = self._pixmap.scaled(
+            int(self.width() * ratio), int(self.height() * ratio),
+            Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+        scaled.setDevicePixelRatio(ratio)
+        self.setPixmap(scaled)
 
 
-class Inspector(QTabWidget):
-    """Tabs describing the selected asset."""
+class NotesEdit(QPlainTextEdit):
+    """A few lines of notes; ``editingFinished`` when focus leaves."""
+
+    editingFinished = Signal()  # noqa: N815 - Qt naming
+
+    def focusOutEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().focusOutEvent(event)
+        self.editingFinished.emit()
+
+    def text(self) -> str:
+        return self.toPlainText()
+
+    def setText(self, text: str) -> None:  # noqa: N802 - mirrors QLineEdit
+        self.setPlainText(text)
+
+
+class StatTile(QFrame):
+    """A number with a caption (Overview's contents)."""
+
+    def __init__(self, caption: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        theme.set_role(self, "tile")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(0)
+        self.value = QLabel("—")
+        theme.set_role(self.value, "tile-value")
+        self.caption = QLabel(caption)
+        theme.set_role(self.caption, "faint")
+        layout.addWidget(self.value)
+        layout.addWidget(self.caption)
+
+
+def _section(title: str) -> QLabel:
+    label = QLabel(title.upper())
+    theme.set_role(label, "section")
+    return label
+
+
+def _stack(*parts: tuple[str, QWidget], stretch: tuple[int, ...] = ()) -> QSplitter:
+    """Titled panes one above the other (a Geometry / Animation tab)."""
+    splitter = QSplitter(Qt.Orientation.Vertical)
+    splitter.setChildrenCollapsible(False)
+    for index, (title, widget) in enumerate(parts):
+        pane = QWidget()
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(8, 10, 8, 4)
+        layout.setSpacing(6)
+        layout.addWidget(_section(title))
+        layout.addWidget(widget, 1)
+        splitter.addWidget(pane)
+        splitter.setStretchFactor(index, stretch[index] if index < len(stretch) else 1)
+    return splitter
+
+
+STAT_CAPTIONS = ("submodels", "triangles", "textures", "sequences", "bones", "attachments")
+
+
+class Inspector(QWidget):
+    """The selected asset: a header card (name, kind, status, actions) over
+    tabs — Overview, Geometry (bodygroups, textures, skins), Animation
+    (sequences, attachments), Bones, QC."""
 
     kind_changed = Signal(str, str)  # asset, kind
     notes_changed = Signal(str, str)
     sequence_edit_requested = Signal(int)  # sequence position in the QC
     render_mode_edit_requested = Signal(str)  # texture name
+    retarget_requested = Signal(str)
+    rederive_requested = Signal(str)
+    reveal_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._asset = ""
+        self._path = ""
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.pages = QStackedWidget()
+        outer.addWidget(self.pages)
+        self.empty_page = self._empty_page()
+        self.pages.addWidget(self.empty_page)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        content_layout.addWidget(self._header())
+        self.tabs = QTabWidget()
+        content_layout.addWidget(self.tabs, 1)
+        self.pages.addWidget(content)
+
+        # -- overview
         overview = QWidget()
-        form = QFormLayout(overview)
+        over = QVBoxLayout(overview)
+        over.setContentsMargins(12, 12, 12, 12)
+        over.setSpacing(10)
+        form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self.name_label = QLabel("—")
-        self.name_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(8)
         self.kind_box = QComboBox()
         for kind in ASSET_KINDS:
             self.kind_box.addItem(KIND_TITLES[kind], kind)
         self.kind_box.activated.connect(self._kind_activated)
-        self.path_label = QLabel("—")
-        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.path_label.setWordWrap(True)
         self.category_label = QLabel("—")
         self.status_label = QLabel("—")
-        self.status_label.setWordWrap(True)
         self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.path_label = QLabel("—")
+        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        copy = QToolButton()
+        copy.setIcon(icon("copy"))
+        copy.setToolTip("Copy the full folder path")
+        copy.setAutoRaise(True)
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self._path))
+        reveal = QToolButton()
+        reveal.setIcon(icon("folder-open"))
+        reveal.setToolTip("Show the folder")
+        reveal.setAutoRaise(True)
+        reveal.clicked.connect(lambda: self._asset and self.reveal_requested.emit(self._asset))
+        path_row = QHBoxLayout()
+        path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.setSpacing(2)
+        path_row.addWidget(self.path_label, 1)
+        path_row.addWidget(copy)
+        path_row.addWidget(reveal)
+        path_holder = QWidget()
+        path_holder.setLayout(path_row)
         self.source_label = QLabel("—")
         self.source_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.source_label.setWordWrap(True)
-        self.stats_label = QLabel("—")
-        self.stats_label.setWordWrap(True)
-        self.notes = QLineEdit()
-        self.notes.setPlaceholderText("notes")
-        self.notes.editingFinished.connect(
-            lambda: self._asset and self.notes_changed.emit(self._asset, self.notes.text()))
-        self.warnings_label = QLabel("")
-        self.warnings_label.setWordWrap(True)
-        self.warnings_label.setProperty("role", "warning")
         # long names/paths (Windows paths cannot wrap at '\\') must never set
         # the dock's minimum width: the full text is in the tooltip
-        for label in (self.name_label, self.category_label, self.status_label,
-                      self.path_label, self.source_label, self.stats_label,
-                      self.warnings_label):
+        for label in (self.category_label, self.status_label, self.path_label,
+                      self.source_label):
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             label.setWordWrap(True)
-        form.addRow("Name", self.name_label)
         form.addRow("Kind", self.kind_box)
         form.addRow("Category", self.category_label)
         form.addRow("Status", self.status_label)
-        form.addRow("Folder", self.path_label)
+        form.addRow("Folder", path_holder)
         form.addRow("Source", self.source_label)
-        form.addRow("Contents", self.stats_label)
-        form.addRow("Notes", self.notes)
-        form.addRow("", self.warnings_label)
-        self.addTab(overview, "Overview")
+        over.addLayout(form)
+        over.addWidget(_section("Contents"))
+        tiles = QGridLayout()
+        tiles.setSpacing(6)
+        self.stat_tiles: dict[str, StatTile] = {}
+        for index, caption in enumerate(STAT_CAPTIONS):
+            tile = StatTile(caption)
+            self.stat_tiles[caption] = tile
+            tiles.addWidget(tile, index // 3, index % 3)
+        over.addLayout(tiles)
+        self.warnings_label = QLabel("")
+        self.warnings_label.setWordWrap(True)
+        self.warnings_label.setProperty("role", "warning")
+        self.warnings_label.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                          QSizePolicy.Policy.Preferred)
+        over.addWidget(self.warnings_label)
+        over.addWidget(_section("Notes"))
+        self.notes = NotesEdit()
+        self.notes.setPlaceholderText("Anything worth remembering about this model…")
+        self.notes.setFixedHeight(76)
+        self.notes.editingFinished.connect(
+            lambda: self._asset and self.notes_changed.emit(self._asset, self.notes.text()))
+        over.addWidget(self.notes)
+        over.addStretch(1)
+        overview_scroll = QScrollArea()
+        overview_scroll.setWidgetResizable(True)
+        overview_scroll.setWidget(overview)
+        overview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.tabs.addTab(overview_scroll, "Overview")
 
+        # -- geometry: bodygroups, textures (+ preview), skins
         self.submodels = _table(["Bodygroup", "Submodel", "Triangles", "Vertices", "Textures"])
-        self.addTab(self.submodels, "Bodygroups")
         textures = QWidget()
-        tex_layout = QVBoxLayout(textures)
+        tex_layout = QHBoxLayout(textures)
+        tex_layout.setContentsMargins(0, 0, 0, 0)
         self.textures = _table(["Texture", "Size", "Render mode", "Used by"])
         self.textures.currentCellChanged.connect(self._show_texture)
+        self.textures.setToolTip("double-click the render mode to change it")
+        self.textures.cellDoubleClicked.connect(self._texture_double_clicked)
         self.texture_preview = PixmapLabel()
-        self.texture_preview.setMinimumHeight(160)
-        tex_layout.addWidget(self.textures, 2)
-        tex_layout.addWidget(self.texture_preview, 1)
-        self.addTab(textures, "Textures")
+        self.texture_preview.setFixedWidth(150)
+        self.texture_preview.setMinimumHeight(120)
+        self.texture_preview.setToolTip("the selected texture")
+        tex_layout.addWidget(self.textures, 1)
+        tex_layout.addWidget(self.texture_preview, 0, Qt.AlignmentFlag.AlignTop)
+        from valve_qc_merger.studio.qc_tools import QcPage, SkinsPage
+        self.skins_page = SkinsPage()
+        self.geometry_tab = _stack(("Bodygroups", self.submodels), ("Textures", textures),
+                                   ("Skins", self.skins_page), stretch=(2, 3, 1))
+        self.tabs.addTab(self.geometry_tab, "Geometry")
+
+        # -- animation: sequences, attachments
         self.sequences = _table(["#", "Sequence", "FPS", "Frames", "Loop", "Events"])
         self.sequences.setToolTip("double-click: edit name, fps, loop, activity and events")
         self.sequences.cellDoubleClicked.connect(
             lambda row, _c: self._asset and self.sequence_edit_requested.emit(row))
-        self.addTab(self.sequences, "Sequences")
-        self.textures.setToolTip("double-click the render mode to change it")
-        self.textures.cellDoubleClicked.connect(self._texture_double_clicked)
         from valve_qc_merger.studio.bone_tools import AttachmentsPage, BonesPage
-        self.bones_page = BonesPage()
-        self.bones = self.bones_page.tree
-        self.addTab(self.bones_page, "Bones")
         self.attachments_page = AttachmentsPage()
         self.attachments = self.attachments_page.table
-        self.addTab(self.attachments_page, "Attachments")
-        from valve_qc_merger.studio.qc_tools import QcPage, SkinsPage
-        self.skins_page = SkinsPage()
-        self.addTab(self.skins_page, "Skins")
+        self.animation_tab = _stack(("Sequences", self.sequences),
+                                    ("Attachments", self.attachments_page), stretch=(3, 2))
+        self.tabs.addTab(self.animation_tab, "Animation")
+
+        self.bones_page = BonesPage()
+        self.bones = self.bones_page.tree
+        self.tabs.addTab(self.bones_page, "Bones")
         self.qc_page = QcPage()
-        self.addTab(self.qc_page, "QC")
+        self.tabs.addTab(self.qc_page, "QC")
+        for page in (self.bones_page, self.qc_page):  # breathing room, as the other tabs
+            if page.layout() is not None:
+                page.layout().setContentsMargins(8, 8, 8, 8)
         self._info: ModelInfo | None = None
         self.show_asset(None, None)
+
+    # tabs API, so callers can treat the inspector as its tab widget
+    def setCurrentWidget(self, widget: QWidget) -> None:  # noqa: N802 - Qt naming
+        for tab in range(self.tabs.count()):
+            page = self.tabs.widget(tab)
+            if page is widget or page.isAncestorOf(widget):
+                self.tabs.setCurrentIndex(tab)
+                return
+
+    def currentWidget(self) -> QWidget:  # noqa: N802 - Qt naming
+        return self.tabs.currentWidget()
+
+    def _empty_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addStretch(1)
+        art = QLabel()
+        art.setPixmap(pixmap("mouse-pointer-click", theme.TOKENS["faint"], 36,
+                             scale=2.0, stroke=1.5))
+        art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(art)
+        text = QLabel("Select an asset in the Explorer")
+        text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        theme.set_role(text, "hint")
+        layout.addWidget(text)
+        hint = QLabel("Its bodygroups, textures, sequences, bones and QC show up here.")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        theme.set_role(hint, "faint")
+        layout.addWidget(hint)
+        layout.addStretch(2)
+        return page
+
+    def _header(self) -> QWidget:
+        header = QWidget()
+        theme.set_role(header, "header")
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QVBoxLayout(header)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self.name_label = QLabel("—")
+        theme.set_role(self.name_label, "heading")
+        self.name_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        top.addWidget(self.name_label, 1)
+        self.kind_badge = QLabel("")
+        theme.set_role(self.kind_badge, "kbd")
+        top.addWidget(self.kind_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(top)
+        self.status_line = QLabel("")
+        theme.set_role(self.status_line, "hint")
+        self.status_line.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.status_line)
+        actions = QHBoxLayout()
+        actions.setSpacing(6)
+
+        def action(text: str, name: str, tip: str, signal: Signal) -> QPushButton:
+            button = QPushButton(icon(name), text)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda: self._asset and signal.emit(self._asset))
+            actions.addWidget(button)
+            return button
+
+        self.retarget_button = action("Retarget…", "hand", "Make a new asset from this one: "
+                                      "swap hands, canonical bones or a zombie grenade (Ctrl+R)",
+                                      self.retarget_requested)
+        self.rederive_button = action("Re-run", "refresh-cw", "Re-run the retarget that made "
+                                      "this asset, from its source (Ctrl+Shift+R)",
+                                      self.rederive_requested)
+        self.reveal_button = action("Folder", "folder-search", "Show the asset's folder",
+                                    self.reveal_requested)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+        return header
 
     def show_asset(self, project: Project | None, info: ModelInfo | None,
                    name: str = "") -> None:
@@ -651,41 +869,49 @@ class Inspector(QTabWidget):
         for widget in (self.kind_box, self.notes):
             widget.setEnabled(enabled)
         if asset is None:
+            self.pages.setCurrentWidget(self.empty_page)
             self.name_label.setText("—")
+            self.kind_badge.setText("")
+            self.status_line.setText("")
             self.category_label.setText("—")
             self.status_label.setText("—")
             self.path_label.setText("—")
             self.source_label.setText("—")
-            self.stats_label.setText("Select an asset in the Explorer")
+            self._path = ""
+            self._set_tiles(None)
             self.notes.setText("")
             self.warnings_label.setText("")
             for table in (self.submodels, self.textures, self.sequences):
                 table.setRowCount(0)
             self.texture_preview.set_image(None)
             return
+        self.pages.setCurrentIndex(1)
         self.name_label.setText(asset.name)
+        self.name_label.setToolTip(asset.name)
+        self.kind_badge.setText(KIND_TITLES.get(asset.kind, asset.kind))
         self.category_label.setText(asset.category or UNCATEGORIZED)
         self.status_label.setText("—")
+        self.status_line.setText(f"{asset.category or UNCATEGORIZED}")
         self.kind_box.setCurrentIndex(ASSET_KINDS.index(asset.kind))
-        self.path_label.setText(str(project.root / asset.path))
-        self.path_label.setToolTip(self.path_label.text())
+        self._path = str(project.root / asset.path)
+        self.path_label.setText(Path(asset.path).as_posix())
+        self.path_label.setToolTip(self._path)
         derived = asset.derived
+        self.rederive_button.setVisible(bool(derived))
         if derived:
             options = ", ".join(f"{k}={v}" for k, v in derived.get("options", {}).items())
             self.source_label.setText(
                 f"{derived['mode']} from asset {derived['from']}"
                 + (f" ({options})" if options else ""))
+            self.source_label.setToolTip(self.source_label.text())
         else:
             self.source_label.setText(asset.source or "—")
             self.source_label.setToolTip(asset.source or "")
         self.notes.setText(asset.notes)
         if info is None:
-            self.stats_label.setText("loading…")
+            self._set_tiles(None)
             return
-        self.stats_label.setText(
-            f"{len(info.submodels)} submodels · {info.triangles} triangles · "
-            f"{len(info.textures)} textures · {len(info.sequences)} sequences · "
-            f"{len(info.bones)} bones · {len(info.attachments)} attachments")
+        self._set_tiles(info)
         self.warnings_label.setText("\n".join(f"⚠ {w}" for w in info.warnings[:8]))
         _fill(self.submodels, [[s.group, s.stem, s.triangles, s.vertices,
                                 ", ".join(s.materials)] for s in info.submodels])
@@ -698,6 +924,14 @@ class Inspector(QTabWidget):
         if info.textures:
             self.textures.setCurrentCell(0, 0)
 
+    def _set_tiles(self, info: ModelInfo | None) -> None:
+        values = dict.fromkeys(STAT_CAPTIONS, "—") if info is None else {
+            "submodels": len(info.submodels), "triangles": f"{info.triangles:,}",
+            "textures": len(info.textures), "sequences": len(info.sequences),
+            "bones": len(info.bones), "attachments": len(info.attachments)}
+        for caption, tile in self.stat_tiles.items():
+            tile.value.setText(str(values[caption]))
+
     def _texture_double_clicked(self, row: int, _column: int) -> None:
         item = self.textures.item(row, 0)
         if self._asset and item is not None:
@@ -705,13 +939,16 @@ class Inspector(QTabWidget):
 
     def show_status(self, status: object) -> None:
         """The asset's AssetStatus (from the Explorer's last refresh)."""
+        category = self.category_label.text() if self._asset else ""
         if status is None:
             self.status_label.setText("—")
+            self.status_line.setText(category)
             return
         color = STATUS_COLORS.get(status.level)
         lines = status.lines()
-        head = (f"<span style='color:{color}'>●</span> " if color else "") + lines[0]
-        self.status_label.setText("<br>".join([head] + lines[1:]))
+        dot = f"<span style='color:{color}'>●</span> " if color else ""
+        self.status_label.setText("<br>".join([dot + lines[0]] + lines[1:]))
+        self.status_line.setText(f"{dot}{lines[0]}  ·  {category}")
 
     def _kind_activated(self, index: int) -> None:
         if self._asset:

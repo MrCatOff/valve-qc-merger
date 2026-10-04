@@ -182,3 +182,34 @@ def test_viewport_toggles_timeline_and_compare_badge(app) -> None:
 def build_scene_for_test():
     from valve_qc_merger.studio.scene import build_scene
     return build_scene(_ANACONDA)
+
+
+# -- inspector (phase 4) -----------------------------------------------------
+def test_inspector_header_tiles_and_tabs(window, tmp_path: Path) -> None:
+    from valve_qc_merger.services.base import CollectingReporter
+    inspector = window.inspector
+    assert inspector.pages.currentWidget() is inspector.empty_page
+    assert [inspector.tabs.tabText(i) for i in range(inspector.tabs.count())] == [
+        "Overview", "Geometry", "Animation", "Bones", "QC"]
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(_ANACONDA)
+    project.derive_asset("v_anaconda", "hands", reporter=CollectingReporter())
+    window.set_project(project)
+    window.explorer.select("asset", "v_anaconda")
+    assert inspector.pages.currentWidget() is not inspector.empty_page
+    assert inspector.name_label.text() == "v_anaconda"
+    assert inspector.kind_badge.text() == "View models (v_)"
+    assert inspector.path_label.text() == "assets/v/v_anaconda"
+    assert inspector.stat_tiles["sequences"].value.text() == "6"
+    assert inspector.rederive_button.isHidden()  # not made by Retarget
+    window.explorer.select("asset", "v_anaconda_hands")
+    assert not inspector.rederive_button.isHidden()
+    asked: list[str] = []
+    inspector.reveal_requested.connect(asked.append)
+    inspector.reveal_button.click()
+    assert asked == ["v_anaconda_hands"]
+    inspector.setCurrentWidget(inspector.attachments_page)  # nested in Animation
+    assert inspector.currentWidget() is inspector.animation_tab
+    inspector.notes.setText("tune the grip")
+    inspector.notes.editingFinished.emit()
+    assert project.assets["v_anaconda_hands"].notes == "tune the grip"
