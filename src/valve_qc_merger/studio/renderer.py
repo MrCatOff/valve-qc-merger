@@ -375,15 +375,6 @@ class Renderer:
             mirror = QMatrix4x4()
             mirror.scale(-1.0, 1.0, 1.0)
             mvp = mvp * mirror
-        if state.show_grid and not state.camera.first_person and self._lines is not None:
-            if self._grid is None or self._grid[0] != id(scene):
-                self._grid = (id(scene), grid_lines(*scene.bounds()))
-            line = self.line_program
-            line.bind()
-            line.setUniformValue("u_mvp", mvp)
-            line.setUniformValue("u_point", 1.0)
-            self._draw(line, self._lines, self._grid[1], GL_LINES, (3, 3))
-            line.release()
         rot, trans = scene.world(*scene.local_pose(
             state.sequence if scene.sequences else None, state.frame))
 
@@ -424,6 +415,23 @@ class Renderer:
         if state.wireframe and self._polygon_mode is not None:
             self._polygon_mode(GL_FRONT_AND_BACK, GL_FILL)
         program.release()
+
+        # The floor grid comes AFTER the model, depth-tested (the model hides
+        # it) without depth writes — the same path as the bone/attachment
+        # lines. Drawn before the model it made the model vanish on a Windows
+        # driver (lines first, then the mesh VAOs, drew nothing).
+        if state.show_grid and not state.camera.first_person and self._lines is not None:
+            if self._grid is None or self._grid[0] != id(scene):
+                self._grid = (id(scene), grid_lines(*scene.bounds()))
+            gl.glEnable(GL_DEPTH_TEST)
+            gl.glDepthMask(False)
+            line = self.line_program
+            line.bind()
+            line.setUniformValue("u_mvp", mvp)
+            line.setUniformValue("u_point", 1.0)
+            self._draw(line, self._lines, self._grid[1], GL_LINES, (3, 3))
+            line.release()
+            gl.glDepthMask(True)
 
         # Markers are 3D crosses made of lines: GL_POINTS with a shader point
         # size draws nothing on some core-profile drivers (macOS).
