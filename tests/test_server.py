@@ -157,3 +157,54 @@ def test_server_window_budget_and_doctor(tmp_path: Path) -> None:
     window.severity_box.setCurrentIndex(window.severity_box.findData("info"))
     assert window.issues_table.rowCount() == 0
     assert "missing" in "\n".join(f"{i.category}" for i in window.issues)
+
+
+def test_export_package_writes_tree_include_res_and_report(tmp_path: Path) -> None:
+    import json
+
+    import numpy as np
+
+    from valve_qc_merger.project import Build, Project
+    from valve_qc_merger.server.package import export_package
+    from valve_qc_merger.sound.wav import write_wav
+    project = Project.create(tmp_path / "pack")
+    project.add_build(Build("view", "merge-v", options={"name": "v_pack"}))
+    output = project.build_dir("view") / "output" / "p1"
+    output.mkdir(parents=True)
+    (output / "v_pack_p1.qc").write_text(
+        '$modelname "v_pack_p1.mdl"\n$sequence "reload" {\n "a"\n'
+        ' { event 5004 3 "weapons/pack_clipin.wav" }\n'
+        ' { event 5004 9 "weapons/nowhere.wav" }\n}\n', encoding="latin-1")
+    (output / "v_pack_p1.mdl").write_bytes(b"IDST" + b"\0" * 300)
+    (project.build_dir("view") / "output" / "models.ini").write_text(
+        "[v_ak47]\nmodel = v_pack_p1.mdl\npev_body = 3\nanim_reload = 1\nanim_draw = 2\n",
+        encoding="utf-8")
+    (project.build_dir("view") / "last_run.json").write_text(json.dumps(
+        {"outputs": ["builds/view/output/p1/v_pack_p1.qc"]}), encoding="utf-8")
+    sound = project.root / "sounds" / "weapons" / "pack_clipin.wav"
+    sound.parent.mkdir(parents=True)
+    sound.write_bytes(write_wav(np.zeros((100, 1)), 22050))
+
+    result = export_package(project, tmp_path / "out")
+    mod = tmp_path / "out" / "cstrike"
+    assert (mod / "models" / "v_pack_p1.mdl").is_file()
+    assert (mod / "models" / "v_pack_models.ini").is_file()
+    assert (mod / "sound" / "weapons" / "pack_clipin.wav").is_file()
+    assert result.models == ["models/v_pack_p1.mdl"]
+    assert result.missing_sounds == ["weapons/nowhere.wav"]
+    inc = (tmp_path / "out" / "amxx" / "vqm_resources.inc").read_text()
+    assert '"models/v_pack_p1.mdl",' in inc
+    assert 'precache_generic(VQM_CLIENT_SOUNDS[i]);' in inc  # ReHLDS default
+    assert '"sound/weapons/pack_clipin.wav",' in inc
+    assert '#define VQM_V_AK47_MODEL "models/v_pack_p1.mdl"' in inc
+    assert "#define VQM_V_AK47_BODY 3" in inc and "#define VQM_V_AK47_ANIM_RELOAD 1" in inc
+    res = (tmp_path / "out" / "vqm_resources.res").read_text().splitlines()
+    assert "models/v_pack_p1.mdl" in res and "sound/weapons/pack_clipin.wav" in res
+    text = (tmp_path / "out" / "package_report.txt").read_text()
+    assert "sound/weapons/nowhere.wav" in text and "FastDL" in text
+
+    project.settings.client_sounds = "sound"
+    inc = export_package(project, tmp_path / "out2")
+    text = (tmp_path / "out2" / "amxx" / "vqm_resources.inc").read_text()
+    assert 'precache_sound(VQM_CLIENT_SOUNDS[i]);' in text
+    assert '"weapons/pack_clipin.wav",' in text

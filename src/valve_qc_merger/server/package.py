@@ -1,0 +1,207 @@
+"""A server package: everything to put on a ReHLDS server and its FastDL host.
+
+``export_package`` writes, under an output folder:
+
+- ``cstrike/`` — the compiled models of the chosen builds (+ ``T.mdl``) and
+  their manifests where Deploy would put them, plus every sound the models'
+  events play (from the library / game folder) under ``sound/``. The same
+  tree is what ``sv_downloadurl`` (FastDL) serves: upload it as is;
+- ``amxx/vqm_resources.inc`` — an AMXX include for a ReAPI weapon plugin:
+  the paths to precache, a ``vqm_precache()`` that precaches them (client
+  sounds through ``precache_generic`` on ReHLDS, or ``precache_sound``), and
+  per weapon its model, ``pev_body`` and sequence numbers;
+- ``vqm_resources.res`` — the same files in the ``.res`` format (copy as
+  ``maps/<map>.res`` to make a map send them);
+- ``package_report.txt`` — files, sizes and what a new player downloads.
+"""
+
+from __future__ import annotations
+
+import configparser
+import json
+import re
+import shutil
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from valve_qc_merger.project.model import Project
+
+MOD_FOLDER = "cstrike"
+
+
+@dataclass
+class PackageResult:
+    root: Path
+    files: dict[str, int] = field(default_factory=dict)  # mod-relative path -> bytes
+    models: list[str] = field(default_factory=list)  # precache_model paths
+    client_sounds: list[str] = field(default_factory=list)  # relative to sound/
+    weapons: dict[str, dict[str, object]] = field(default_factory=dict)
+    missing_sounds: list[str] = field(default_factory=list)
+    skipped_builds: list[str] = field(default_factory=list)  # not run / not compiled
+
+    @property
+    def total(self) -> int:
+        return sum(self.files.values())
+
+
+def _manifest(path: Path) -> dict[str, dict[str, object]]:
+    """A build manifest (ini / json / toml) as {weapon: {key: value}}."""
+    if path.suffix.lower() == ".ini":
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.optionxform = str  # keep anim_* case
+        parser.read(path, encoding="utf-8")
+        return {s: dict(parser.items(s)) for s in parser.sections()}
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text) if path.suffix.lower() == ".json" else tomllib.loads(text)
+    if isinstance(data, dict) and "models" in data and isinstance(data["models"], dict):
+        data = data["models"]
+    return {k: v for k, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) \
+        else {}
+
+
+def export_package(project: Project, out: Path, builds: list[str] | None = None) -> PackageResult:
+    from valve_qc_merger.project import sounds as library
+    from valve_qc_merger.project.model import MANIFEST_SUFFIXES, ProjectError
+    from valve_qc_merger.server.budget import _CLIENT_SOUND
+    out = Path(out)
+    mod = out / MOD_FOLDER
+    result = PackageResult(out)
+    names = builds if builds is not None else sorted(project.builds)
+    for name in names:
+        try:
+            pairs = project.deploy_files(name, root=mod)
+        except ProjectError:
+            result.skipped_builds.append(name)
+            continue
+        for source, destination in pairs:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            relative = destination.relative_to(mod).as_posix()
+            result.files[relative] = destination.stat().st_size
+            if relative.lower().endswith(".mdl") and not relative.lower().endswith("t.mdl"):
+                result.models.append(relative)
+            elif source.suffix.lower() in MANIFEST_SUFFIXES:
+                for weapon, entry in _manifest(source).items():
+                    model = str(entry.get("model", ""))
+                    folder = Path(relative).parent.as_posix()
+                    result.weapons[weapon] = {**entry, "model": f"{folder}/{model}"
+                                              if model and "/" not in model else model}
+        for qc in (project.build_dir(name) / "output").rglob("*.qc"):
+            for sound in _CLIENT_SOUND.findall(qc.read_text(encoding="latin-1")):
+                result.client_sounds.append(sound.replace("\\", "/"))
+    result.client_sounds = sorted(set(result.client_sounds), key=str.lower)
+    for sound in result.client_sounds:
+        source = library.resolve(project, sound)
+        if source is None:
+            result.missing_sounds.append(sound)
+            continue
+        destination = mod / "sound" / sound
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        result.files[f"sound/{sound}"] = destination.stat().st_size
+    result.models.sort(key=str.lower)
+    (out / "amxx").mkdir(parents=True, exist_ok=True)
+    (out / "amxx" / "vqm_resources.inc").write_text(
+        amxx_include(result, project.settings.client_sounds, project.name), encoding="utf-8")
+    (out / "vqm_resources.res").write_text(res_file(result), encoding="utf-8")
+    (out / "package_report.txt").write_text(report(result), encoding="utf-8")
+    return result
+
+
+def _ident(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").upper() or "X"
+
+
+def amxx_include(result: PackageResult, client_sounds: str = "generic",
+                 pack: str = "pack") -> str:
+    guard = f"_vqm_{_ident(pack).lower()}_included"
+    generic = client_sounds != "sound"
+    lines = [
+        "// Generated by valve-qc-merger Studio — re-export instead of editing.",
+        "// For a ReHLDS + ReGameDLL + ReAPI weapon plugin:",
+        "//   public plugin_precache() { vqm_precache(); }",
+        "// then use VQM_<WEAPON>_MODEL / _BODY / _ANIM_* for each merged weapon.",
+        f"#if defined {guard}", "  #endinput", "#endif", f"#define {guard}", "",
+        "#include <amxmodx>", "",
+        "// precache_model: the compiled (merged) models",
+        "stock const VQM_MODELS[][] = {",
+        *[f'\t"{m}",' for m in result.models or ["models/null.mdl"]],
+        "};",
+        f"stock const VQM_MODEL_COUNT = {len(result.models)};", "",
+        ("// view-model client sounds (event 5004): precache_generic — ReHLDS gives it "
+         "4096 slots" if generic else "// view-model client sounds (event 5004): "
+         "precache_sound (paths relative to sound/)"),
+        "stock const VQM_CLIENT_SOUNDS[][] = {",
+        *[f'\t"{"sound/" + s if generic else s}",' for s in result.client_sounds or ["-"]],
+        "};",
+        f"stock const VQM_CLIENT_SOUND_COUNT = {len(result.client_sounds)};", "",
+        "stock vqm_precache()", "{",
+        "\tfor (new i = 0; i < VQM_MODEL_COUNT; i++) precache_model(VQM_MODELS[i]);",
+        "\tfor (new i = 0; i < VQM_CLIENT_SOUND_COUNT; i++) "
+        + ("precache_generic(VQM_CLIENT_SOUNDS[i]);" if generic
+           else "precache_sound(VQM_CLIENT_SOUNDS[i]);"),
+        "}", "",
+        "// merged weapons: the model to set and the body value that selects the weapon",
+    ]
+    for weapon, entry in sorted(result.weapons.items()):
+        ident = _ident(weapon)
+        lines.append(f'#define VQM_{ident}_MODEL "{entry.get("model", "")}"')
+        if "pev_body" in entry:
+            lines.append(f"#define VQM_{ident}_BODY {int(entry['pev_body'])}")
+        if "skin" in entry:
+            lines.append(f"#define VQM_{ident}_SKIN {int(entry['skin'])}")
+        seen: set[str] = set()
+        for key, value in entry.items():
+            if key.startswith("anim_"):
+                anim = _ident(key[5:])
+                if anim in seen:
+                    continue
+                seen.add(anim)
+                try:
+                    lines.append(f"#define VQM_{ident}_ANIM_{anim} {int(value)}")
+                except (TypeError, ValueError):
+                    continue
+    return "\n".join(lines) + "\n"
+
+
+def res_file(result: PackageResult) -> str:
+    lines = ["// Files of the package for clients to download (.res format).",
+             "// Copy as maps/<map>.res to make that map send them."]
+    lines += sorted(result.files, key=str.lower)
+    return "\n".join(lines) + "\n"
+
+
+def _size(count: int) -> str:
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if count < 1024 or unit == "GB":
+            return f"{count:.0f} {unit}" if unit == "bytes" else f"{count:.1f} {unit}"
+        count /= 1024
+    return str(count)
+
+
+def report(result: PackageResult) -> str:
+    kinds: dict[str, int] = {}
+    for path, size in result.files.items():
+        kind = "sounds" if path.startswith("sound/") else (
+            "manifests" if not path.lower().endswith(".mdl") else "models")
+        kinds[kind] = kinds.get(kind, 0) + size
+    lines = [f"Server package — {len(result.files)} files, {_size(result.total)}",
+             f"A new player downloads at most {_size(result.total)} (models + sounds).", "",
+             *[f"  {kind:<10} {_size(size)}" for kind, size in sorted(kinds.items())], "",
+             f"precache_model: {len(result.models)}",
+             f"client sounds: {len(result.client_sounds)}"]
+    if result.missing_sounds:
+        lines += ["", "Sounds the models play but neither the library nor the game folder "
+                  "has (not packed):", *[f"  sound/{s}" for s in result.missing_sounds]]
+    if result.skipped_builds:
+        lines += ["", "Builds left out (not run or not compiled): "
+                  + ", ".join(result.skipped_builds)]
+    lines += ["", f"Upload {MOD_FOLDER}/ to the server and to the sv_downloadurl host "
+              "(FastDL) as is; add amxx/vqm_resources.inc to your weapon plugin."]
+    return "\n".join(lines) + "\n"
+
+
+__all__ = ["PackageResult", "amxx_include", "export_package", "report", "res_file"]

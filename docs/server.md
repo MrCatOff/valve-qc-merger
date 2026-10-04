@@ -81,3 +81,25 @@ speaker button in the viewport's bar turns event sounds off.
 
 `valve_qc_merger.sound.wav` (read/check/fix, Qt-free) and
 `valve_qc_merger.project.sounds` (the library) do the work.
+
+## Server package
+
+Build ▸ **Export server package…** (Ctrl+Shift+E) writes
+`<folder>/<project>_server_package/`:
+
+- `cstrike/` — every compiled build (models + `T.mdl`, manifests renamed
+  `<name>_models.<ext>`) where Deploy would put them, plus every sound the
+  models' events play, taken from the library or the game folder, under
+  `sound/`. The same tree is what FastDL (`sv_downloadurl`) serves: upload it
+  to the server and to the HTTP host as is.
+- `amxx/vqm_resources.inc` — for a ReAPI weapon plugin: `VQM_MODELS` and
+  `VQM_CLIENT_SOUNDS`, a `vqm_precache()` to call from `plugin_precache()`
+  (client sounds through `precache_generic` — ReHLDS's 4096 slots — or
+  `precache_sound`, following the Server window's choice), and per merged
+  weapon `VQM_<WEAPON>_MODEL`, `_BODY` (its `pev_body`), `_SKIN` and
+  `_ANIM_<SEQUENCE>` numbers from the manifest.
+- `vqm_resources.res` — the same files as a `.res` list (copy as
+  `maps/<map>.res` for a map to send them).
+- `package_report.txt` — files and sizes, what a new player downloads,
+  sounds the models play that nothing provides, builds left out (not run or
+  not compiled).

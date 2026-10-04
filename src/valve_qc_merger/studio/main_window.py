@@ -298,6 +298,9 @@ class MainWindow(QMainWindow):
             "Deploy selected build to game",
             lambda: self.deploy_build(self.explorer.current_build()), QKeySequence("F8"))
         build_menu.addSeparator()
+        self.act_export_package = build_menu.addAction(
+            "Export server package…", self.export_package, QKeySequence("Ctrl+Shift+E"))
+        build_menu.addSeparator()
         self.act_delete_build = build_menu.addAction(
             "Delete selected build…", lambda: self.delete_build(self.explorer.current_build()))
         self._refresh_recent()
@@ -313,6 +316,7 @@ class MainWindow(QMainWindow):
         ("act_plan_build", "list-checks", "Plan"), ("act_run_build", "play", "Run"),
         ("act_compile_build", "hammer", "Compile"), ("act_deploy_build", "rocket", "Deploy"),
         ("act_delete_build", "trash-2", ""), ("act_server", "gauge", "Server"),
+        ("act_export_package", "package", "Package"),
     ]
     TOOLBAR = ["act_import_mdl", "act_derive", "act_rederive", None, "act_new_build",
                "act_plan_build", "act_run_build", "act_compile_build", "act_deploy_build",
@@ -467,6 +471,46 @@ class MainWindow(QMainWindow):
         if self.project is not None:
             self._open_path(sounds.sound_path(self.project, name).parent)
 
+    def export_package(self) -> None:
+        """Build ▸ Export server package: compiled builds + their sounds as a
+        cstrike/ tree (server and FastDL), an AMXX include, a .res list and a
+        size report."""
+        import re as _re
+
+        from PySide6.QtWidgets import QApplication
+
+        from valve_qc_merger.server.package import export_package
+        if self.project is None:
+            return
+        folder = QFileDialog.getExistingDirectory(
+            self, "Export the server package into",
+            self.settings.value("last_package", str(self.project.root.parent)))
+        if not folder:
+            return
+        self.settings.setValue("last_package", folder)
+        slug = _re.sub(r"[^0-9A-Za-z]+", "_", self.project.name).strip("_").lower() or "pack"
+        out = Path(folder) / f"{slug}_server_package"
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = export_package(self.project, out)
+        except OSError as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Export server package", str(exc))
+            return
+        QApplication.restoreOverrideCursor()
+        from valve_qc_merger.server.package import report
+        for line in report(result).splitlines():
+            if line.strip():
+                self.log.append_line(line if not line.startswith("  sound/")
+                                     else f"warn: missing {line.strip()}")
+        detail = f"{len(result.files)} files, {result.total / 1048576:.1f} MB → {out}"
+        if result.missing_sounds or result.skipped_builds:
+            self.toast.show_message("warning", "Server package exported with gaps",
+                                    f"{detail}; see the log for what is missing")
+        else:
+            self.toast.show_message("success", "Server package exported", detail)
+        self._open_path(out)
+
     def show_server(self) -> None:
         """Project ▸ Server: precache budget per map + the mod-folder doctor
         (one window, refreshed every time it is shown)."""
@@ -521,7 +565,8 @@ class MainWindow(QMainWindow):
         for action in (self.act_import_mdl, self.act_import_mdl_dir, self.act_import_dec,
                        self.act_settings, self.act_reveal, self.act_close, self.act_find,
                        self.act_new_category, self.act_new_build, self.act_server,
-                       self.act_import_sounds, self.act_import_sound_dir):
+                       self.act_import_sounds, self.act_import_sound_dir,
+                       self.act_export_package):
             action.setEnabled(has and idle)
         # what acts on the selection is enabled only when there is one
         asset = has and bool(self.explorer.selected_assets())

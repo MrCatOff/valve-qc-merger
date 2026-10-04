@@ -894,20 +894,20 @@ class Project:
         return notes
 
     # -- deploy ---------------------------------------------------------------
-    def deploy_files(self, name: str) -> list[tuple[Path, Path]]:
+    def deploy_files(self, name: str, root: Path | None = None) -> list[tuple[Path, Path]]:
         """``(source, destination)`` of everything Deploy copies for a build:
         each compiled model (+ its ``T.mdl`` texture file) and the manifest,
         renamed ``<output name>_models.<ext>`` so builds don't overwrite each
         other's. Player models go to ``<dir>/<model>/<model>.mdl``."""
         from valve_qc_merger.services.compile import compiled_model_path
-        if not self.settings.game_dir:
+        if root is None and not self.settings.game_dir:
             raise ProjectError("set the game folder in the project settings")
         build = self.builds[name]
         record_path = self.build_dir(name) / "last_run.json"
         if not record_path.exists():
             raise ProjectError(f"build {name!r} has not been run")
         record = json.loads(record_path.read_text(encoding="utf-8"))
-        target = Path(self.settings.game_dir) / (
+        target = Path(root if root is not None else self.settings.game_dir) / (
             build.deploy_dir or DEPLOY_DIRS.get(build.kind, DEFAULT_DEPLOY_DIR))
         players = build.kind == "merge-players"
         pairs: list[tuple[Path, Path]] = []
