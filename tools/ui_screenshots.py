@@ -33,6 +33,7 @@ def main(out: Path) -> int:
     from valve_qc_merger.studio.build_panel import NewBuildDialog
     from valve_qc_merger.studio.derive_dialog import DeriveDialog
     from valve_qc_merger.studio.dialogs import NewProjectDialog, SettingsDialog
+    from valve_qc_merger.studio.help_dialogs import AboutDialog, ShortcutsDialog
     from valve_qc_merger.studio.main_window import MainWindow
     theme.apply(app)
 
@@ -104,6 +105,8 @@ def main(out: Path) -> int:
         lambda: grab_dialog(NewBuildDialog(project, window), "07_new_build"),
         lambda: grab_dialog(NewProjectDialog(window, work), "09_new_project"),
         lambda: grab_dialog(SettingsDialog(project.settings, window), "10_settings"),
+        lambda: grab_dialog(ShortcutsDialog(window.menuBar(), window), "11_shortcuts"),
+        lambda: grab_dialog(AboutDialog(window), "12_about"),
         lambda: QTimer.singleShot(800, app.quit),  # after the last dialog grab
     ]
     window.show()

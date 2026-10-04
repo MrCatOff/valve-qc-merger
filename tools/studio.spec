@@ -47,6 +47,7 @@ exe = EXE(  # noqa: F821
     [],
     exclude_binaries=True,
     name="valve-qc-studio",
+    icon=os.path.join(ROOT, "src", "valve_qc_merger", "studio", "icons", "app", "app.ico"),
     console=False,  # a windowed app: no console window on Windows
     disable_windowed_traceback=False,
     upx=False,
@@ -59,5 +60,7 @@ if sys.platform == "darwin":
         coll,
         name="valve-qc-studio.app",
         bundle_identifier="dev.valve-qc-merger.studio",
+        icon=os.path.join(ROOT, "src", "valve_qc_merger", "studio", "icons", "app",
+                          "app.icns"),
         info_plist={"NSHighResolutionCapable": True},
     )

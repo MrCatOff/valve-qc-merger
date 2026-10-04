@@ -227,7 +227,7 @@ class BuildPanel(QTabWidget):
                                    "where, pev_body, who is rejected — without merging.")
         self.plan_summary.setWordWrap(True)
         self.plan_table = _table(["Part", "pev_body", "Model", "Note"])
-        self.plan_table.setToolTip("double-click: select the asset")
+        self.plan_table.setToolTip("Double-click: select the asset")
         self.plan_table.cellDoubleClicked.connect(self._plan_row_activated)
         self.plan_rejected = QLabel("")
         self.plan_rejected.setWordWrap(True)
@@ -242,7 +242,7 @@ class BuildPanel(QTabWidget):
         self.manifest.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.manifest.verticalHeader().setVisible(False)
         self.manifest.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.manifest.setToolTip("double-click: show this asset in the merged model "
+        self.manifest.setToolTip("Double-click: show this asset in the merged model "
                                  "(its pev_body and first animation)")
         self.manifest.cellDoubleClicked.connect(self._preview_row)
         self.addTab(self.manifest, "Manifest")
@@ -279,17 +279,17 @@ class BuildPanel(QTabWidget):
                 theme.set_primary(out)
             return out
 
-        self.save_button = button("Save", "check", "save the settings", self.save)
+        self.save_button = button("Save", "check", "Save the settings", self.save)
         self.plan_button = button(
-            "Plan", "list-checks", "save, then show what a run would make (parts, pev_body, "
+            "Plan", "list-checks", "Save, then show what a run would make (parts, pev_body, "
             "rejections) without merging",
             lambda: self.save() and self.plan_requested.emit(self.build_name))
-        self.compile_button = button("Compile", "hammer", "compile the last run's output",
+        self.compile_button = button("Compile", "hammer", "Compile the last run's output",
                                      lambda: self.compile_requested.emit(self.build_name))
         self.deploy_button = button(
-            "Deploy", "rocket", "save, then copy the compiled models + manifest into the "
+            "Deploy", "rocket", "Save, then copy the compiled models + manifest into the "
             "game folder", lambda: self.save() and self.deploy_requested.emit(self.build_name))
-        self.run_button = button("Run", "play", "save, then merge",
+        self.run_button = button("Run", "play", "Save, then merge",
                                  lambda: self.save() and self.run_requested.emit(self.build_name),
                                  primary=True)
         row.addWidget(self.save_button)
@@ -529,7 +529,7 @@ class BuildPanel(QTabWidget):
                 over = part[key] > LIMITS[key]
                 item = self.budgets.item(r, c)
                 item.setForeground(QBrush(BAD_COLOR if over else self.palette().text().color()))
-                item.setToolTip(f"limit {LIMITS[key]}")
+                item.setToolTip(f"Limit {LIMITS[key]}")
         _fill(self.gates, [[g["part"], g["check"], "PASS" if g["passed"] else "FAIL",
                             g["detail"]] for g in record.get("gates", [])])
         for r, gate in enumerate(record.get("gates", [])):

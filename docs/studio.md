@@ -223,6 +223,14 @@ offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
   dock layout are restored on the next start.
 - **Status bar**: project name, asset and build counts; job progress and
   Cancel while a job runs.
+- **Help**: Keyboard shortcuts (F1 — built from the menus' own shortcuts,
+  plus the viewport keys), Documentation, About.
+- **App icon** (`studio/icons/app/`: app.png for the window, app.ico for the
+  Windows exe, app.icns for the macOS app): `python tools/make_app_icon.py`
+  re-renders all three from the theme accent and Lucide "boxes".
+- **Accessibility**: asset status is a shape as well as a colour — problem
+  ✕ (disc with a cross), stale ▲, on our hands ●, own hands ○ — in the
+  Explorer and the Inspector; tooltips are full sentences.
 - **Option forms** (`studio.options_form` + `studio.field_specs`): every
   service option has a sentence-case label, a tooltip, a placeholder that
   names the real default, and a group — Basic on top, the rest under a

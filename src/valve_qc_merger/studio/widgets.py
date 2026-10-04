@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -64,6 +64,7 @@ NEW_CATEGORY = "\x00new"  # move_to_category target: ask for a new name
 # status badge per AssetStatus.level
 STATUS_COLORS = {"problem": theme.TOKENS["danger"], "stale": theme.TOKENS["warning"],
                  "ours": theme.TOKENS["success"], "own": theme.TOKENS["muted"]}
+STATUS_GLYPHS = {"problem": "✕", "stale": "▲", "ours": "●", "own": "○"}
 STATUS_HINTS = {"problem": "failed or rejected in its last build",
                 "stale": "its source changed: re-run",
                 "ours": "on our hands", "own": "own hands (not retargeted)"}
@@ -83,18 +84,40 @@ FILTERS = {
 
 
 def status_icon(level: str) -> QIcon:
-    """A small filled dot in the level's colour (empty icon for "plain")."""
+    """The level's badge — a shape as well as a colour, so it reads without
+    colour vision: problem = circle with a cross, stale = triangle, on our
+    hands = filled dot, own hands = ring (empty icon for "plain")."""
     if level not in _ICONS:
-        pixmap = QPixmap(12, 12)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        if level in STATUS_COLORS:
-            painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(STATUS_COLORS[level]))
-            painter.drawEllipse(2, 2, 8, 8)
-            painter.end()
-        _ICONS[level] = QIcon(pixmap)
+        icon_out = QIcon()
+        for scale in (1, 2):
+            pixmap = QPixmap(12 * scale, 12 * scale)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            if level in STATUS_COLORS:
+                painter = QPainter(pixmap)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                painter.scale(scale, scale)
+                colour = QColor(STATUS_COLORS[level])
+                if level == "own":
+                    painter.setPen(QPen(colour, 1.6))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(QPointF(6, 6), 3.6, 3.6)
+                elif level == "stale":
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(colour)
+                    painter.drawPolygon([QPointF(6, 1.5), QPointF(10.8, 10), QPointF(1.2, 10)])
+                else:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(colour)
+                    painter.drawEllipse(QPointF(6, 6), 4.6 if level == "problem" else 4.0,
+                                        4.6 if level == "problem" else 4.0)
+                    if level == "problem":
+                        painter.setPen(QPen(QColor(theme.TOKENS["on_accent"]), 1.5))
+                        painter.drawLine(QPointF(4.2, 4.2), QPointF(7.8, 7.8))
+                        painter.drawLine(QPointF(7.8, 4.2), QPointF(4.2, 7.8))
+                painter.end()
+            pixmap.setDevicePixelRatio(scale)
+            icon_out.addPixmap(pixmap)
+        _ICONS[level] = icon_out
     return _ICONS[level]
 
 
@@ -742,13 +765,23 @@ class Inspector(QWidget):
         tex_layout = QHBoxLayout(textures)
         tex_layout.setContentsMargins(0, 0, 0, 0)
         self.textures = _table(["Texture", "Size", "Render mode", "Used by"])
+        # fit the pane: names and users take what is left (elided), no sideways scroll
+        header = self.textures.horizontalHeader()
+        header.setStretchLastSection(False)
+        for column, mode in enumerate((QHeaderView.ResizeMode.Stretch,
+                                       QHeaderView.ResizeMode.ResizeToContents,
+                                       QHeaderView.ResizeMode.ResizeToContents,
+                                       QHeaderView.ResizeMode.Stretch)):
+            header.setSectionResizeMode(column, mode)
+        self.textures.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.textures.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.textures.currentCellChanged.connect(self._show_texture)
-        self.textures.setToolTip("double-click the render mode to change it")
+        self.textures.setToolTip("Double-click the render mode to change it")
         self.textures.cellDoubleClicked.connect(self._texture_double_clicked)
         self.texture_preview = PixmapLabel()
         self.texture_preview.setFixedWidth(150)
         self.texture_preview.setMinimumHeight(120)
-        self.texture_preview.setToolTip("the selected texture")
+        self.texture_preview.setToolTip("The selected texture")
         tex_layout.addWidget(self.textures, 1)
         tex_layout.addWidget(self.texture_preview, 0, Qt.AlignmentFlag.AlignTop)
         from valve_qc_merger.studio.qc_tools import QcPage, SkinsPage
@@ -759,7 +792,7 @@ class Inspector(QWidget):
 
         # -- animation: sequences, attachments
         self.sequences = _table(["#", "Sequence", "FPS", "Frames", "Loop", "Events"])
-        self.sequences.setToolTip("double-click: edit name, fps, loop, activity and events")
+        self.sequences.setToolTip("Double-click: edit name, fps, loop, activity and events")
         self.sequences.cellDoubleClicked.connect(
             lambda row, _c: self._asset and self.sequence_edit_requested.emit(row))
         from valve_qc_merger.studio.bone_tools import AttachmentsPage, BonesPage
@@ -945,7 +978,8 @@ class Inspector(QWidget):
             return
         color = STATUS_COLORS.get(status.level)
         lines = status.lines()
-        dot = f"<span style='color:{color}'>●</span> " if color else ""
+        glyph = STATUS_GLYPHS.get(status.level, "●")  # the badge's shape, not only colour
+        dot = f"<span style='color:{color}'>{glyph}</span> " if color else ""
         self.status_label.setText("<br>".join([dot + lines[0]] + lines[1:]))
         self.status_line.setText(f"{dot}{lines[0]}  ·  {category}")
 

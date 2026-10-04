@@ -27,7 +27,7 @@ from valve_qc_merger import __version__
 from valve_qc_merger.merge_view.discovery import load_model
 from valve_qc_merger.project import Project, ProjectError
 from valve_qc_merger.services.base import Reporter
-from valve_qc_merger.studio import theme
+from valve_qc_merger.studio import help_dialogs, theme
 from valve_qc_merger.studio.build_panel import BuildPanel, NewBuildDialog
 from valve_qc_merger.studio.build_report import load_record, record_part_stats
 from valve_qc_merger.studio.dialogs import NewProjectDialog, SettingsDialog
@@ -337,6 +337,20 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         self.act_reset_layout = menu.addAction(icon("layout-dashboard"), "Reset layout",
                                                self.reset_layout)
+        help_menu = self.menuBar().addMenu("&Help")
+        self.act_shortcuts = help_menu.addAction(icon("info"), "Keyboard shortcuts",
+                                                 self.show_shortcuts, QKeySequence("F1"))
+        self.act_docs = help_menu.addAction(
+            icon("circle-help"), "Documentation",
+            lambda: QDesktopServices.openUrl(QUrl(help_dialogs.DOCS_URL)))
+        help_menu.addSeparator()
+        self.act_about = help_menu.addAction("About valve-qc-merger Studio", self.show_about)
+
+    def show_shortcuts(self) -> None:
+        help_dialogs.ShortcutsDialog(self.menuBar(), self).exec()
+
+    def show_about(self) -> None:
+        help_dialogs.AboutDialog(self).exec()
 
     def reset_layout(self) -> None:
         for dock in self.docks:

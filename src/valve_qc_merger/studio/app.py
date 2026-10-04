@@ -28,7 +28,7 @@ def selftest(mdl: Path | None) -> int:
     app = QApplication.instance() or QApplication(["valve-qc-studio"])
     theme.apply(app)  # QtSvg + the bundled icons must be in the build
     window = MainWindow()
-    if not (ICON_DIR / "play.svg").exists():
+    if not (ICON_DIR / "play.svg").exists() or not (ICON_DIR / "app" / "app.png").exists():
         print(f"SELFTEST FAIL: icons missing in {ICON_DIR}", flush=True)
         return 1
     missing = [p for p in ("storage/hands/reference_hands.smd",
@@ -77,8 +77,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     app.setApplicationName("valve-qc-merger Studio")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("valve-qc-merger")
+    from PySide6.QtGui import QIcon
+
     from valve_qc_merger.studio import theme
+    from valve_qc_merger.studio.help_dialogs import APP_ICON
     theme.apply(app)
+    app.setWindowIcon(QIcon(str(APP_ICON)))
     window = MainWindow()
     window.show()
     if args and (Path(args[0]) / "project.toml").exists():

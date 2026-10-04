@@ -295,3 +295,50 @@ def test_new_project_and_settings_dialogs(app, tmp_path: Path) -> None:
     box = settings.findChild(QDialogButtonBox)
     assert box.button(QDialogButtonBox.StandardButton.Save) is not None
     assert settings.game_edit.text() == "/games/cstrike"
+
+
+# -- polish (phase 7) --------------------------------------------------------
+def test_status_badges_differ_by_shape(app) -> None:
+    from valve_qc_merger.studio.widgets import status_icon
+    images = {level: status_icon(level).pixmap(12, 12).toImage()
+              for level in ("problem", "stale", "ours", "own")}
+    assert images["own"].pixelColor(6, 6).alpha() == 0  # a ring: hollow centre
+    assert images["ours"].pixelColor(6, 6).alpha() > 200  # a dot: filled
+    assert images["stale"].pixelColor(1, 2).alpha() == 0  # a triangle: empty top corner
+    assert images["ours"].pixelColor(1, 2).alpha() == 0
+    centre = images["problem"].pixelColor(6, 6)  # the cross through a red disc
+    assert centre.red() > 200 and centre.green() > 200
+
+
+def test_help_dialogs_and_app_icon(window) -> None:
+    from valve_qc_merger.studio.help_dialogs import (
+        APP_ICON,
+        AboutDialog,
+        ShortcutsDialog,
+        menu_shortcuts,
+    )
+    groups = dict(menu_shortcuts(window.menuBar()))
+    assert any(text == "Run selected build" for _k, text in groups["Build"])
+    assert any(text == "Keyboard shortcuts" for _k, text in groups["Help"])
+    assert ShortcutsDialog(window.menuBar(), window).rows > 10
+    labels = [w.text() for w in AboutDialog(window).findChildren(QtWidgets.QLabel)]
+    assert any(t.startswith("Version ") for t in labels)
+    app_dir = APP_ICON.parent
+    assert APP_ICON.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert (app_dir / "app.ico").read_bytes()[:4] == b"\x00\x00\x01\x00"
+    assert (app_dir / "app.icns").read_bytes()[:4] == b"icns"
+
+
+def test_tooltips_are_sentence_case() -> None:
+    import re
+    studio = Path(__file__).parents[1] / "src" / "valve_qc_merger" / "studio"
+    lower = [f"{p.name}: {m.group(0)}" for p in studio.glob("*.py")
+             for m in re.finditer(r'setToolTip\(\s*f?"[a-z][^"]{0,30}', p.read_text())]
+    assert lower == []
+
+
+def test_texture_table_fits_the_pane(window) -> None:
+    from PySide6.QtCore import Qt
+    table = window.inspector.textures
+    assert table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert table.textElideMode() == Qt.TextElideMode.ElideMiddle

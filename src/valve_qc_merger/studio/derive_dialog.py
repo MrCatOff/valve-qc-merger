@@ -178,7 +178,7 @@ class DeriveDialog(QDialog):
         name_row = kit.form()
         self.name_edit = QLineEdit()
         self.name_edit.setEnabled(len(sources) == 1 and name is None)
-        self.name_edit.setToolTip("name of the asset this makes (re-running keeps it)")
+        self.name_edit.setToolTip("Name of the asset this makes (re-running keeps it)")
         name_row.addRow("New asset", self.name_edit)
         layout.addLayout(name_row)
 
@@ -205,14 +205,14 @@ class DeriveDialog(QDialog):
         offsets_form = kit.form()
         self.weapon_offset = Vec3Edit(
             options.get("weapon_offset") or None,
-            tooltip="move the weapon relative to both hands (model space, at the grip "
+            tooltip="Move the weapon relative to both hands (model space, at the grip "
                     "frame); the fingers re-snug afterwards")
         offsets_form.addRow("Weapon (model space)", self.weapon_offset)
         grips = parse_grip_offsets(options.get("grip_offset", []))
         self.grip_offsets: dict[str, Vec3Edit] = {}
         for side in SIDES:
             edit = Vec3Edit(grips.get(side), tooltip=(
-                f"shift the {side} palm relative to the weapon, in palm axes: x fingers-"
+                f"Shift the {side} palm relative to the weapon, in palm axes: x fingers-"
                 "forward, y toward the thumb, z palm normal"))
             self.grip_offsets[side] = edit
             offsets_form.addRow(f"{side.capitalize()} palm (palm axes)", edit)
@@ -223,7 +223,7 @@ class DeriveDialog(QDialog):
         self.tuning_label.setProperty("role", "hint")
         self.save_tuning_button = QPushButton(f"Save to {tuning.FILE_NAME}")
         self.save_tuning_button.setToolTip(
-            f"store these offsets as {sources[0]}'s grip tuning: every later retarget of "
+            f"Store these offsets as {sources[0]}'s grip tuning: every later retarget of "
             "a weapon folder with this name uses them (CLI and builds too)")
         self.save_tuning_button.setEnabled(len(sources) == 1)
         self.save_tuning_button.clicked.connect(self.save_tuning)
@@ -278,9 +278,9 @@ class DeriveDialog(QDialog):
         self.run_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.run_button.setText("Run")
         self.run_button.setDefault(True)  # Enter runs; the mode cards never take it
-        self.run_button.setToolTip("run and close")
+        self.run_button.setToolTip("Run and close")
         self.apply_button = buttons.button(QDialogButtonBox.StandardButton.Apply)
-        self.apply_button.setToolTip("run and keep this dialog open: nudge the offsets, "
+        self.apply_button.setToolTip("Run and keep this dialog open: nudge the offsets, "
                                      "Apply again, compare in the viewport (B = before)")
         self.apply_button.clicked.connect(self._apply)
         buttons.accepted.connect(self._accept)

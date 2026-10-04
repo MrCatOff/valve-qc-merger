@@ -255,7 +255,7 @@ class ViewportPanel(QWidget):
         super().__init__(parent)
         self.viewport = Viewport()
         self.viewport.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.viewport.setToolTip("drag: orbit · right-drag: pan · wheel: zoom · "
+        self.viewport.setToolTip("Drag: orbit · right-drag: pan · wheel: zoom · "
                                  "double-click: frame · Space: play · ←/→: step a frame")
 
         # -- display toggles: a floating bar in the viewport's top-right corner
@@ -304,7 +304,7 @@ class ViewportPanel(QWidget):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.sequence_box.setMinimumContentsLength(12)
         self.sequence_box.setMaximumWidth(240)
-        self.sequence_box.setToolTip("sequence")
+        self.sequence_box.setToolTip("Sequence")
         self.sequence_box.currentIndexChanged.connect(self._sequence_changed)
         self.prev_button = self._tool("step-back", "Previous frame (←)")
         self.prev_button.clicked.connect(lambda: self.step(-1))
@@ -320,12 +320,12 @@ class ViewportPanel(QWidget):
         self.frame_label.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.frame_label.setMinimumWidth(64)
         self.frame_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.frame_label.setToolTip("frame / last frame")
+        self.frame_label.setToolTip("Frame / last frame")
         self.speed_box = QComboBox()
         for speed in SPEEDS:
             self.speed_box.addItem(f"{speed:g}×", speed)
         self.speed_box.setCurrentIndex(SPEEDS.index(1.0))
-        self.speed_box.setToolTip("playback speed")
+        self.speed_box.setToolTip("Playback speed")
 
         timeline = QHBoxLayout()
         timeline.setSpacing(6)
