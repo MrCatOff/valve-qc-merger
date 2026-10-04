@@ -410,6 +410,9 @@ QProgressBar {{
     color: {t['muted']}; text-align: center; max-height: 14px; font-size: 11px;
 }}
 QProgressBar::chunk {{ background: {t['accent']}; border-radius: 3px; }}
+QProgressBar[level="ok"]::chunk {{ background: {t['success']}; }}
+QProgressBar[level="warning"]::chunk {{ background: {t['warning']}; }}
+QProgressBar[level="error"]::chunk {{ background: {t['danger']}; }}
 
 /* -- menus / status bar ------------------------------------------------- */
 QMenuBar {{ background: {t['bg']}; color: {t['text']}; }}

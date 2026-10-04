@@ -243,6 +243,8 @@ class MainWindow(QMainWindow):
         self.act_import_dec = project_menu.addAction("Import decompiled folder…",
                                                      self.import_decompiled_folder)
         project_menu.addSeparator()
+        self.act_server = project_menu.addAction("Server budget && doctor…", self.show_server,
+                                                 QKeySequence("Ctrl+Shift+S"))
         self.act_settings = project_menu.addAction("Settings…", self.edit_settings)
         self.act_reveal = project_menu.addAction("Show project folder",
                                                  lambda: self._open_path(self.project.root))
@@ -293,11 +295,11 @@ class MainWindow(QMainWindow):
         ("act_new_category", "folder-plus", ""), ("act_new_build", "package-plus", "New build"),
         ("act_plan_build", "list-checks", "Plan"), ("act_run_build", "play", "Run"),
         ("act_compile_build", "hammer", "Compile"), ("act_deploy_build", "rocket", "Deploy"),
-        ("act_delete_build", "trash-2", ""),
+        ("act_delete_build", "trash-2", ""), ("act_server", "gauge", "Server"),
     ]
     TOOLBAR = ["act_import_mdl", "act_derive", "act_rederive", None, "act_new_build",
                "act_plan_build", "act_run_build", "act_compile_build", "act_deploy_build",
-               "stretch", "act_find", "act_settings"]
+               None, "act_server", "stretch", "act_find", "act_settings"]
 
     def _build_toolbar(self) -> None:
         for attr, name, label in self.ACTION_ICONS:
@@ -349,6 +351,24 @@ class MainWindow(QMainWindow):
         help_menu.addSeparator()
         self.act_about = help_menu.addAction("About valve-qc-merger Studio", self.show_about)
 
+    def show_server(self) -> None:
+        """Project ▸ Server: precache budget per map + the mod-folder doctor
+        (one window, refreshed every time it is shown)."""
+        from valve_qc_merger.studio.server_window import ServerWindow
+        if self.project is None:
+            return
+        window = getattr(self, "server_window", None)
+        if window is None or window.project is not self.project:
+            if window is not None:
+                window.close()
+            window = ServerWindow(self.project, self)
+            self.server_window = window
+        else:
+            window.refresh()
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
     def show_shortcuts(self) -> None:
         help_dialogs.ShortcutsDialog(self.menuBar(), self).exec()
 
@@ -384,7 +404,7 @@ class MainWindow(QMainWindow):
         idle = not self.jobs.busy
         for action in (self.act_import_mdl, self.act_import_mdl_dir, self.act_import_dec,
                        self.act_settings, self.act_reveal, self.act_close, self.act_find,
-                       self.act_new_category, self.act_new_build):
+                       self.act_new_category, self.act_new_build, self.act_server):
             action.setEnabled(has and idle)
         # what acts on the selection is enabled only when there is one
         asset = has and bool(self.explorer.selected_assets())
@@ -445,6 +465,10 @@ class MainWindow(QMainWindow):
         self.set_project(None)
 
     def set_project(self, project: Project | None) -> None:
+        window = getattr(self, "server_window", None)
+        if window is not None:  # it belongs to the previous project
+            window.close()
+            self.server_window = None
         self.project = project
         self._info_cache.clear()
         self._scene_cache.clear()
@@ -1234,6 +1258,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{title}: {payload}", 8000)
         self._report_job(title, ok, str(payload) if not ok else "", seconds,
                          self.log.warnings - warnings, self.log.errors - errors)
+        window = getattr(self, "server_window", None)
+        if window is not None and window.isVisible():
+            window.refresh()  # a build ran: new outputs, new budget
         if self.project is not None:
             self._info_cache.clear()
             self._scene_cache.clear()

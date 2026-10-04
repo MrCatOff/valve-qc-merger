@@ -147,6 +147,12 @@ class Settings:
     hlam: str | None = None
     game_dir: str | None = None  # the mod folder (…/cstrike): Deploy copies there
     deploy_after_compile: bool = False
+    # server budget: what the game DLL + plugins precache (the studio cannot
+    # see those) and where plugins put the view models' client sounds
+    extra_models: int = 0
+    extra_sounds: int = 0
+    extra_generic: int = 0
+    client_sounds: str = "generic"  # generic (ReHLDS 4096) | sound
 
 
 # where Deploy puts a build's models, under the game folder
@@ -278,7 +284,11 @@ class Project:
         project.settings = Settings(
             studiomdl=settings.get("studiomdl"), hlam=settings.get("hlam"),
             game_dir=settings.get("game_dir"),
-            deploy_after_compile=bool(settings.get("deploy_after_compile", False)))
+            deploy_after_compile=bool(settings.get("deploy_after_compile", False)),
+            extra_models=int(settings.get("extra_models", 0)),
+            extra_sounds=int(settings.get("extra_sounds", 0)),
+            extra_generic=int(settings.get("extra_generic", 0)),
+            client_sounds=str(settings.get("client_sounds", "generic")))
         project.categories = list(meta.get("categories", []))
         for entry in data.get("assets", []):
             asset = Asset(**entry)
@@ -298,7 +308,11 @@ class Project:
             "settings": {"studiomdl": self.settings.studiomdl,
                          "hlam": self.settings.hlam,
                          "game_dir": self.settings.game_dir,
-                         "deploy_after_compile": self.settings.deploy_after_compile},
+                         "deploy_after_compile": self.settings.deploy_after_compile,
+                         "extra_models": self.settings.extra_models,
+                         "extra_sounds": self.settings.extra_sounds,
+                         "extra_generic": self.settings.extra_generic,
+                         "client_sounds": self.settings.client_sounds},
             "assets": [_asset_dict(a) for a in sorted(self.assets.values(),
                                                       key=lambda a: (a.kind, a.name))],
             "builds": [_build_dict(b) for b in self.builds.values()],

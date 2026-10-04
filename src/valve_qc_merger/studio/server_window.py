@@ -1,0 +1,366 @@
+"""Project ▸ Server: the precache budget per map and the mod-folder doctor."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from valve_qc_merger.project import Project
+from valve_qc_merger.server.bsp import BspError, MapResources, read_map_resources
+from valve_qc_merger.server.budget import BudgetLine, budget, map_files, project_load
+from valve_qc_merger.server.doctor import SEVERITIES, Issue, check_folder, summary
+from valve_qc_merger.studio import dialog_kit as kit
+from valve_qc_merger.studio import theme
+from valve_qc_merger.studio.icons import icon
+
+NO_MAP = "No map — the project and your estimates"
+SEVERITY_GLYPH = {"error": "✕", "warning": "▲", "info": "●"}
+SEVERITY_TOKEN = {"error": "danger", "warning": "warning", "info": "muted"}
+LEVEL_TOKEN = {"ok": "success", "warning": "warning", "error": "danger"}
+
+
+def _item(text: object, tip: str = "") -> QTableWidgetItem:
+    item = QTableWidgetItem(str(text))
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    if tip:
+        item.setToolTip(tip)
+    return item
+
+
+class BudgetBar(QWidget):
+    """One limit: title, used / limit, a bar coloured by level, the parts."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QGridLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(2)
+        self.title = QLabel()
+        self.title.setStyleSheet("font-weight: 600;")
+        self.numbers = QLabel()
+        self.numbers.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(8)
+        self.parts = kit.hint("")
+        layout.addWidget(self.title, 0, 0)
+        layout.addWidget(self.numbers, 0, 1)
+        layout.addWidget(self.bar, 1, 0, 1, 2)
+        layout.addWidget(self.parts, 2, 0, 1, 2)
+        layout.setColumnStretch(0, 1)
+
+    def show_line(self, line: BudgetLine) -> None:
+        self.title.setText(line.title)
+        used = line.used
+        free = line.limit - used
+        self.numbers.setText(f"{used} / {line.limit}" + (f"   ({free} free)" if free >= 0
+                                                         else f"   ({-free} over!)"))
+        self.numbers.setStyleSheet(f"color: {theme.TOKENS[LEVEL_TOKEN[line.level]]};")
+        self.bar.setRange(0, line.limit)
+        self.bar.setValue(min(used, line.limit))
+        self.bar.setProperty("level", line.level)
+        self.bar.style().unpolish(self.bar)
+        self.bar.style().polish(self.bar)
+        self.parts.setText("  ·  ".join(f"{label} {count}" for label, count in line.parts
+                                        if count))
+
+
+class ServerWindow(QDialog):
+    """Budget (slots per map) and Doctor (problems in the mod folder)."""
+
+    settings_changed = Signal()
+
+    def __init__(self, project: Project, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.project = project
+        self.setWindowTitle("Server")
+        self._maps: dict[str, MapResources | None] = {}
+        self.issues: list[Issue] = []
+        layout = kit.dialog_layout(self)
+        layout.addWidget(kit.header(
+            "Server", "Precache budgets and mod-folder health for ReHLDS + ReGameDLL + "
+            "ReAPI: models 512, sounds 512, generic 4096."))
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, 1)
+        self.tabs.addTab(self._budget_tab(), icon("gauge"), "Budget")
+        self.tabs.addTab(self._doctor_tab(), icon("stethoscope"), "Doctor")
+        self.resize(820, 720)
+        self.refresh()
+
+    # -- budget --------------------------------------------------------------
+    def _budget_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 12, 4, 4)
+        layout.setSpacing(8)
+        row = kit.form()
+        self.map_box = QComboBox()
+        self.map_box.currentIndexChanged.connect(lambda _i: self._show_budget())
+        row.addRow("Map", self.map_box)
+        layout.addLayout(row)
+        self.no_game_hint = kit.hint("Set the game folder in Project ▸ Settings to count "
+                                     "each map's brush models, sprites and sounds.")
+        layout.addWidget(self.no_game_hint)
+
+        layout.addWidget(kit.section("Game DLL + plugins"))
+        layout.addWidget(kit.hint(
+            "The studio sees the map and this project's builds, not what ReGameDLL and "
+            "your AMXX plugins precache — enter those counts (e.g. from a server with "
+            "every plugin loaded) for a true total."))
+        estimates = QHBoxLayout()
+        self.extra: dict[str, QSpinBox] = {}
+        for key, title in (("models", "Models"), ("sounds", "Sounds"),
+                           ("generic", "Generic")):
+            spin = QSpinBox()
+            spin.setRange(0, 9999)
+            spin.setValue(int(getattr(self.project.settings, f"extra_{key}")))
+            spin.valueChanged.connect(self._estimates_changed)
+            self.extra[key] = spin
+            estimates.addWidget(QLabel(title))
+            estimates.addWidget(spin)
+            estimates.addSpacing(10)
+        self.client_box = QComboBox()
+        self.client_box.addItem("Client sounds → precache_generic (ReHLDS)", "generic")
+        self.client_box.addItem("Client sounds → precache_sound", "sound")
+        self.client_box.setCurrentIndex(0 if self.project.settings.client_sounds != "sound"
+                                        else 1)
+        self.client_box.setToolTip(
+            "Where your weapon plugin precaches the sounds view models play (event "
+            "5004). On ReHLDS generic has 4096 slots, so they do not eat the 512 sounds.")
+        self.client_box.currentIndexChanged.connect(self._estimates_changed)
+        estimates.addStretch(1)
+        layout.addLayout(estimates)
+        layout.addWidget(self.client_box, 0, Qt.AlignmentFlag.AlignLeft)
+
+        layout.addWidget(kit.section("Slots"))
+        self.bars = {key: BudgetBar() for key in ("models", "sounds", "generic")}
+        for bar in self.bars.values():
+            layout.addWidget(bar)
+        self.saved_label = QLabel()
+        theme.set_role(self.saved_label, "success")
+        self.saved_label.setWordWrap(True)
+        layout.addWidget(self.saved_label)
+
+        layout.addWidget(kit.section("Every map"))
+        self.maps_table = QTableWidget(0, 5)
+        self.maps_table.setHorizontalHeaderLabels(["Map", "Models", "Sounds", "Generic",
+                                                   "Status"])
+        self.maps_table.verticalHeader().setVisible(False)
+        self.maps_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch)
+        self.maps_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.maps_table.cellDoubleClicked.connect(
+            lambda row, _c: self.map_box.setCurrentText(self.maps_table.item(row, 0).text()))
+        layout.addWidget(self.maps_table, 1)
+        return page
+
+    def _estimates_changed(self) -> None:
+        settings = self.project.settings
+        for key, spin in self.extra.items():
+            setattr(settings, f"extra_{key}", spin.value())
+        settings.client_sounds = self.client_box.currentData()
+        self.project.save()
+        self.settings_changed.emit()
+        self._show_budget()
+        self._fill_maps_table()
+
+    def refresh(self) -> None:
+        """Re-read the maps and the builds (after a build ran, settings changed)."""
+        self.load = project_load(self.project)
+        game = Path(self.project.settings.game_dir) if self.project.settings.game_dir else None
+        self._maps = {}
+        for path in map_files(game):
+            try:
+                self._maps[path.stem] = read_map_resources(path)
+            except (BspError, OSError):
+                self._maps[path.stem] = None
+        current = self.map_box.currentText()
+        self.map_box.blockSignals(True)
+        self.map_box.clear()
+        self.map_box.addItem(NO_MAP)
+        for name in self._maps:
+            self.map_box.addItem(name)
+        if current and self.map_box.findText(current) >= 0:
+            self.map_box.setCurrentText(current)
+        self.map_box.blockSignals(False)
+        self.no_game_hint.setVisible(not self._maps)
+        self.doctor_folder.setText(self.project.settings.game_dir or "")
+        self._show_budget()
+        self._fill_maps_table()
+
+    def _lines(self, map_resources: MapResources | None) -> dict[str, BudgetLine]:
+        extra = {key: spin.value() for key, spin in self.extra.items()}
+        return budget(map_resources, self.load, extra=extra,
+                      client_sounds_as=self.client_box.currentData())
+
+    def _show_budget(self) -> None:
+        name = self.map_box.currentText()
+        lines = self._lines(self._maps.get(name) if name != NO_MAP else None)
+        for key, bar in self.bars.items():
+            bar.show_line(lines[key])
+        builds = [b for b in self.load.builds if b.outputs]
+        if builds:
+            detail = ", ".join(f"{b.name}: {b.inputs} → {len(b.outputs)}" for b in builds)
+            self.saved_label.setText(f"Merging saved {self.load.saved} model slot(s) "
+                                     f"({detail}).")
+        else:
+            self.saved_label.setText("Run a build to see the model slots merging saves.")
+
+    def _fill_maps_table(self) -> None:
+        self.maps_table.setRowCount(len(self._maps))
+        for row, (name, res) in enumerate(self._maps.items()):
+            lines = self._lines(res)
+            self.maps_table.setItem(row, 0, _item(name))
+            worst = "ok"
+            for column, key in enumerate(("models", "sounds", "generic"), 1):
+                line = lines[key]
+                cell = _item(f"{line.used} / {line.limit}")
+                cell.setForeground(theme.color(LEVEL_TOKEN[line.level]))
+                self.maps_table.setItem(row, column, cell)
+                if line.level == "error" or (line.level == "warning" and worst == "ok"):
+                    worst = line.level
+            status = {"ok": "fits", "warning": "near a limit",
+                      "error": "over a limit"}[worst] if res is not None else "unreadable"
+            cell = _item(status)
+            cell.setForeground(theme.color(LEVEL_TOKEN[worst] if res is not None
+                                           else "muted"))
+            self.maps_table.setItem(row, 4, cell)
+
+    # -- doctor --------------------------------------------------------------
+    def _doctor_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 12, 4, 4)
+        layout.setSpacing(8)
+        layout.addWidget(kit.hint(
+            "Scans a mod folder (models, sprites, sound, maps) for what breaks or bloats a "
+            "server: missing T.mdl / 01.mdl companions and sounds models play, paths over "
+            "63 characters, upper case (the Linux server is case-sensitive), non-ASCII, "
+            "oversized textures, sound formats the engine mangles, identical files."))
+        row = QHBoxLayout()
+        self.doctor_folder = QLineEdit()
+        self.doctor_folder.setPlaceholderText("mod folder, e.g. …/cstrike")
+        pick = QPushButton(icon("folder-open"), "")
+        pick.setToolTip("Choose the folder")
+        pick.clicked.connect(self._pick_folder)
+        self.scan_button = QPushButton(icon("stethoscope", theme.TOKENS["on_accent"]), "Scan")
+        theme.set_primary(self.scan_button)
+        self.scan_button.clicked.connect(self.scan)
+        for button in (pick, self.scan_button):
+            button.setAutoDefault(False)  # Enter in the path field must not pick a folder
+        row.addWidget(self.doctor_folder, 1)
+        row.addWidget(pick)
+        row.addWidget(self.scan_button)
+        layout.addLayout(row)
+        filters = QHBoxLayout()
+        self.summary_label = QLabel("Not scanned yet.")
+        self.severity_box = QComboBox()
+        self.severity_box.addItem("Everything", "")
+        for severity in SEVERITIES:
+            self.severity_box.addItem(f"{severity.capitalize()}s only", severity)
+        self.severity_box.currentIndexChanged.connect(lambda _i: self._fill_issues())
+        self.issue_filter = QLineEdit()
+        self.issue_filter.setPlaceholderText("Filter by path or text")
+        self.issue_filter.setClearButtonEnabled(True)
+        self.issue_filter.textChanged.connect(lambda _t: self._fill_issues())
+        copy = QPushButton(icon("copy"), "Copy report")
+        copy.setAutoDefault(False)
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.report()))
+        filters.addWidget(self.summary_label, 1)
+        filters.addWidget(self.severity_box)
+        filters.addWidget(self.issue_filter)
+        filters.addWidget(copy)
+        layout.addLayout(filters)
+        self.issues_table = QTableWidget(0, 4)
+        self.issues_table.setHorizontalHeaderLabels(["", "Kind", "File", "Problem"])
+        self.issues_table.verticalHeader().setVisible(False)
+        header = self.issues_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.issues_table.setColumnWidth(2, 260)
+        self.issues_table.setWordWrap(False)
+        self.issues_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.issues_table.setToolTip("Double-click: show the file in its folder")
+        self.issues_table.cellDoubleClicked.connect(self._reveal_issue)
+        layout.addWidget(self.issues_table, 1)
+        return page
+
+    def _pick_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Mod folder", self.doctor_folder.text())
+        if folder:
+            self.doctor_folder.setText(folder)
+
+    def scan(self) -> None:
+        folder = Path(self.doctor_folder.text().strip())
+        if not folder.is_dir():
+            self.summary_label.setText("Choose an existing mod folder first.")
+            return
+        from valve_qc_merger.sound.wav import wav_problems
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.issues = check_folder(folder, wav_check=wav_problems)
+        finally:
+            QApplication.restoreOverrideCursor()
+        counts = summary(self.issues)
+        self.summary_label.setText(
+            "Nothing to fix." if not self.issues else
+            "  ·  ".join(f"{SEVERITY_GLYPH[s]} {counts[s]} {s}{'s' * (counts[s] != 1)}"
+                         for s in SEVERITIES if counts[s]))
+        self._fill_issues()
+
+    def shown_issues(self) -> list[Issue]:
+        severity = self.severity_box.currentData()
+        needle = self.issue_filter.text().strip().lower()
+        return [i for i in self.issues
+                if (not severity or i.severity == severity)
+                and (not needle or needle in i.path.lower() or needle in i.message.lower())]
+
+    def _fill_issues(self) -> None:
+        shown = self.shown_issues()
+        self.issues_table.setRowCount(len(shown))
+        for row, issue in enumerate(shown):
+            glyph = _item(SEVERITY_GLYPH[issue.severity], issue.severity)
+            glyph.setForeground(theme.color(SEVERITY_TOKEN[issue.severity]))
+            self.issues_table.setItem(row, 0, glyph)
+            self.issues_table.setItem(row, 1, _item(issue.category))
+            self.issues_table.setItem(row, 2, _item(issue.path, issue.path))
+            self.issues_table.setItem(row, 3, _item(issue.message, issue.message))
+
+    def _reveal_issue(self, row: int, _column: int) -> None:
+        item = self.issues_table.item(row, 2)
+        if item is None:
+            return
+        target = Path(self.doctor_folder.text().strip()) / item.text()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.parent)))
+
+    def report(self) -> str:
+        return "\n".join(f"[{i.severity}] {i.category}: {i.path} — {i.message}"
+                         for i in self.shown_issues())
+
+
+__all__ = ["ServerWindow"]
