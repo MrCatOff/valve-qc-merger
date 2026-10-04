@@ -129,3 +129,20 @@ slots (`precache_model`, `VQM_SPRITES`); weapon HUD files (`weapon_*.txt`
 and the library sheets they use) are download-only (**generic**,
 `precache_generic`, `VQM_HUD_FILES`). The package copies the library into
 `cstrike/sprites/`. `valve_qc_merger.sprite` (`spr`, `hud`) is Qt-free.
+
+## Starting and filling a project
+
+- **File ▸ New project** starts from a template: *Empty*; *Classic weapons*
+  (categories pistols, rifles, smgs, shotguns, snipers, machine guns, knives,
+  grenades — Explorer ▸ a category ▸ *Create builds* once it has models);
+  *Zombie server* (categories *weapons* and *zombie hands*, a zombie-hands
+  build, and weapon builds: view on our hands, player-held, world; client
+  sounds through `precache_generic`).
+- **Project ▸ Import server folder…** brings a mod folder in as one job:
+  every model of `models/` (decompiled in the app, one by one — names already
+  in the project are skipped, a broken model is reported and the rest goes
+  on), the sounds of `sound/` (by default only those the imported models
+  play — a stock folder holds thousands — or all, or none) and the weapon
+  HUDs of `sprites/` (`weapon_*.txt` and the sheets they draw from), into a
+  category of your choice. `valve_qc_merger.project.workflow` does it.
+- The Explorer filter (Ctrl+F) searches sounds and sprites too.

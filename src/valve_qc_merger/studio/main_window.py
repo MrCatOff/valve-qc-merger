@@ -266,6 +266,8 @@ class MainWindow(QMainWindow):
                                                          self.import_mdl_folder)
         self.act_import_dec = project_menu.addAction("Import decompiled folder…",
                                                      self.import_decompiled_folder)
+        self.act_import_server = project_menu.addAction("Import server folder…",
+                                                        self.import_server_folder)
         self.act_import_sounds = project_menu.addAction("Import sounds…",
                                                         self.import_sound_files)
         self.act_import_sound_dir = project_menu.addAction("Import sound folder…",
@@ -386,6 +388,39 @@ class MainWindow(QMainWindow):
             lambda: QDesktopServices.openUrl(QUrl(help_dialogs.DOCS_URL)))
         help_menu.addSeparator()
         self.act_about = help_menu.addAction("About valve-qc-merger Studio", self.show_about)
+
+    def import_server_folder(self) -> None:
+        """Project ▸ Import server folder: models + the sounds they play + the
+        weapon HUDs of a mod folder, as one background job."""
+        from valve_qc_merger.project.workflow import import_server_folder
+        from valve_qc_merger.studio.dialogs import ImportServerDialog
+        project = self.project
+        if project is None or self.jobs.busy:
+            return
+        dialog = ImportServerDialog(project.settings.game_dir or "",
+                                    sorted(project.categories, key=str.lower), self)
+        if dialog.exec() != ImportServerDialog.DialogCode.Accepted:
+            return
+        root = Path(dialog.folder_edit.text().strip())
+        if not root.is_dir():
+            QMessageBox.warning(self, "Import server folder", f"{root} is not a folder.")
+            return
+        options = {"models": dialog.models_box.isChecked(),
+                   "sounds": dialog.sounds_box.currentData(),
+                   "sprites": dialog.sprites_box.isChecked(),
+                   "category": dialog.category_box.currentData()}
+
+        def work(reporter: Reporter) -> str:
+            result = import_server_folder(project, root, reporter=reporter, **options)
+            for line in result.failed:
+                reporter.log(f"  warn: {line}")
+            summary = (f"{len(result.models)} model(s), {len(result.sounds)} sound(s), "
+                       f"{len(result.sprites)} sprite file(s)"
+                       + (f"; {len(result.skipped)} already here" if result.skipped else ""))
+            reporter.log(f"  imported {summary}")
+            return summary
+
+        self.jobs.start(f"Import {root.name}", work)
 
     # -- sounds ----------------------------------------------------------------
     def import_sound_files(self) -> None:
@@ -684,7 +719,7 @@ class MainWindow(QMainWindow):
                        self.act_new_category, self.act_new_build, self.act_server,
                        self.act_import_sounds, self.act_import_sound_dir,
                        self.act_export_package, self.act_import_sprites,
-                       self.act_new_sprite, self.act_new_hud):
+                       self.act_new_sprite, self.act_new_hud, self.act_import_server):
             action.setEnabled(has and idle)
         # what acts on the selection is enabled only when there is one
         asset = has and bool(self.explorer.selected_assets())
@@ -719,7 +754,9 @@ class MainWindow(QMainWindow):
         root, name = dialog.target()
         try:
             project = Project.create(root, name)
-        except (ProjectError, OSError) as exc:
+            from valve_qc_merger.project.workflow import apply_template
+            apply_template(project, dialog.template())
+        except (ProjectError, OSError, ValueError) as exc:
             QMessageBox.warning(self, "New project", str(exc))
             return
         self.settings.setValue("last_folder", str(root.parent))
