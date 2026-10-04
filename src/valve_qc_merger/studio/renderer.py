@@ -85,10 +85,70 @@ out vec4 frag;
 void main() { frag = vec4(v_col, 1.0); }
 """
 
+# full-screen vertical gradient behind the model (no vertex buffer: the
+# triangle comes from gl_VertexID)
+_BG_VS = """#version 330 core
+out float v_t;
+void main() {
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    v_t = p.y * 0.5;
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+"""
+_BG_FS = """#version 330 core
+in float v_t;
+uniform vec3 u_top;
+uniform vec3 u_bottom;
+out vec4 frag;
+void main() { frag = vec4(mix(u_bottom, u_top, clamp(v_t, 0.0, 1.0)), 1.0); }
+"""
+
 BONE_COLOR = (1.0, 0.75, 0.1)
 JOINT_COLOR = (1.0, 0.95, 0.4)
 ATTACH_COLOR = (0.2, 0.9, 1.0)
 HIGHLIGHT_COLOR = (1.0, 0.2, 0.25)
+GRID_MINOR = (0.19, 0.21, 0.26)
+GRID_MAJOR = (0.27, 0.30, 0.37)
+GRID_X = (0.62, 0.28, 0.30)  # the X and Y axes through the origin
+GRID_Y = (0.30, 0.56, 0.36)
+
+
+def _nice_step(raw: float) -> float:
+    """1, 2 or 5 times a power of ten, at least ``raw``."""
+    if raw <= 0:
+        return 1.0
+    power = 10.0 ** math.floor(math.log10(raw))
+    for factor in (1.0, 2.0, 5.0, 10.0):
+        if raw <= factor * power:
+            return factor * power
+    return 10.0 * power
+
+
+def grid_lines(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
+    """Floor grid under a model's bounds: ``(N, 6)`` line vertices (xyz +
+    rgb) on the plane z = lo.z, every fifth line major, axes coloured."""
+    radius = float(np.linalg.norm(hi - lo)) / 2 or 10.0
+    step = _nice_step(radius / 4)
+    half = math.ceil(radius * 1.6 / step) * step
+    cx = round(float(lo[0] + hi[0]) / 2 / step) * step
+    cy = round(float(lo[1] + hi[1]) / 2 / step) * step
+    z = float(lo[2])
+    out: list[list[float]] = []
+    count = int(round(half / step))
+    for i in range(-count, count + 1):
+        for axis in (0, 1):
+            value = (cx if axis == 0 else cy) + i * step
+            if abs(value) < step * 1e-6:
+                colour = GRID_Y if axis == 0 else GRID_X  # x = 0 is the Y axis
+            else:
+                colour = GRID_MAJOR if round(value / step) % 5 == 0 else GRID_MINOR
+            if axis == 0:
+                a, b = (value, cy - half, z), (value, cy + half, z)
+            else:
+                a, b = (cx - half, value, z), (cx + half, value, z)
+            out.append([*a, *colour])
+            out.append([*b, *colour])
+    return np.array(out, dtype=np.float32)
 
 
 @dataclass
@@ -146,7 +206,9 @@ class ViewState:
     wireframe: bool = False
     textured: bool = True
     highlight_bone: int | None = None  # drawn on top even with bones hidden
-    background: tuple[float, float, float] = (0.24, 0.26, 0.29)
+    show_grid: bool = True  # floor grid under the model (orbit camera only)
+    background_top: tuple[float, float, float] = (0.17, 0.19, 0.235)
+    background_bottom: tuple[float, float, float] = (0.075, 0.082, 0.10)
 
 
 class _GpuBatch:
@@ -170,6 +232,7 @@ class Renderer:
         self._batches: list[_GpuBatch] = []
         self._textures: dict[str, QOpenGLTexture] = {}
         self._lines: _GpuBatch | None = None
+        self._grid: tuple[int, np.ndarray] | None = None  # (id(scene), lines)
         self._white: QOpenGLTexture | None = None
 
     # -- setup -------------------------------------------------------------
@@ -177,6 +240,9 @@ class Renderer:
         self.gl = QOpenGLContext.currentContext().functions()
         self.mesh_program = self._program(_MESH_VS, _MESH_FS)
         self.line_program = self._program(_LINE_VS, _LINE_FS)
+        self.bg_program = self._program(_BG_VS, _BG_FS)
+        self._bg_vao = QOpenGLVertexArrayObject()
+        self._bg_vao.create()
         self._polygon_mode = None
         try:  # wireframe needs desktop GL; optional
             from PySide6.QtOpenGL import QOpenGLFunctions_3_3_Core, QOpenGLVersionFunctionsFactory
@@ -214,7 +280,11 @@ class Renderer:
                 gpu.vao.destroy()
         if self._white is not None:
             self._white.destroy()
+        if getattr(self, "_bg_vao", None) is not None:
+            self._bg_vao.destroy()
+            self._bg_vao = None
         self._lines = self._white = None
+        self._grid = None
         self._ready = False
 
     def _release(self) -> None:
@@ -266,13 +336,25 @@ class Renderer:
         gl.glDisable(GL_SCISSOR_TEST)
         gl.glColorMask(True, True, True, True)
         gl.glViewport(0, 0, width, height)
-        gl.glClearColor(*state.background, 1.0)
+        gl.glClearColor(*state.background_bottom, 1.0)
         gl.glClearDepthf(1.0)
         gl.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        if not self._ready:
+            return
+        self._draw_background(state)
         scene = self.scene
-        if scene is None or not self._ready:
+        if scene is None:
             return
         mvp = state.camera.projection(width / max(height, 1)) * state.camera.view()
+        if state.show_grid and not state.camera.first_person and self._lines is not None:
+            if self._grid is None or self._grid[0] != id(scene):
+                self._grid = (id(scene), grid_lines(*scene.bounds()))
+            line = self.line_program
+            line.bind()
+            line.setUniformValue("u_mvp", mvp)
+            line.setUniformValue("u_point", 1.0)
+            self._draw(line, self._lines, self._grid[1], GL_LINES, (3, 3))
+            line.release()
         rot, trans = scene.world(*scene.local_pose(
             state.sequence if scene.sequences else None, state.frame))
 
@@ -355,6 +437,21 @@ class Renderer:
                        GL_LINES, (3, 3))
             line.release()
             gl.glEnable(GL_DEPTH_TEST)
+
+    def _draw_background(self, state: ViewState) -> None:
+        gl = self.gl
+        gl.glDisable(GL_DEPTH_TEST)
+        gl.glDepthMask(False)
+        program = self.bg_program
+        program.bind()
+        program.setUniformValue("u_top", QVector3D(*state.background_top))
+        program.setUniformValue("u_bottom", QVector3D(*state.background_bottom))
+        self._bg_vao.bind()
+        gl.glDrawArrays(GL_TRIANGLES, 0, 3)
+        self._bg_vao.release()
+        program.release()
+        gl.glDepthMask(True)
+        gl.glEnable(GL_DEPTH_TEST)
 
     def _draw(self, program: QOpenGLShaderProgram, gpu: _GpuBatch, data: np.ndarray,
               mode: int, layout: tuple[int, ...]) -> None:

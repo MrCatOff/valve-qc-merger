@@ -233,14 +233,24 @@ offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
 
 The centre of the window shows the selected asset (`studio.viewport`):
 
-- **Playback**: sequence list, play/pause, frame slider, speed (0.1–2×).
-  Frames interpolate like the engine (positions linearly, rotations by
-  quaternion slerp); looping sequences wrap, others replay.
+- **Look**: a dark vertical gradient, a floor grid on the model's lowest
+  point (step 1/2/5×10ⁿ sized to the model, every fifth line brighter, the X
+  axis red and the Y axis green; hidden in first person) and an XYZ gizmo in
+  the bottom-left corner that turns with the camera. With nothing loaded it
+  says what to do and how the mouse works.
+- **Display bar** (floating, top-right): textures, wireframe, bones (lines +
+  joints, drawn on top), attachments, floor grid; **Frame** (also
+  double-click / `F`) and **First person** (the eye at the model origin
+  looking down SMD -Y — what the game shows for a v_ model); **Before**
+  (`B`, derived assets) — while it shows the source a "BEFORE · <source>"
+  badge sits in the top-left corner.
+- **Timeline** (under the viewport): sequence, previous frame / play-pause /
+  next frame, scrubber, frame counter, speed (0.1–2×). Frames interpolate
+  like the engine (positions linearly, rotations by quaternion slerp);
+  looping sequences wrap, others replay. Keys with the viewport focused:
+  `Space` play/pause, `←`/`→` one frame (pauses), `F` frame.
 - **Bodygroups**: one selector per group with more than one entry (`blank`
-  included).
-- **Display**: textures, bones (lines + joints, drawn on top), attachments,
-  wireframe; **Frame** (also double-click) and **First person** (the eye at
-  the model origin looking down SMD -Y — what the game shows for a v_ model).
+  included), in a strip under the timeline.
 - **Mouse**: left drag orbits, right/middle drag pans, wheel zooms.
 
 Design:
@@ -257,6 +267,10 @@ Design:
   context and left the depth mask off, so `glClear` skipped the depth buffer
   and models drew see-through. GL objects are freed on the context's
   `aboutToBeDestroyed`.
+- The gizmo and the empty-state text are painted with QPainter after the 3D
+  pass (depth test off first). `QWidget.grab()` of the window misses them,
+  so `tools/ui_screenshots.py` lays `grabFramebuffer()` and the floating
+  bar over the window grab.
 - `render_offscreen(scene, state, w, h)` draws the same into a framebuffer
   object (tests, thumbnails); it needs a platform with OpenGL — Qt's
   `offscreen` plugin has none, the native one works without showing a

@@ -148,6 +148,15 @@ QFrame[role="card"] {{
 }}
 QFrame[role="card"] QLabel {{ background: transparent; }}
 QWidget[role="dock-bar"] {{ background: {t['bg']}; border-bottom: 1px solid {t['border']}; }}
+QWidget[role="overlay"] {{
+    background: rgba(18, 20, 25, 0.86); border: 1px solid {t['border_strong']};
+    border-radius: 8px;
+}}
+QWidget[role="divider"] {{ background: {t['border_strong']}; }}
+QLabel[role="badge"] {{
+    background: {t['warning']}; color: #1b1300; border-radius: 4px;
+    padding: 3px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+}}
 QWidget[role="page"] {{ background: {t['bg']}; }}
 
 /* -- buttons ------------------------------------------------------------ */

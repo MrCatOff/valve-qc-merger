@@ -20,9 +20,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 def main(out: Path) -> int:
-    from PySide6.QtCore import QSettings, QTimer
-    from PySide6.QtGui import QSurfaceFormat
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import QSettings, Qt, QTimer
+    from PySide6.QtGui import QPainter, QSurfaceFormat
+    from PySide6.QtWidgets import QApplication, QWidget
 
     from valve_qc_merger.studio.renderer import gl_format
     QSurfaceFormat.setDefaultFormat(gl_format())
@@ -53,7 +53,20 @@ def main(out: Path) -> int:
 
     def snap(name: str) -> None:
         app.processEvents()
-        window.grab().save(str(out / f"{name}.png"))
+        shot = window.grab()
+        gl = window.viewport.viewport
+        if gl.isVisible():  # QWidget.grab misses what QPainter draws over GL
+            frame = gl.grabFramebuffer()
+            frame.setDevicePixelRatio(shot.devicePixelRatio())
+            painter = QPainter(shot)
+            painter.drawImage(gl.mapTo(window, gl.rect().topLeft()), frame)
+            direct = Qt.FindChildOption.FindDirectChildrenOnly
+            for child in gl.findChildren(QWidget, options=direct):
+                if child.isVisible():  # the floating toolbar and badges on top
+                    painter.drawPixmap(child.mapTo(window, child.rect().topLeft()),
+                                       child.grab())
+            painter.end()
+        shot.save(str(out / f"{name}.png"))
 
     def grab_dialog(dialog, name: str) -> None:  # noqa: ANN001
         dialog.show()

@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QPointF, Qt, QTimer, Signal
-from PySide6.QtGui import QMouseEvent, QWheelEvent
+from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QFontDatabase,
+    QKeySequence,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QShortcut,
+    QVector3D,
+    QWheelEvent,
+)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -16,11 +24,13 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from valve_qc_merger.studio import theme
+from valve_qc_merger.studio.icons import icon, pixmap
 from valve_qc_merger.studio.renderer import Renderer, ViewState, gl_format
 from valve_qc_merger.studio.scene import ModelScene
 
@@ -69,7 +79,6 @@ class Viewport(QOpenGLWidget):
 
     def paintGL(self) -> None:  # noqa: N802 - Qt override
         if self.gl_error:
-            from PySide6.QtGui import QPainter
             painter = QPainter(self)
             painter.fillRect(self.rect(), theme.color("panel"))
             painter.setPen(theme.color("muted"))
@@ -81,6 +90,64 @@ class Viewport(QOpenGLWidget):
             return
         ratio = self.devicePixelRatioF()
         self.renderer.render(int(self.width() * ratio), int(self.height() * ratio), self.state)
+        # QPainter draws on top in this same context: no depth test from the 3D pass
+        functions = self.context().functions()
+        functions.glDisable(0x0B71)  # GL_DEPTH_TEST
+        functions.glDepthMask(True)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self.scene is None:
+            self._paint_empty(painter)
+        else:
+            self._paint_axes(painter)
+        painter.end()
+
+    def _paint_empty(self, painter: QPainter) -> None:
+        """What to do when nothing is loaded (an asset not chosen yet)."""
+        centre = self.rect().center()
+        art = pixmap("box", theme.TOKENS["faint"], 44, scale=self.devicePixelRatioF(),
+                     stroke=1.5)
+        painter.drawPixmap(centre.x() - 22, centre.y() - 70, art)
+        painter.setPen(theme.color("muted"))
+        font = painter.font()
+        font.setPixelSize(15)
+        painter.setFont(font)
+        painter.drawText(self.rect().adjusted(20, 0, -20, -10),
+                         Qt.AlignmentFlag.AlignCenter, "Select an asset in the Explorer")
+        font.setPixelSize(12)
+        painter.setFont(font)
+        painter.setPen(theme.color("faint"))
+        painter.drawText(self.rect().adjusted(20, 44, -20, 0), Qt.AlignmentFlag.AlignCenter,
+                         "drag: orbit  ·  right-drag: pan  ·  wheel: zoom  ·  "
+                         "double-click: frame")
+
+    AXES = (((1.0, 0.0, 0.0), "X", "danger"), ((0.0, 1.0, 0.0), "Y", "success"),
+            ((0.0, 0.0, 1.0), "Z", "accent"))
+
+    def _paint_axes(self, painter: QPainter) -> None:
+        """A small XYZ gizmo in the bottom-left corner, turning with the camera."""
+        view = self.state.camera.view()
+        origin = QPointF(38, self.height() - 38)
+        length = 24.0
+        tips = []
+        for direction, name, token in self.AXES:
+            v = view.mapVector(QVector3D(*direction))
+            tips.append((v.z(), QPointF(origin.x() + v.x() * length,
+                                        origin.y() - v.y() * length), name, token))
+        for _depth, tip, name, token in sorted(tips, key=lambda t: t[0]):
+            colour = theme.color(token)
+            painter.setPen(QPen(colour, 2.0))
+            painter.drawLine(origin, tip)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(colour)
+            painter.drawEllipse(tip, 7.0, 7.0)
+            painter.setPen(theme.color("on_accent"))
+            font = painter.font()
+            font.setPixelSize(10)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(QRectF(tip.x() - 7, tip.y() - 7, 14, 14),
+                             Qt.AlignmentFlag.AlignCenter, name)
 
     # -- scene -------------------------------------------------------------
     def set_scene(self, scene: ModelScene | None, *, keep_view: bool = False) -> None:
@@ -146,6 +213,14 @@ class Viewport(QOpenGLWidget):
         self.update()
 
 
+def _divider() -> QWidget:
+    line = QWidget()
+    line.setFixedSize(1, 18)
+    theme.set_role(line, "divider")
+    line.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    return line
+
+
 def _strip(layout: QHBoxLayout) -> QScrollArea:
     """A one-line horizontal strip that scrolls instead of widening its
     parent: the viewport's control rows must never raise the central
@@ -179,32 +254,87 @@ class ViewportPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.viewport = Viewport()
+        self.viewport.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.viewport.setToolTip("drag: orbit · right-drag: pan · wheel: zoom · "
+                                 "double-click: frame · Space: play · ←/→: step a frame")
+
+        # -- display toggles: a floating bar in the viewport's top-right corner
+        self.overlay = QWidget(self.viewport)
+        theme.set_role(self.overlay, "overlay")
+        self.overlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        bar = QHBoxLayout(self.overlay)
+        bar.setContentsMargins(4, 4, 4, 4)
+        bar.setSpacing(2)
+        self.textures_box = self._toggle("image", "Textures", True, "textured")
+        self.wire_box = self._toggle("pyramid", "Wireframe", False, "wireframe")
+        self.bones_box = self._toggle("bone", "Bones", False, "show_bones")
+        self.attach_box = self._toggle("anchor", "Attachments", True, "show_attachments")
+        self.grid_box = self._toggle("grid-3x3", "Floor grid", True, "show_grid")
+        for box in (self.textures_box, self.wire_box, self.bones_box, self.attach_box,
+                    self.grid_box):
+            bar.addWidget(box)
+        bar.addWidget(_divider())
+        frame_button = self._tool("focus", "Frame the model (double-click)")
+        frame_button.clicked.connect(self.viewport.frame_model)
+        fp_button = self._tool("eye", "First-person view (as in the game)")
+        fp_button.clicked.connect(self.viewport.first_person)
+        bar.addWidget(frame_button)
+        bar.addWidget(fp_button)
+        bar.addWidget(_divider())
+        self.compare_button = self._tool("git-compare", "")
+        self.compare_button.setText("Before")
+        self.compare_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.compare_button.setCheckable(True)
+        self.compare_button.setShortcut("B")
+        self.compare_button.toggled.connect(self.compare_toggled)
+        self.compare_button.setEnabled(False)  # always shown: a stable bar width
+        bar.addWidget(self.compare_button)
+        # what the viewport shows while flipped to the source
+        self.compare_badge = QLabel(self.viewport)
+        theme.set_role(self.compare_badge, "badge")
+        self.compare_badge.hide()
+        self.compare_button.toggled.connect(self._show_compare_badge)
+        self._compare_source: str | None = None
+        self.viewport.installEventFilter(self)
+
+        # -- timeline: sequence, transport, scrubber, frame, speed
         self.sequence_box = QComboBox()
         # a fixed hint: sequence names must not change the panel's width
         self.sequence_box.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.sequence_box.setMinimumContentsLength(22)
+        self.sequence_box.setMinimumContentsLength(12)
+        self.sequence_box.setMaximumWidth(240)
+        self.sequence_box.setToolTip("sequence")
         self.sequence_box.currentIndexChanged.connect(self._sequence_changed)
-        self.play_button = QPushButton("▶")
-        self.play_button.setFixedWidth(36)
+        self.prev_button = self._tool("step-back", "Previous frame (←)")
+        self.prev_button.clicked.connect(lambda: self.step(-1))
+        self.play_button = self._tool("play", "Play / pause (Space)")
         self.play_button.setCheckable(True)
         self.play_button.toggled.connect(self._toggle_play)
+        self.next_button = self._tool("step-forward", "Next frame (→)")
+        self.next_button.clicked.connect(lambda: self.step(1))
         self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setMinimumWidth(80)
         self.slider.valueChanged.connect(self._slider_moved)
         self.frame_label = QLabel("0 / 0")
-        self.frame_label.setMinimumWidth(70)
+        self.frame_label.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.frame_label.setMinimumWidth(64)
+        self.frame_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.frame_label.setToolTip("frame / last frame")
         self.speed_box = QComboBox()
         for speed in SPEEDS:
             self.speed_box.addItem(f"{speed:g}×", speed)
         self.speed_box.setCurrentIndex(SPEEDS.index(1.0))
+        self.speed_box.setToolTip("playback speed")
 
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Sequence"))
-        top.addWidget(self.sequence_box)
-        top.addWidget(self.play_button)
-        top.addWidget(self.slider, 1)
-        top.addWidget(self.frame_label)
-        top.addWidget(self.speed_box)
+        timeline = QHBoxLayout()
+        timeline.setSpacing(6)
+        timeline.addWidget(self.sequence_box)
+        for button in (self.prev_button, self.play_button, self.next_button):
+            timeline.addWidget(button)
+        timeline.addWidget(self.slider, 1)
+        timeline.addWidget(self.frame_label)
+        timeline.addWidget(self.speed_box)
 
         # Bodygroup pickers depend on the model (count, entry names): they live
         # in their own scrolling strip so they can never widen the panel.
@@ -215,35 +345,21 @@ class ViewportPanel(QWidget):
         groups_line.addStretch(1)
         self.groups_scroll = _strip(groups_line)
         self.group_boxes: dict[str, QComboBox] = {}
-        bottom = QHBoxLayout()
-        bottom.addStretch(1)
-        self.textures_box = self._toggle("Textures", True, "textured")
-        self.bones_box = self._toggle("Bones", False, "show_bones")
-        self.attach_box = self._toggle("Attachments", True, "show_attachments")
-        self.wire_box = self._toggle("Wireframe", False, "wireframe")
-        for box in (self.textures_box, self.bones_box, self.attach_box, self.wire_box):
-            bottom.addWidget(box)
-        frame_button = QPushButton("Frame")
-        frame_button.clicked.connect(self.viewport.frame_model)
-        fp_button = QPushButton("First person")
-        fp_button.clicked.connect(self.viewport.first_person)
-        bottom.addWidget(frame_button)
-        bottom.addWidget(fp_button)
-        self.compare_button = QPushButton("Before (B)")
-        self.compare_button.setCheckable(True)
-        self.compare_button.setShortcut("B")
-        self.compare_button.setToolTip("show the source model in the same pose and camera "
-                                       "(B flips before/after)")
-        self.compare_button.toggled.connect(self.compare_toggled)
-        self.compare_button.setEnabled(False)  # always shown: a stable bar width
-        bottom.addWidget(self.compare_button)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.addWidget(_strip(top))
+        layout.setContentsMargins(6, 6, 6, 4)
+        layout.setSpacing(4)
         layout.addWidget(self.viewport, 1)
+        layout.addWidget(_strip(timeline))
         layout.addWidget(self.groups_scroll)
-        layout.addWidget(_strip(bottom))
+
+        for keys, slot in ((Qt.Key.Key_Space, self.play_button.toggle),
+                           (Qt.Key.Key_Left, lambda: self.step(-1)),
+                           (Qt.Key.Key_Right, lambda: self.step(1)),
+                           (Qt.Key.Key_F, self.viewport.frame_model)):
+            shortcut = QShortcut(QKeySequence(keys), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(slot)
 
         self.timer = QTimer(self)
         self.timer.setInterval(16)
@@ -251,13 +367,50 @@ class ViewportPanel(QWidget):
         self._clock = time.monotonic()
         self.set_scene(None)
 
-    def _toggle(self, text: str, value: bool, attr: str) -> QCheckBox:
-        box = QCheckBox(text)
+    def _tool(self, name: str, tip: str) -> QToolButton:
+        button = QToolButton()
+        button.setIcon(icon(name))
+        button.setIconSize(QSize(16, 16))
+        button.setToolTip(tip)
+        button.setAutoRaise(True)
+        return button
+
+    def _toggle(self, name: str, text: str, value: bool, attr: str) -> QToolButton:
+        box = self._tool(name, text)
+        box.setCheckable(True)
         box.setChecked(value)
         setattr(self.viewport.state, attr, value)
         box.toggled.connect(lambda on: (setattr(self.viewport.state, attr, on),
                                         self.viewport.update()))
         return box
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if watched is self.viewport and event.type() in (QEvent.Type.Resize,
+                                                         QEvent.Type.Show):
+            self._place_overlays()
+        return super().eventFilter(watched, event)
+
+    def _place_overlays(self) -> None:
+        self.overlay.adjustSize()
+        self.overlay.move(self.viewport.width() - self.overlay.width() - 10, 10)
+        self.compare_badge.adjustSize()
+        self.compare_badge.move(12, 12)
+
+    def _show_compare_badge(self, on: bool) -> None:
+        self.compare_badge.setText(f"BEFORE  ·  {self._compare_source}"
+                                   if self._compare_source else "BEFORE")
+        self.compare_badge.setVisible(on)
+        self._place_overlays()
+
+    def step(self, delta: int) -> None:
+        """Pause and move ``delta`` frames (wrapping)."""
+        scene = self.viewport.scene
+        state = self.viewport.state
+        if scene is None or state.sequence is None:
+            return
+        self.play_button.setChecked(False)
+        frames = max(scene.sequences[state.sequence].frames, 1)
+        self.slider.setValue((int(state.frame) + delta) % frames)
 
     def set_skin(self, index: int) -> None:
         """Draw skin row ``index`` of the loaded model (same pose and view)."""
@@ -284,10 +437,12 @@ class ViewportPanel(QWidget):
         self.compare_button.setChecked(False)
         self.compare_button.blockSignals(False)
         self.compare_button.setEnabled(source is not None)
+        self._compare_source = source
+        self.compare_badge.hide()
         self.compare_button.setToolTip(
-            f"show the source model {source} in the same pose and camera "
+            f"Show the source model {source} in the same pose and camera "
             "(B flips before/after)" if source is not None
-            else "before/after: only for assets made by Retarget")
+            else "Before/after: only for assets made by Retarget")
 
     # -- scene -------------------------------------------------------------
     def set_scene(self, scene: ModelScene | None, *, keep_view: bool = False) -> None:
@@ -344,7 +499,8 @@ class ViewportPanel(QWidget):
             hint.setEnabled(False)
             self.groups_row.addWidget(hint)
         has = scene is not None and bool(scene.sequences)
-        for widget in (self.sequence_box, self.play_button, self.slider, self.speed_box):
+        for widget in (self.sequence_box, self.play_button, self.slider, self.speed_box,
+                       self.prev_button, self.next_button):
             widget.setEnabled(has)
         self._sequence_changed(0)
         if keep_view and scene is not None:
@@ -414,7 +570,7 @@ class ViewportPanel(QWidget):
         self.viewport.update()
 
     def _toggle_play(self, playing: bool) -> None:
-        self.play_button.setText("⏸" if playing else "▶")
+        self.play_button.setIcon(icon("pause" if playing else "play"))
         self._clock = time.monotonic()
         if playing:
             self.timer.start()

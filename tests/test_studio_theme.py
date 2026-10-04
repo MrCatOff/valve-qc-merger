@@ -142,3 +142,43 @@ def test_new_build_dialog_describes_the_kind(window, tmp_path: Path) -> None:
     assert dialog.kind_box.currentData() == "merge-v"
     assert dialog.kind_box.currentText().startswith("View models")
     assert dialog.kind_hint.text() == KIND_DESCRIPTIONS["merge-v"]
+
+
+# -- viewport (phase 3) ------------------------------------------------------
+def test_floor_grid_sits_under_the_model() -> None:
+    import numpy as np
+
+    from valve_qc_merger.studio.renderer import GRID_X, GRID_Y, _nice_step, grid_lines
+    assert [_nice_step(v) for v in (0.7, 1.0, 1.3, 3.0, 7.0, 42.0)] == [1, 1, 2, 5, 10, 50]
+    lines = grid_lines(np.array([-10.0, -5.0, -3.0]), np.array([10.0, 5.0, 7.0]))
+    assert lines.shape[1] == 6 and len(lines) % 2 == 0
+    assert np.allclose(lines[:, 2], -3.0)  # on the model's lowest point
+    for axis_colour in (GRID_X, GRID_Y):  # both axes through the origin are drawn
+        assert np.isclose(lines[:, 3:], axis_colour, atol=1e-6).all(axis=1).any()
+
+
+def test_viewport_toggles_timeline_and_compare_badge(app) -> None:
+    from valve_qc_merger.studio.viewport import ViewportPanel
+    panel = ViewportPanel()
+    state = panel.viewport.state
+    assert state.show_grid and panel.grid_box.isChecked()
+    panel.grid_box.setChecked(False)
+    panel.wire_box.setChecked(True)
+    assert not state.show_grid and state.wireframe
+    panel.set_scene(build_scene_for_test())
+    frames = panel.viewport.scene.sequences[0].frames
+    panel.step(-1)  # wraps to the last frame
+    assert panel.slider.value() == frames - 1 and not panel.play_button.isChecked()
+    panel.step(1)
+    assert panel.slider.value() == 0
+    panel.set_compare("v_src")
+    panel.compare_button.setChecked(True)
+    assert not panel.compare_badge.isHidden()
+    assert panel.compare_badge.text() == "BEFORE  ·  v_src"
+    panel.set_compare(None)
+    assert panel.compare_badge.isHidden() and not panel.compare_button.isEnabled()
+
+
+def build_scene_for_test():
+    from valve_qc_merger.studio.scene import build_scene
+    return build_scene(_ANACONDA)
