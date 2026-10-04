@@ -1145,6 +1145,18 @@ class MainWindow(QMainWindow):
         self.viewport.set_fov(self.fov_for(asset.kind))
         self.viewport.set_view_model(asset.kind in VIEW_MODEL_KINDS, self.right_hand())
         self.viewport.set_scene(scene, keep_view=keep)
+        self._log_renderer(name)
+
+    def _log_renderer(self, name: str) -> None:
+        """What the viewport could not do (textures it could not upload) and,
+        once, which OpenGL it runs on — the first thing to know on a machine
+        where models draw untextured."""
+        renderer = self.viewport.viewport.renderer
+        if renderer.gl_info and not getattr(self, "_gl_logged", False):
+            self._gl_logged = True
+            self.log.append_line(f"OpenGL: {renderer.gl_info}")
+        for problem in renderer.warnings:
+            self.log.append_line(f"warn: {name}: {problem}")
 
     def right_hand(self) -> bool:
         return str(self.settings.value("viewport/right_hand", "false")).lower() == "true"

@@ -53,11 +53,11 @@ in vec3 v_nrm;
 in vec2 v_uv;
 uniform sampler2D u_tex;
 uniform int u_mode;        // 0 opaque, 1 masked, 2 additive
-uniform bool u_textured;
+uniform int u_textured;    // 0/1: an int, set with glUniform1i (see _set_int)
 uniform vec3 u_light;
 out vec4 frag;
 void main() {
-    vec4 t = u_textured ? texture(u_tex, v_uv) : vec4(0.72, 0.72, 0.72, 1.0);
+    vec4 t = u_textured != 0 ? texture(u_tex, v_uv) : vec4(0.72, 0.72, 0.72, 1.0);
     if (u_mode == 1 && t.a < 0.5) discard;
     float lit = 1.0;
     if (u_mode != 2) {
@@ -243,11 +243,18 @@ class Renderer:
         self._textures: dict[str, QOpenGLTexture] = {}
         self._lines: _GpuBatch | None = None
         self._grid: tuple[int, np.ndarray] | None = None  # (id(scene), lines)
+        self.warnings: list[str] = []  # texture problems of the last upload
+        self.gl_info = ""  # vendor / renderer / version, for the log
         self._white: QOpenGLTexture | None = None
 
     # -- setup -------------------------------------------------------------
     def initialize(self) -> None:
         self.gl = QOpenGLContext.currentContext().functions()
+        try:
+            self.gl_info = " · ".join(
+                str(self.gl.glGetString(code) or "?") for code in (0x1F00, 0x1F01, 0x1F02))
+        except Exception:  # noqa: BLE001 - informational only
+            self.gl_info = ""
         self.mesh_program = self._program(_MESH_VS, _MESH_FS)
         self.line_program = self._program(_LINE_VS, _LINE_FS)
         self.bg_program = self._program(_BG_VS, _BG_FS)
@@ -306,6 +313,7 @@ class Renderer:
         self._batches, self._textures = [], {}
 
     def _upload(self, scene: ModelScene) -> None:
+        self.warnings = []
         for batch in scene.batches:
             self._batches.append(_GpuBatch(len(batch.bones)))
         for material, path in scene.textures.items():
@@ -314,7 +322,8 @@ class Renderer:
             try:
                 masked = scene.render_modes.get(material.lower()) == "masked"
                 width, height, rgba = texture_rgba(path, masked=masked)
-            except Exception:  # noqa: BLE001 - an unreadable BMP draws untextured
+            except Exception as exc:  # noqa: BLE001 - an unreadable BMP draws untextured
+                self.warnings.append(f"texture {material}: cannot read {path.name} ({exc})")
                 continue
             image = QImage(rgba, width, height, width * 4, QImage.Format.Format_RGBA8888).copy()
             texture = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
@@ -323,7 +332,13 @@ class Renderer:
             texture.setMinMagFilters(QOpenGLTexture.Filter.LinearMipMapLinear,
                                      QOpenGLTexture.Filter.Linear)
             texture.setWrapMode(QOpenGLTexture.WrapMode.Repeat)
+            if not texture.isCreated() or texture.textureId() == 0:
+                self.warnings.append(f"texture {material}: the GL texture was not created")
+                continue
             self._textures[material] = texture
+        missing = [m for m, path in scene.textures.items() if path is None]
+        if missing:
+            self.warnings.append(f"no texture file for {', '.join(missing[:6])}")
         if self._lines is None:
             self._lines = _GpuBatch(4096)
         if self._white is None:
@@ -376,7 +391,7 @@ class Renderer:
         program = self.mesh_program
         program.bind()
         program.setUniformValue("u_mvp", mvp)
-        program.setUniformValue("u_tex", 0)
+        self._set_int(program, "u_tex", 0)
         # mirrored with the model, so a mirrored model is lit like the original
         light = QVector3D(-0.35 if state.mirror_x else 0.35, -0.6, 0.72).normalized()
         program.setUniformValue("u_light", light)
@@ -396,9 +411,9 @@ class Renderer:
                 data = np.hstack([pos, nrm, np.column_stack(
                     [batch.uv[:, 0], 1.0 - batch.uv[:, 1]])]).astype(np.float32)
                 texture = self._textures.get(batch.material) if state.textured else None
-                program.setUniformValue("u_textured", texture is not None)
-                program.setUniformValue(
-                    "u_mode", {"masked": 1, "additive": 2}.get(batch.render_mode, 0))
+                self._set_int(program, "u_textured", 1 if texture is not None else 0)
+                self._set_int(program, "u_mode",
+                              {"masked": 1, "additive": 2}.get(batch.render_mode, 0))
                 bound = texture or self._white
                 bound.bind(0)
                 self._draw(program, gpu, data, GL_TRIANGLES, (3, 3, 2))
@@ -452,6 +467,14 @@ class Renderer:
                        GL_LINES, (3, 3))
             line.release()
             gl.glEnable(GL_DEPTH_TEST)
+
+    def _set_int(self, program: QOpenGLShaderProgram, name: str, value: int) -> None:
+        """An int/sampler uniform, always through glUniform1i. PySide may
+        resolve ``setUniformValue(name, True / 0)`` to its float overload
+        (glUniform1f): macOS accepts that, some Windows drivers reject it
+        (GL_INVALID_OPERATION) — the flag then stays 0 and every model draws
+        untextured grey."""
+        self.gl.glUniform1i(program.uniformLocation(name), int(value))
 
     def _draw_background(self, state: ViewState) -> None:
         gl = self.gl

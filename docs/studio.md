@@ -129,7 +129,8 @@ groups as before). A category is project metadata only — the files stay in
 
 ## `.mdl` import (M1)
 
-`valve_qc_merger.mdl` reads GoldSource v10 models in pure Python
+`valve_qc_merger.mdl` reads GoldSource v10 (and v9 — the same layout byte
+for byte; its texture names just lack `.bmp`) models in pure Python
 (`read_mdl`) and writes the same QC + SMD + BMP folder layout as
 tools/decompmdl (`decompile_mdl`); `valve-qc-merger decompile <file|folder>
 --out DIR` and `Project.import_mdl` use it, so the Windows exe needs no
@@ -287,6 +288,11 @@ The centre of the window shows the selected asset (`studio.viewport`):
 - **Bodygroups**: one selector per group with more than one entry (`blank`
   included), in a strip under the timeline.
 - **Mouse**: left drag orbits, right/middle drag pans, wheel zooms.
+- **Diagnostics**: the log names the OpenGL in use once ("OpenGL: vendor ·
+  renderer · version") and every texture the viewport could not upload. Int
+  and sampler uniforms are set with `glUniform1i` — PySide may pick the
+  float overload for `setUniformValue(name, True)`, which some Windows
+  drivers reject, leaving every model untextured.
 
 Design:
 
