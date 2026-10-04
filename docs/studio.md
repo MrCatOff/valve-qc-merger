@@ -269,7 +269,10 @@ The centre of the window shows the selected asset (`studio.viewport`):
 - **Display bar** (floating, top-right): textures, wireframe, bones (lines +
   joints, drawn on top), attachments, floor grid; **Frame** (also
   double-click / `F`) and **First person** (the eye at the model origin
-  looking down SMD -Y — what the game shows for a v_ model); **Before**
+  looking down SMD -Y — what the game shows for a v_ model) with its own
+  **FOV** box next to it: vertical, as the game draws view models — 74° by
+  default (CS 1.6's 90° horizontal at 4:3), 84° for zombie hands; the value
+  you set is remembered per asset kind; **Before**
   (`B`, derived assets) — while it shows the source a "BEFORE · <source>"
   badge sits in the top-left corner.
 - **Timeline** (under the viewport): sequence, previous frame / play-pause /

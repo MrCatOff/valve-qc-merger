@@ -343,3 +343,30 @@ def test_texture_table_fits_the_pane(window) -> None:
     table = window.inspector.textures
     assert table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert table.textElideMode() == Qt.TextElideMode.ElideMiddle
+
+
+# -- first-person FOV ---------------------------------------------------------
+def test_first_person_fov_is_the_games_and_remembered_per_kind(window, tmp_path: Path) -> None:
+    from valve_qc_merger.studio.renderer import FP_FOV, Camera
+    camera = Camera()
+    assert FP_FOV == 74.0 and camera.fp_fov == 74.0
+    camera.first_person = True
+    fp = camera.projection(4 / 3)
+    camera.fp_fov = 84.0
+    assert fp != camera.projection(4 / 3)  # first person follows fp_fov
+    camera.first_person = False
+    orbit = camera.projection(4 / 3)
+    camera.fp_fov = 50.0
+    assert orbit == camera.projection(4 / 3)  # the orbit camera does not
+
+    assert window.fov_for("v") == 74.0 and window.fov_for("zhands") == 84.0
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(_ANACONDA)
+    window.set_project(project)
+    window.explorer.select("asset", "v_anaconda")
+    panel = window.viewport
+    assert panel.fov_spin.value() == 74.0
+    panel.fov_spin.setValue(80.0)  # the user's choice for view models
+    assert panel.viewport.state.camera.first_person
+    assert panel.viewport.state.camera.fp_fov == 80.0
+    assert window.fov_for("v") == 80.0 and window.fov_for("zhands") == 84.0

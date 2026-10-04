@@ -153,6 +153,7 @@ class MainWindow(QMainWindow):
             lambda name: self.run_build(name, then_compile=True))
         self.explorer.build_delete_requested.connect(self.delete_build)
         self.viewport.compare_toggled.connect(self._compare)
+        self.viewport.fov_changed.connect(self._fov_edited)
         self.build_panel.run_requested.connect(self.run_build)
         self.build_panel.plan_requested.connect(self.plan_build)
         self.build_panel.deploy_requested.connect(self.deploy_build)
@@ -1129,7 +1130,24 @@ class MainWindow(QMainWindow):
             self.inspector.qc_page.set_text(None)
         self.inspector.show_status(self.explorer.statuses.get(name))
         self.viewport.set_compare(source if source in self.project.assets else None)
+        self._fov_kind = asset.kind
+        self.viewport.set_fov(self.fov_for(asset.kind))
         self.viewport.set_scene(scene, keep_view=keep)
+
+    def fov_for(self, kind: str) -> float:
+        """First-person FOV for an asset kind: the last one set for it, else
+        74 (zombie hands: 84)."""
+        from valve_qc_merger.studio.renderer import FP_FOV, FP_FOV_BY_KIND
+        stored = self.settings.value(f"viewport/fp_fov/{kind}")
+        try:
+            return float(stored) if stored is not None else FP_FOV_BY_KIND.get(kind, FP_FOV)
+        except (TypeError, ValueError):
+            return FP_FOV_BY_KIND.get(kind, FP_FOV)
+
+    def _fov_edited(self, fov: float) -> None:
+        kind = getattr(self, "_fov_kind", "")
+        if kind:
+            self.settings.setValue(f"viewport/fp_fov/{kind}", fov)
 
     def _compare(self, show_source: bool) -> None:
         """Before/after: swap the viewport to the shown asset's source and back,

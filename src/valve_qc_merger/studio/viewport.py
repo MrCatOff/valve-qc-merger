@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QComboBox,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from valve_qc_merger.studio import theme
+from valve_qc_merger.studio.dialog_kit import NUMBER_LOCALE
 from valve_qc_merger.studio.icons import icon, pixmap
 from valve_qc_merger.studio.renderer import Renderer, ViewState, gl_format
 from valve_qc_merger.studio.scene import ModelScene
@@ -250,6 +252,7 @@ class ViewportPanel(QWidget):
     frame_changed = Signal(float)
     compare_toggled = Signal(bool)  # True: show the source instead of the asset
     skin_changed = Signal(int)
+    fov_changed = Signal(float)  # first-person FOV edited by the user
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -278,8 +281,21 @@ class ViewportPanel(QWidget):
         frame_button.clicked.connect(self.viewport.frame_model)
         fp_button = self._tool("eye", "First-person view (as in the game)")
         fp_button.clicked.connect(self.viewport.first_person)
+        self.fov_spin = QDoubleSpinBox()
+        self.fov_spin.setRange(30.0, 130.0)
+        self.fov_spin.setDecimals(2)
+        self.fov_spin.setSingleStep(1.0)
+        self.fov_spin.setSuffix("°")
+        self.fov_spin.setLocale(NUMBER_LOCALE)
+        self.fov_spin.setKeyboardTracking(False)
+        self.fov_spin.setValue(self.viewport.state.camera.fp_fov)
+        self.fov_spin.setToolTip("First-person field of view (vertical, as in the game): "
+                                 "74 for CS 1.6 view models, often 84 for zombie hands. "
+                                 "Remembered per asset kind.")
+        self.fov_spin.valueChanged.connect(self._fov_edited)
         bar.addWidget(frame_button)
         bar.addWidget(fp_button)
+        bar.addWidget(self.fov_spin)
         bar.addWidget(_divider())
         self.compare_button = self._tool("git-compare", "")
         self.compare_button.setText("Before")
@@ -401,6 +417,21 @@ class ViewportPanel(QWidget):
                                    if self._compare_source else "BEFORE")
         self.compare_badge.setVisible(on)
         self._place_overlays()
+
+    def set_fov(self, fov: float) -> None:
+        """Show ``fov`` (first person) without announcing it as an edit."""
+        self.fov_spin.blockSignals(True)
+        self.fov_spin.setValue(fov)
+        self.fov_spin.blockSignals(False)
+        self.viewport.state.camera.fp_fov = self.fov_spin.value()
+        self.viewport.update()
+
+    def _fov_edited(self, fov: float) -> None:
+        self.viewport.state.camera.fp_fov = fov
+        if not self.viewport.state.camera.first_person:
+            self.viewport.first_person()  # a FOV change only shows in first person
+        self.viewport.update()
+        self.fov_changed.emit(fov)
 
     def step(self, delta: int) -> None:
         """Pause and move ``delta`` frames (wrapping)."""

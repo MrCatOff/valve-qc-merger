@@ -151,6 +151,10 @@ def grid_lines(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     return np.array(out, dtype=np.float32)
 
 
+FP_FOV = 74.0  # the game's view-model FOV (vertical)
+FP_FOV_BY_KIND = {"zhands": 84.0}  # defaults per asset kind
+
+
 @dataclass
 class Camera:
     """Orbit camera around ``target`` (Z up) or a fixed first-person eye."""
@@ -159,7 +163,11 @@ class Camera:
     distance: float = 60.0
     yaw: float = -55.0  # degrees around Z; the eye sits in front-right of -Y
     pitch: float = 18.0
-    fov: float = 60.0
+    fov: float = 60.0  # vertical, orbit camera
+    # first person: vertical FOV as the game draws a view model — CS 1.6's
+    # 90° horizontal at 4:3 is 73.7° vertical (HLAM shows 74 too); zombie
+    # hands are often tuned for 84
+    fp_fov: float = FP_FOV
     first_person: bool = False
 
     def eye(self) -> QVector3D:
@@ -184,7 +192,8 @@ class Camera:
         m = QMatrix4x4()
         near = 0.5 if self.first_person else max(self.distance * 0.01, 0.05)
         far = 4000.0 if self.first_person else max(self.distance * 20.0, 100.0)
-        m.perspective(self.fov, max(aspect, 1e-3), near, far)
+        fov = self.fp_fov if self.first_person else self.fov
+        m.perspective(fov, max(aspect, 1e-3), near, far)
         return m
 
     def frame(self, lo: np.ndarray, hi: np.ndarray) -> None:
