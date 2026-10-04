@@ -370,3 +370,27 @@ def test_first_person_fov_is_the_games_and_remembered_per_kind(window, tmp_path:
     assert panel.viewport.state.camera.first_person
     assert panel.viewport.state.camera.fp_fov == 80.0
     assert window.fov_for("v") == 80.0 and window.fov_for("zhands") == 84.0
+
+
+def test_first_person_survives_a_model_change_and_right_hand(window, tmp_path: Path) -> None:
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(_ANACONDA)
+    project.import_decompiled(Path(__file__).parent / "examples" / "player" / "p_anaconda")
+    project.import_decompiled(Path(__file__).parent / "examples" / "pair_deagle" / "v_deagle")
+    window.set_project(project)
+    panel = window.viewport
+    camera = panel.viewport.state.camera
+    window.explorer.select("asset", "v_anaconda")
+    panel.viewport.first_person()
+    window.explorer.select("asset", "v_deagle")  # another model: still first person
+    assert camera.first_person
+    panel.viewport.frame_model()  # Frame leaves it, as before
+    assert not camera.first_person
+
+    assert panel.right_hand_box.isEnabled() and not panel.right_hand_box.isChecked()
+    panel.right_hand_box.setChecked(True)
+    assert panel.viewport.state.mirror_x and window.right_hand()
+    window.explorer.select("asset", "p_anaconda")  # the game never mirrors p_ models
+    assert not panel.right_hand_box.isEnabled() and not panel.viewport.state.mirror_x
+    window.explorer.select("asset", "v_anaconda")  # the choice comes back for v_
+    assert panel.right_hand_box.isChecked() and panel.viewport.state.mirror_x

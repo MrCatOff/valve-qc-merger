@@ -216,6 +216,7 @@ class ViewState:
     textured: bool = True
     highlight_bone: int | None = None  # drawn on top even with bones hidden
     show_grid: bool = True  # floor grid under the model (orbit camera only)
+    mirror_x: bool = False  # right-handed view model (the game's cl_righthand 1)
     background_top: tuple[float, float, float] = (0.17, 0.19, 0.235)
     background_bottom: tuple[float, float, float] = (0.075, 0.082, 0.10)
 
@@ -355,6 +356,10 @@ class Renderer:
         if scene is None:
             return
         mvp = state.camera.projection(width / max(height, 1)) * state.camera.view()
+        if state.mirror_x:  # cl_righthand 1: the game mirrors view models
+            mirror = QMatrix4x4()
+            mirror.scale(-1.0, 1.0, 1.0)
+            mvp = mvp * mirror
         if state.show_grid and not state.camera.first_person and self._lines is not None:
             if self._grid is None or self._grid[0] != id(scene):
                 self._grid = (id(scene), grid_lines(*scene.bounds()))
@@ -372,7 +377,8 @@ class Renderer:
         program.bind()
         program.setUniformValue("u_mvp", mvp)
         program.setUniformValue("u_tex", 0)
-        light = QVector3D(0.35, -0.6, 0.72).normalized()
+        # mirrored with the model, so a mirrored model is lit like the original
+        light = QVector3D(-0.35 if state.mirror_x else 0.35, -0.6, 0.72).normalized()
         program.setUniformValue("u_light", light)
         gl.glEnable(GL_DEPTH_TEST)
         gl.glDisable(GL_CULL_FACE)

@@ -47,6 +47,7 @@ from valve_qc_merger.studio.widgets import (
 )
 
 RECENT_LIMIT = 8
+VIEW_MODEL_KINDS = frozenset({"v", "zhands"})  # what the game mirrors (cl_righthand)
 
 
 class DockTitleBar(QWidget):
@@ -154,6 +155,7 @@ class MainWindow(QMainWindow):
         self.explorer.build_delete_requested.connect(self.delete_build)
         self.viewport.compare_toggled.connect(self._compare)
         self.viewport.fov_changed.connect(self._fov_edited)
+        self.viewport.right_hand_toggled.connect(self._right_hand_toggled)
         self.build_panel.run_requested.connect(self.run_build)
         self.build_panel.plan_requested.connect(self.plan_build)
         self.build_panel.deploy_requested.connect(self.deploy_build)
@@ -1132,7 +1134,14 @@ class MainWindow(QMainWindow):
         self.viewport.set_compare(source if source in self.project.assets else None)
         self._fov_kind = asset.kind
         self.viewport.set_fov(self.fov_for(asset.kind))
+        self.viewport.set_view_model(asset.kind in VIEW_MODEL_KINDS, self.right_hand())
         self.viewport.set_scene(scene, keep_view=keep)
+
+    def right_hand(self) -> bool:
+        return str(self.settings.value("viewport/right_hand", "false")).lower() == "true"
+
+    def _right_hand_toggled(self, on: bool) -> None:
+        self.settings.setValue("viewport/right_hand", "true" if on else "false")
 
     def fov_for(self, kind: str) -> float:
         """First-person FOV for an asset kind: the last one set for it, else

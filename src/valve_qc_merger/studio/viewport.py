@@ -133,7 +133,8 @@ class Viewport(QOpenGLWidget):
         length = 24.0
         tips = []
         for direction, name, token in self.AXES:
-            v = view.mapVector(QVector3D(*direction))
+            x, y, z = direction
+            v = view.mapVector(QVector3D(-x if self.state.mirror_x else x, y, z))
             tips.append((v.z(), QPointF(origin.x() + v.x() * length,
                                         origin.y() - v.y() * length), name, token))
         for _depth, tip, name, token in sorted(tips, key=lambda t: t[0]):
@@ -164,7 +165,11 @@ class Viewport(QOpenGLWidget):
         self.state.bodygroups = {}
         self.state.highlight_bone = None
         if scene is not None and not keep_view:
+            # a new model is framed for the orbit camera, but first person
+            # stays first person (switching models must not jump out of it)
+            first_person = self.state.camera.first_person
             self.frame_model()
+            self.state.camera.first_person = first_person
         self.update()
 
     def frame_model(self) -> None:
@@ -253,6 +258,7 @@ class ViewportPanel(QWidget):
     compare_toggled = Signal(bool)  # True: show the source instead of the asset
     skin_changed = Signal(int)
     fov_changed = Signal(float)  # first-person FOV edited by the user
+    right_hand_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -293,9 +299,16 @@ class ViewportPanel(QWidget):
                                  "74 for CS 1.6 view models, often 84 for zombie hands. "
                                  "Remembered per asset kind.")
         self.fov_spin.valueChanged.connect(self._fov_edited)
+        self.right_hand_box = self._toggle(
+            "flip-horizontal-2", "Right hand: mirror view models as the game does with "
+            "cl_righthand 1 (CS 1.6 view models are made left-handed)", False, "mirror_x")
+        self.right_hand_box.toggled.connect(self.right_hand_toggled)
+        self._right_hand = False  # the user's choice; applied to view models only
+        self.right_hand_box.toggled.connect(self._remember_right_hand)
         bar.addWidget(frame_button)
         bar.addWidget(fp_button)
         bar.addWidget(self.fov_spin)
+        bar.addWidget(self.right_hand_box)
         bar.addWidget(_divider())
         self.compare_button = self._tool("git-compare", "")
         self.compare_button.setText("Before")
@@ -417,6 +430,21 @@ class ViewportPanel(QWidget):
                                    if self._compare_source else "BEFORE")
         self.compare_badge.setVisible(on)
         self._place_overlays()
+
+    def set_view_model(self, view_model: bool, right_hand: bool | None = None) -> None:
+        """The shown model is a view model (mirroring applies) or not (p_/w_/
+        players: the game never mirrors them — the toggle is disabled)."""
+        if right_hand is not None:
+            self._right_hand = right_hand
+        self.right_hand_box.blockSignals(True)
+        self.right_hand_box.setEnabled(view_model)
+        self.right_hand_box.setChecked(view_model and self._right_hand)
+        self.right_hand_box.blockSignals(False)
+        self.viewport.state.mirror_x = view_model and self._right_hand
+        self.viewport.update()
+
+    def _remember_right_hand(self, on: bool) -> None:
+        self._right_hand = on
 
     def set_fov(self, fov: float) -> None:
         """Show ``fov`` (first person) without announcing it as an edit."""

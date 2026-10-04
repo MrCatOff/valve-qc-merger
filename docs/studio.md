@@ -272,7 +272,11 @@ The centre of the window shows the selected asset (`studio.viewport`):
   looking down SMD -Y — what the game shows for a v_ model) with its own
   **FOV** box next to it: vertical, as the game draws view models — 74° by
   default (CS 1.6's 90° horizontal at 4:3), 84° for zombie hands; the value
-  you set is remembered per asset kind; **Before**
+  you set is remembered per asset kind; **Right hand** — mirrors view models
+  (v_, zombie hands) as the game does with `cl_righthand 1` (CS 1.6 view
+  models are made left-handed; p_/w_ models are never mirrored), remembered
+  between runs. Switching models keeps first person (Frame leaves it);
+  **Before**
   (`B`, derived assets) — while it shows the source a "BEFORE · <source>"
   badge sits in the top-left corner.
 - **Timeline** (under the viewport): sequence, previous frame / play-pause /
