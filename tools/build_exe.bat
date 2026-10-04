@@ -14,6 +14,7 @@ python -m PyInstaller ^
     --add-data "storage/handswap;storage/handswap" ^
     --add-data "storage/players_donor;storage/players_donor" ^
     --add-data "storage/zhands;storage/zhands" ^
+    --add-data "storage/server;storage/server" ^
     --add-data "src/valve_qc_merger/retarget/worker.py;valve_qc_merger/retarget" ^
     --distpath dist ^
     --workpath build\pyinstaller ^

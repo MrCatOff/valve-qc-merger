@@ -170,3 +170,21 @@ replacement costs one unless it is precached anyway), the budget counts
 them, and **Export list.ini…** writes the file for
 [Metamod Unprecacher](https://github.com/In-line/metamod_unprecacher)
 (`addons/unprecacher/list.ini`; `path c replace_path` per line).
+
+## Config (game.cfg, server.cfg)
+
+The Server window's **Config** tab edits `game.cfg` (ReGameDLL) and
+`server.cfg` (ReHLDS) of the game folder, or any cfg you pick. Every cvar is
+listed with its value, its default and its description, options and notes
+— taken from the file's own comments, else from the references bundled in
+`storage/server/` (ReGameDLL's `dist/game.cfg` and the cvar list of the
+ReHLDS README, both MIT), so a stripped file is still documented. Search,
+filter by group (`mp_`, `sv_`, `bot_`) or *Only non-default*; non-default
+values are blue, unsaved edits orange.
+
+**Save** changes only the edited lines (a cvar the file does not set is
+appended with its description); comments, `exec`/`echo` lines and anything
+unknown stay, and the old file is kept as `<name>.bak`. A new `game.cfg`
+starts as the documented reference with your values. Passwords
+(`sv_password`, `rcon_password`) are never listed. `valve_qc_merger.server.cfg`
+does the parsing and writing.

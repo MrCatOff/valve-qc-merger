@@ -14,6 +14,7 @@ datas = [
     (os.path.join(ROOT, "storage", "handswap"), os.path.join("storage", "handswap")),
     (os.path.join(ROOT, "storage", "players_donor"), os.path.join("storage", "players_donor")),
     (os.path.join(ROOT, "storage", "zhands"), os.path.join("storage", "zhands")),
+    (os.path.join(ROOT, "storage", "server"), os.path.join("storage", "server")),
     (os.path.join(ROOT, "src", "valve_qc_merger", "studio", "icons"),
      os.path.join("valve_qc_merger", "studio", "icons")),
     (os.path.join(ROOT, "src", "valve_qc_merger", "retarget", "worker.py"),

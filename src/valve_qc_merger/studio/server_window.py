@@ -1,4 +1,4 @@
-"""Project ▸ Server: the precache budget per map and the mod-folder doctor."""
+"""Project ▸ Server: precache budget per map, mod-folder doctor, unprecache, cfgs."""
 
 from __future__ import annotations
 
@@ -108,6 +108,9 @@ class ServerWindow(QDialog):
         self.tabs.addTab(self._budget_tab(), icon("gauge"), "Budget")
         self.tabs.addTab(self._doctor_tab(), icon("stethoscope"), "Doctor")
         self.tabs.addTab(self._unprecache_tab(), icon("trash-2"), "Unprecache")
+        from valve_qc_merger.studio.config_panel import ConfigPanel
+        self.config = ConfigPanel(project)
+        self.tabs.addTab(self.config, icon("sliders-horizontal"), "Config")
         self.resize(820, 720)
         self.refresh()
 
