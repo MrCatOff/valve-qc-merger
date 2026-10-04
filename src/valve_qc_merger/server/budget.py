@@ -39,6 +39,8 @@ class BuildLoad:
 class ProjectLoad:
     builds: list[BuildLoad] = field(default_factory=list)
     client_sounds: set[str] = field(default_factory=set)  # relative to sound/
+    sprites: list[str] = field(default_factory=list)  # effect sprites: model slots
+    hud_files: list[str] = field(default_factory=list)  # weapon HUD txt + sheets: generic
 
     @property
     def models(self) -> list[str]:
@@ -83,6 +85,9 @@ def project_load(project: Project) -> ProjectLoad:
             for sound in _CLIENT_SOUND.findall(text):
                 load.client_sounds.add(sound.replace("\\", "/").lower())
         load.builds.append(BuildLoad(name, inputs, paths))
+    from valve_qc_merger.project import sprites as library
+    load.sprites = library.effect_sprites(project)
+    load.hud_files = sorted(library.hud_files(project))
     return load
 
 
@@ -116,6 +121,8 @@ def budget(map_resources: MapResources | None, load: ProjectLoad, *,
                             ("map entity models / sprites", len(map_resources.models))]
         parts["sounds"].append(("map entity sounds", len(map_resources.sounds)))
     parts["models"].append(("project builds", len(load.models)))
+    parts["models"].append(("project sprites", len(load.sprites)))
+    parts["generic"].append(("weapon HUD files", len(load.hud_files)))
     target = "sounds" if client_sounds_as == "sound" else "generic"
     parts[target].append(("view-model client sounds", len(load.client_sounds)))
     for key in parts:

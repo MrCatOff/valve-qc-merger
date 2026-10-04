@@ -103,3 +103,29 @@ Build ▸ **Export server package…** (Ctrl+Shift+E) writes
 - `package_report.txt` — files and sizes, what a new player downloads,
   sounds the models play that nothing provides, builds left out (not run or
   not compiled).
+
+## Sprites and weapon HUDs
+
+The project's **sprite library** (`<project>/sprites/`, mirroring the game's
+`sprites/`) shows under **Sprites** in the Explorer. Asset ▸ **Import
+sprites…** copies `.spr` / `.txt` files in (the path after `sprites/` kept).
+
+- **The sprite panel**: animated preview (frames, play), type (how it faces
+  the viewer), texture format and what it means, size, frame count. A HUD
+  `.txt` shows its entries and the icon each cuts from its sheet.
+- **New sprite from images…**: PNG/BMP/TGA/JPG frames (same size) become one
+  sprite with one 256-colour palette (exact when the images use few
+  colours, else median cut). Formats: *normal* (opaque), *additive* (glows,
+  muzzle flashes, HUD icons: black is invisible), *indexalpha* (one colour
+  with the image's transparency: smoke, decals), *alphatest* (cut-out: index
+  255 is a hole).
+- **New weapon HUD…**: the weapon-list icon (fitted to 170×45), an optional
+  selected icon and an optional 24×24 ammo icon are packed into one additive
+  256-wide sheet `sprites/640hud_<weapon>.spr`, and `sprites/weapon_<name>.txt`
+  is written (320 and 640 entries on the same pixels, the stock crosshair).
+
+Budget and package know the difference: effect sprites take **model**
+slots (`precache_model`, `VQM_SPRITES`); weapon HUD files (`weapon_*.txt`
+and the library sheets they use) are download-only (**generic**,
+`precache_generic`, `VQM_HUD_FILES`). The package copies the library into
+`cstrike/sprites/`. `valve_qc_merger.sprite` (`spr`, `hud`) is Qt-free.

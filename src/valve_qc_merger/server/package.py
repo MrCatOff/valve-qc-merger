@@ -39,6 +39,8 @@ class PackageResult:
     models: list[str] = field(default_factory=list)  # precache_model paths
     client_sounds: list[str] = field(default_factory=list)  # relative to sound/
     weapons: dict[str, dict[str, object]] = field(default_factory=dict)
+    sprites: list[str] = field(default_factory=list)  # effect sprites (precache_model)
+    hud_files: list[str] = field(default_factory=list)  # HUD txt + sheets (generic)
     missing_sounds: list[str] = field(default_factory=list)
     skipped_builds: list[str] = field(default_factory=list)  # not run / not compiled
 
@@ -103,6 +105,18 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
         shutil.copy2(source, destination)
         result.files[f"sound/{sound}"] = destination.stat().st_size
     result.models.sort(key=str.lower)
+    from valve_qc_merger.project import sprites as sprite_library
+    hud = {h.lower() for h in sprite_library.hud_files(project)}
+    for name in sprite_library.list_sprites(project):
+        destination = mod / "sprites" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(sprite_library.sprite_path(project, name), destination)
+        game_path = f"sprites/{name}"
+        result.files[game_path] = destination.stat().st_size
+        if game_path.lower() in hud:
+            result.hud_files.append(game_path)
+        elif name.lower().endswith(".spr"):
+            result.sprites.append(game_path)
     (out / "amxx").mkdir(parents=True, exist_ok=True)
     (out / "amxx" / "vqm_resources.inc").write_text(
         amxx_include(result, project.settings.client_sounds, project.name), encoding="utf-8")
@@ -138,8 +152,20 @@ def amxx_include(result: PackageResult, client_sounds: str = "generic",
         *[f'\t"{"sound/" + s if generic else s}",' for s in result.client_sounds or ["-"]],
         "};",
         f"stock const VQM_CLIENT_SOUND_COUNT = {len(result.client_sounds)};", "",
+        "// effect sprites: precache_model (they take model slots)",
+        "stock const VQM_SPRITES[][] = {",
+        *[f'\t"{s}",' for s in result.sprites or ["-"]],
+        "};",
+        f"stock const VQM_SPRITE_COUNT = {len(result.sprites)};", "",
+        "// weapon HUD files (sprites/weapon_*.txt + their sheets): download only",
+        "stock const VQM_HUD_FILES[][] = {",
+        *[f'\t"{h}",' for h in result.hud_files or ["-"]],
+        "};",
+        f"stock const VQM_HUD_FILE_COUNT = {len(result.hud_files)};", "",
         "stock vqm_precache()", "{",
         "\tfor (new i = 0; i < VQM_MODEL_COUNT; i++) precache_model(VQM_MODELS[i]);",
+        "\tfor (new i = 0; i < VQM_SPRITE_COUNT; i++) precache_model(VQM_SPRITES[i]);",
+        "\tfor (new i = 0; i < VQM_HUD_FILE_COUNT; i++) precache_generic(VQM_HUD_FILES[i]);",
         "\tfor (new i = 0; i < VQM_CLIENT_SOUND_COUNT; i++) "
         + ("precache_generic(VQM_CLIENT_SOUNDS[i]);" if generic
            else "precache_sound(VQM_CLIENT_SOUNDS[i]);"),
@@ -185,13 +211,14 @@ def _size(count: int) -> str:
 def report(result: PackageResult) -> str:
     kinds: dict[str, int] = {}
     for path, size in result.files.items():
-        kind = "sounds" if path.startswith("sound/") else (
-            "manifests" if not path.lower().endswith(".mdl") else "models")
+        kind = "sounds" if path.startswith("sound/") else "sprites" if path.startswith(
+            "sprites/") else ("manifests" if not path.lower().endswith(".mdl") else "models")
         kinds[kind] = kinds.get(kind, 0) + size
     lines = [f"Server package — {len(result.files)} files, {_size(result.total)}",
              f"A new player downloads at most {_size(result.total)} (models + sounds).", "",
              *[f"  {kind:<10} {_size(size)}" for kind, size in sorted(kinds.items())], "",
-             f"precache_model: {len(result.models)}",
+             f"precache_model: {len(result.models)} models + {len(result.sprites)} sprites",
+             f"precache_generic HUD files: {len(result.hud_files)}",
              f"client sounds: {len(result.client_sounds)}"]
     if result.missing_sounds:
         lines += ["", "Sounds the models play but neither the library nor the game folder "

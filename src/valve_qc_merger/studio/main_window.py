@@ -113,6 +113,9 @@ class MainWindow(QMainWindow):
         from valve_qc_merger.studio.sound_panel import SoundPanel
         self.sound_panel = SoundPanel()
         self.right.addWidget(self.sound_panel)
+        from valve_qc_merger.studio.sprite_panel import SpritePanel
+        self.sprite_panel = SpritePanel()
+        self.right.addWidget(self.sprite_panel)
         self._dock("Inspector", self.right, Qt.DockWidgetArea.RightDockWidgetArea, 520)
         self._dock("Log", self.log, Qt.DockWidgetArea.BottomDockWidgetArea, 200)
         # the log stays out of the way until asked for (or a job fails)
@@ -189,6 +192,13 @@ class MainWindow(QMainWindow):
         self.sound_panel.remove_requested.connect(self.remove_sound)
         self.sound_panel.reveal_requested.connect(self._reveal_sound)
         self.sound_panel.asset_requested.connect(self._reveal_asset)
+        self.explorer.sprite_selected.connect(self._select_sprite)
+        self.explorer.sprite_import_requested.connect(self.import_sprites)
+        self.explorer.sprite_new_requested.connect(self.new_sprite)
+        self.explorer.hud_new_requested.connect(self.new_weapon_hud)
+        self.explorer.sprite_remove_requested.connect(self.remove_sprite)
+        self.sprite_panel.remove_requested.connect(self.remove_sprite)
+        self.sprite_panel.reveal_requested.connect(self._reveal_sprite)
         self.inspector.kind_changed.connect(self.set_kind)
         self.inspector.notes_changed.connect(self._set_notes)
         self.inspector.retarget_requested.connect(lambda name: self.derive_assets([name]))
@@ -277,6 +287,10 @@ class MainWindow(QMainWindow):
                                              QKeySequence.StandardKey.Find)
         asset_menu.addSeparator()
         self.act_new_category = asset_menu.addAction("New category…", self.new_category)
+        asset_menu.addSeparator()
+        self.act_import_sprites = asset_menu.addAction("Import sprites…", self.import_sprites)
+        self.act_new_sprite = asset_menu.addAction("New sprite from images…", self.new_sprite)
+        self.act_new_hud = asset_menu.addAction("New weapon HUD…", self.new_weapon_hud)
 
         build_menu = bar.addMenu("&Build")
         self.act_new_build = build_menu.addAction("New build…", self.new_build,
@@ -471,6 +485,97 @@ class MainWindow(QMainWindow):
         if self.project is not None:
             self._open_path(sounds.sound_path(self.project, name).parent)
 
+    # -- sprites ---------------------------------------------------------------
+    def _select_sprite(self, name: str) -> None:
+        from valve_qc_merger.project import sprites
+        if self.project is None or not name:
+            return
+        self.right.setCurrentWidget(self.sprite_panel)
+        self.sprite_panel.show_sprite(name, sprites.sprite_path(self.project, name),
+                                      sprites.sprites_dir(self.project))
+
+    def import_sprites(self) -> None:
+        from valve_qc_merger.project import sprites
+        if self.project is None:
+            return
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Import sprites / HUD files",
+            self.settings.value("last_sprite_import", str(Path.home())),
+            "Sprites and HUD files (*.spr *.txt)")
+        if not files:
+            return
+        self.settings.setValue("last_sprite_import", str(Path(files[0]).parent))
+        names = sprites.import_sprites(self.project, [Path(f) for f in files])
+        self.log.append_line(f"imported {len(names)} sprite file(s)")
+        self.explorer.show_project(self.project)
+        if names:
+            self.explorer.select("sprite", names[0])
+
+    def new_sprite(self) -> None:
+        from valve_qc_merger.project import sprites
+        from valve_qc_merger.studio.sprite_panel import NewSpriteDialog, load_rgba
+        if self.project is None:
+            return
+        dialog = NewSpriteDialog(self)
+        if dialog.exec() != NewSpriteDialog.DialogCode.Accepted or not dialog.frame_paths():
+            return
+        try:
+            images = [load_rgba(p) for p in dialog.frame_paths()]
+            sizes = {im.shape[:2] for im in images}
+            if len(sizes) > 1:
+                raise ValueError("every frame must have the same size")
+            name = sprites.make_sprite(self.project, dialog.name_edit.text().strip().strip("/"),
+                                       images, fmt=dialog.format_box.currentData(),
+                                       stype=dialog.type_box.currentData())
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "New sprite", str(exc))
+            return
+        self.log.append_line(f"made sprites/{name}")
+        self.explorer.show_project(self.project)
+        self.explorer.select("sprite", name)
+
+    def new_weapon_hud(self) -> None:
+        from valve_qc_merger.project import sprites
+        from valve_qc_merger.studio.sprite_panel import WeaponHudDialog, load_rgba
+        if self.project is None:
+            return
+        dialog = WeaponHudDialog(self)
+        if dialog.exec() != WeaponHudDialog.DialogCode.Accepted:
+            return
+        weapon = dialog.weapon_edit.text().strip()
+        try:
+            if not weapon or weapon == "weapon_" or not dialog.icon_edit.text().strip():
+                raise ValueError("name the weapon and choose its icon")
+            icon_image = load_rgba(Path(dialog.icon_edit.text().strip()))
+            selected = (load_rgba(Path(dialog.selected_edit.text().strip()))
+                        if dialog.selected_edit.text().strip() else None)
+            ammo = (load_rgba(Path(dialog.ammo_edit.text().strip()))
+                    if dialog.ammo_edit.text().strip() else None)
+            names = sprites.make_weapon_hud(self.project, weapon, icon_image,
+                                            selected=selected, ammo=ammo)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "New weapon HUD", str(exc))
+            return
+        self.log.append_line("made " + ", ".join(f"sprites/{n}" for n in names))
+        self.explorer.show_project(self.project)
+        self.explorer.select("sprite", names[0])
+
+    def remove_sprite(self, name: str) -> None:
+        from valve_qc_merger.project import sprites
+        if self.project is None:
+            return
+        answer = QMessageBox.question(self, "Remove sprite",
+                                      f"Remove sprites/{name} from the project?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        sprites.remove_sprite(self.project, name)
+        self.explorer.show_project(self.project)
+
+    def _reveal_sprite(self, name: str) -> None:
+        from valve_qc_merger.project import sprites
+        if self.project is not None:
+            self._open_path(sprites.sprite_path(self.project, name).parent)
+
     def export_package(self) -> None:
         """Build ▸ Export server package: compiled builds + their sounds as a
         cstrike/ tree (server and FastDL), an AMXX include, a .res list and a
@@ -566,7 +671,8 @@ class MainWindow(QMainWindow):
                        self.act_settings, self.act_reveal, self.act_close, self.act_find,
                        self.act_new_category, self.act_new_build, self.act_server,
                        self.act_import_sounds, self.act_import_sound_dir,
-                       self.act_export_package):
+                       self.act_export_package, self.act_import_sprites,
+                       self.act_new_sprite, self.act_new_hud):
             action.setEnabled(has and idle)
         # what acts on the selection is enabled only when there is one
         asset = has and bool(self.explorer.selected_assets())

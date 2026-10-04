@@ -182,6 +182,11 @@ class Explorer(QTreeWidget):
     sound_fix_requested = Signal(list)  # sound names
     sound_remove_requested = Signal(str)
     sound_play_requested = Signal(str)
+    sprite_selected = Signal(str)  # a sprite / HUD file (its sprites/ path)
+    sprite_import_requested = Signal()
+    sprite_new_requested = Signal()
+    hud_new_requested = Signal()
+    sprite_remove_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -233,8 +238,37 @@ class Explorer(QTreeWidget):
             if name == selected_build:
                 self.setCurrentItem(item)
         self._fill_sounds(project)
+        self._fill_sprites(project)
         self.expandAll()
         self._apply_filter()
+
+    def _fill_library(self, title: str, kind: str, names: list[str]) -> dict[str, QTreeWidgetItem]:
+        """``title (N)`` with ``names`` as folders of files; returns the items."""
+        root = QTreeWidgetItem(self, [f"{title} ({len(names)})"])
+        root.setData(0, ROLE_KIND, f"{kind}s")
+        folders: dict[str, QTreeWidgetItem] = {"": root}
+        items: dict[str, QTreeWidgetItem] = {}
+        for name in names:
+            parent = root
+            parts = name.split("/")
+            for depth in range(1, len(parts)):
+                key = "/".join(parts[:depth])
+                if key not in folders:
+                    folder = QTreeWidgetItem(folders["/".join(parts[:depth - 1])],
+                                             [parts[depth - 1]])
+                    folder.setData(0, ROLE_KIND, f"{kind}-folder")
+                    folder.setData(0, ROLE_NAME, key)
+                    folders[key] = folder
+                parent = folders[key]
+            item = QTreeWidgetItem(parent, [parts[-1]])
+            item.setData(0, ROLE_KIND, kind)
+            item.setData(0, ROLE_NAME, name)
+            items[name] = item
+        return items
+
+    def _fill_sprites(self, project: Project) -> None:
+        from valve_qc_merger.project.sprites import list_sprites
+        self._fill_library("Sprites", "sprite", list_sprites(project))
 
     def _fill_sounds(self, project: Project) -> None:
         """Sounds (N): the library as folders of files, a badge on files the
@@ -348,10 +382,10 @@ class Explorer(QTreeWidget):
             children = [walk(item.child(i)) for i in range(item.childCount())]
             if kind == "asset":
                 visible = self._asset_passes(str(item.data(0, ROLE_NAME))) or any(children)
-            elif kind in ("build", "sound"):
+            elif kind in ("build", "sound", "sprite"):
                 visible = (not self._filter_level and
                            self._filter_text in str(item.data(0, ROLE_NAME)).lower())
-            elif kind in ("assets", "builds", "sounds"):
+            elif kind in ("assets", "builds", "sounds", "sprites"):
                 visible = True
             else:  # category / kind group: only if something inside shows
                 visible = any(children) or not self.filtering
@@ -465,6 +499,9 @@ class Explorer(QTreeWidget):
         if kind == "sound":
             self.sound_selected.emit(str(item.data(0, ROLE_NAME)))
             return
+        if kind == "sprite":
+            self.sprite_selected.emit(str(item.data(0, ROLE_NAME)))
+            return
         if kind == "build":
             self.build_selected.emit(str(item.data(0, ROLE_NAME)))
         else:
@@ -513,6 +550,18 @@ class Explorer(QTreeWidget):
 
     def _context_menu(self, pos) -> None:  # noqa: ANN001 - QPoint
         item = self.itemAt(pos)
+        if item is not None and item.data(0, ROLE_KIND) in ("sprites", "sprite-folder",
+                                                             "sprite"):
+            menu = QMenu(self)
+            if item.data(0, ROLE_KIND) == "sprite":
+                name = str(item.data(0, ROLE_NAME))
+                menu.addAction("Remove", lambda: self.sprite_remove_requested.emit(name))
+                menu.addSeparator()
+            menu.addAction("Import sprites…", self.sprite_import_requested.emit)
+            menu.addAction("New sprite from images…", self.sprite_new_requested.emit)
+            menu.addAction("New weapon HUD…", self.hud_new_requested.emit)
+            menu.exec(self.viewport().mapToGlobal(pos))
+            return
         if item is not None and item.data(0, ROLE_KIND) in ("sounds", "sound-folder",
                                                              "sound"):
             menu = QMenu(self)

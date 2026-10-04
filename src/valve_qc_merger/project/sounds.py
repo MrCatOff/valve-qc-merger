@@ -78,7 +78,8 @@ def import_sounds(project: Project, sources: list[Path]) -> list[str]:
             name = _name_for(path.resolve(), folder.resolve() if folder else None)
             target = sound_path(project, name)
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target)
+            if not (target.exists() and target.resolve() == path.resolve()):
+                shutil.copy2(path, target)  # (re-importing a library file: nothing to copy)
             names.append(name)
     return names
 
