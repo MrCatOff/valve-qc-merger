@@ -146,3 +146,21 @@ and the library sheets they use) are download-only (**generic**,
   HUDs of `sprites/` (`weapon_*.txt` and the sheets they draw from), into a
   category of your choice. `valve_qc_merger.project.workflow` does it.
 - The Explorer filter (Ctrl+F) searches sounds and sprites too.
+
+## Unprecache stock models
+
+Stock models ReGameDLL precaches stay in the 512 even when no player ever
+sees them (your plugin gives every weapon its own view model, dropped
+weapons become a supply box, a skin plugin replaces player models). The
+Server window's **Unprecache** tab lists them by group — view models,
+player-held, world, the tactical shield, player models, shell casings —
+checked against the game folder; tick what your server replaces.
+
+**Replace them with** (recommended) names one model that takes their place
+wherever the game still sets them (e.g. `models/w_supplybox.mdl` for every
+dropped weapon); blocking without a replacement crashes clients on any
+entity that still uses the model. The tab shows the slots freed (the
+replacement costs one unless it is precached anyway), the budget counts
+them, and **Export list.ini…** writes the file for
+[Metamod Unprecacher](https://github.com/In-line/metamod_unprecacher)
+(`addons/unprecacher/list.ini`; `path c replace_path` per line).

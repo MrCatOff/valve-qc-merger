@@ -153,6 +153,9 @@ class Settings:
     extra_sounds: int = 0
     extra_generic: int = 0
     client_sounds: str = "generic"  # generic (ReHLDS 4096) | sound
+    # stock models unprecached (Metamod Unprecacher) and what replaces them
+    unprecache: list[str] = field(default_factory=list)
+    unprecache_replace: str = ""
 
 
 # where Deploy puts a build's models, under the game folder
@@ -288,7 +291,9 @@ class Project:
             extra_models=int(settings.get("extra_models", 0)),
             extra_sounds=int(settings.get("extra_sounds", 0)),
             extra_generic=int(settings.get("extra_generic", 0)),
-            client_sounds=str(settings.get("client_sounds", "generic")))
+            client_sounds=str(settings.get("client_sounds", "generic")),
+            unprecache=[str(p) for p in settings.get("unprecache", [])],
+            unprecache_replace=str(settings.get("unprecache_replace", "")))
         project.categories = list(meta.get("categories", []))
         for entry in data.get("assets", []):
             asset = Asset(**entry)
@@ -312,7 +317,9 @@ class Project:
                          "extra_models": self.settings.extra_models,
                          "extra_sounds": self.settings.extra_sounds,
                          "extra_generic": self.settings.extra_generic,
-                         "client_sounds": self.settings.client_sounds},
+                         "client_sounds": self.settings.client_sounds,
+                         "unprecache": self.settings.unprecache,
+                         "unprecache_replace": self.settings.unprecache_replace},
             "assets": [_asset_dict(a) for a in sorted(self.assets.values(),
                                                       key=lambda a: (a.kind, a.name))],
             "builds": [_build_dict(b) for b in self.builds.values()],

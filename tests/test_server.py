@@ -208,3 +208,60 @@ def test_export_package_writes_tree_include_res_and_report(tmp_path: Path) -> No
     text = (tmp_path / "out2" / "amxx" / "vqm_resources.inc").read_text()
     assert 'precache_sound(VQM_CLIENT_SOUNDS[i]);' in text
     assert '"weapons/pack_clipin.wav",' in text
+
+
+# -- unprecache ----------------------------------------------------------------
+def test_unprecache_list_and_slots(tmp_path: Path) -> None:
+    from valve_qc_merger.server.stock import GROUPS, existing
+    from valve_qc_merger.server.unprecache import Entry, list_ini, parse_list_ini, slots_freed
+    world = GROUPS["w"][2]
+    assert "models/w_ak47.mdl" in world and "models/w_knife.mdl" not in world
+    entries = [Entry(p, "models/w_supplybox.mdl") for p in world[:5]]
+    assert slots_freed(entries) == 5 - 1  # the supply box takes one slot
+    assert slots_freed(entries, {"models/w_supplybox.mdl"}) == 5
+    assert slots_freed([Entry("models/v_ak47.mdl")]) == 1
+    text = list_ini(entries[:2] + [Entry("models/v_ak47.mdl")], title="pack")
+    assert "models/w_ak47.mdl c models/w_supplybox.mdl" in text
+    assert "\nmodels/v_ak47.mdl\n" in text
+    assert parse_list_ini(text) == entries[:2] + [Entry("models/v_ak47.mdl")]
+    mod = tmp_path / "cstrike" / "models"
+    mod.mkdir(parents=True)
+    (mod / "w_ak47.mdl").write_bytes(b"IDST")
+    assert existing(world, tmp_path / "cstrike") == ["models/w_ak47.mdl"]
+    assert existing(world, None) == list(world)
+
+
+def test_unprecache_tab(tmp_path: Path, monkeypatch) -> None:
+    import os
+
+    import pytest
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from PySide6.QtCore import Qt
+
+    from valve_qc_merger.project import Project
+    from valve_qc_merger.studio import server_window
+    project = Project.create(tmp_path / "pack")
+    project.settings.extra_models = 300
+    window = server_window.ServerWindow(project)
+    tree = window.unprecache_tree
+    world = next(tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
+                 if tree.topLevelItem(i).text(0).startswith("World models"))
+    world.setCheckState(0, Qt.CheckState.Checked)  # ticks every w_ model
+    count = world.childCount()
+    window.replace_box.setChecked(True)
+    window.replace_edit.setText("models/w_supplybox.mdl")
+    window.replace_edit.editingFinished.emit()
+    assert window.freed_slots() == count - 1
+    assert "frees" in window.freed_label.text()
+    again = Project.open(project.root)
+    assert len(again.settings.unprecache) == count
+    assert again.settings.unprecache_replace == "models/w_supplybox.mdl"
+    parts = dict(window._lines(None)["models"].parts)
+    assert parts["unprecached stock models"] == -(count - 1)
+    target = tmp_path / "list.ini"
+    monkeypatch.setattr(server_window.QFileDialog, "getSaveFileName",
+                        lambda *a, **k: (str(target), ""))
+    assert window.export_unprecache() == str(target)
+    assert "models/w_ak47.mdl c models/w_supplybox.mdl" in target.read_text()

@@ -109,7 +109,7 @@ class BudgetLine:
 
 def budget(map_resources: MapResources | None, load: ProjectLoad, *,
            extra: dict[str, int] | None = None,
-           client_sounds_as: str = "generic") -> dict[str, BudgetLine]:
+           client_sounds_as: str = "generic", unprecached: int = 0) -> dict[str, BudgetLine]:
     """Slots per kind (models / sounds / generic) for one map ("no map": the
     project and the extras alone). ``client_sounds_as``: where the plugin
     precaches the view models' client sounds — ``generic`` (ReHLDS: 4096
@@ -127,6 +127,8 @@ def budget(map_resources: MapResources | None, load: ProjectLoad, *,
     parts[target].append(("view-model client sounds", len(load.client_sounds)))
     for key in parts:
         parts[key].append(("game DLL + plugins (your estimate)", int(extra.get(key, 0))))
+    if unprecached:
+        parts["models"].append(("unprecached stock models", -int(unprecached)))
     return {lim.key: BudgetLine(lim.key, lim.title, lim.limit, parts[lim.key])
             for lim in LIMITS}
 

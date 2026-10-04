@@ -107,6 +107,7 @@ class ServerWindow(QDialog):
         layout.addWidget(self.tabs, 1)
         self.tabs.addTab(self._budget_tab(), icon("gauge"), "Budget")
         self.tabs.addTab(self._doctor_tab(), icon("stethoscope"), "Doctor")
+        self.tabs.addTab(self._unprecache_tab(), icon("trash-2"), "Unprecache")
         self.resize(820, 720)
         self.refresh()
 
@@ -214,7 +215,8 @@ class ServerWindow(QDialog):
     def _lines(self, map_resources: MapResources | None) -> dict[str, BudgetLine]:
         extra = {key: spin.value() for key, spin in self.extra.items()}
         return budget(map_resources, self.load, extra=extra,
-                      client_sounds_as=self.client_box.currentData())
+                      client_sounds_as=self.client_box.currentData(),
+                      unprecached=self.freed_slots())
 
     def _show_budget(self) -> None:
         name = self.map_box.currentText()
@@ -248,6 +250,119 @@ class ServerWindow(QDialog):
             cell.setForeground(theme.color(LEVEL_TOKEN[worst] if res is not None
                                            else "muted"))
             self.maps_table.setItem(row, 4, cell)
+
+    # -- unprecache ----------------------------------------------------------
+    def _unprecache_tab(self) -> QWidget:
+        from PySide6.QtWidgets import QCheckBox, QTreeWidget, QTreeWidgetItem
+
+        from valve_qc_merger.server.stock import GROUPS, existing
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 12, 4, 4)
+        layout.setSpacing(8)
+        layout.addWidget(kit.hint(
+            "Stock models ReGameDLL precaches that your server no longer shows still take "
+            "model slots. Tick what your plugins replace; export a list.ini for Metamod "
+            "Unprecacher (addons/unprecacher/list.ini). Replacing beats blocking: the game "
+            "still sets those models on entities, and a blocked model with no replacement "
+            "crashes clients."))
+        self.unprecache_tree = QTreeWidget()
+        self.unprecache_tree.setHeaderHidden(True)
+        game = Path(self.project.settings.game_dir) if self.project.settings.game_dir else None
+        chosen = {p.lower() for p in self.project.settings.unprecache}
+        self.unprecache_tree.blockSignals(True)
+        for _key, (title, why, paths) in GROUPS.items():
+            files = existing(paths, game)
+            if not files:
+                continue
+            group = QTreeWidgetItem(self.unprecache_tree, [f"{title}  ·  {len(files)}"])
+            group.setToolTip(0, f"Tick when {why}.")
+            group.setFlags(group.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                           | Qt.ItemFlag.ItemIsAutoTristate)
+            for path in files:
+                item = QTreeWidgetItem(group, [path])
+                item.setData(0, Qt.ItemDataRole.UserRole, path)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.CheckState.Checked if path.lower() in chosen
+                                   else Qt.CheckState.Unchecked)
+        self.unprecache_tree.blockSignals(False)
+        self.unprecache_tree.itemChanged.connect(lambda *_a: self._unprecache_changed())
+        layout.addWidget(self.unprecache_tree, 1)
+        row = QHBoxLayout()
+        self.replace_box = QCheckBox("Replace them with")
+        self.replace_edit = QLineEdit(self.project.settings.unprecache_replace)
+        self.replace_edit.setPlaceholderText("e.g. models/w_supplybox.mdl")
+        self.replace_box.setChecked(bool(self.project.settings.unprecache_replace))
+        self.replace_box.toggled.connect(lambda _on: self._unprecache_changed())
+        self.replace_edit.editingFinished.connect(self._unprecache_changed)
+        row.addWidget(self.replace_box)
+        row.addWidget(self.replace_edit, 1)
+        layout.addLayout(row)
+        bottom = QHBoxLayout()
+        self.freed_label = QLabel()
+        theme.set_role(self.freed_label, "success")
+        export = QPushButton(icon("file-down"), "Export list.ini…")
+        export.setAutoDefault(False)
+        export.clicked.connect(self.export_unprecache)
+        bottom.addWidget(self.freed_label, 1)
+        bottom.addWidget(export)
+        layout.addLayout(bottom)
+        self._update_freed()
+        return page
+
+    def unprecache_entries(self) -> list:
+        from valve_qc_merger.server.unprecache import Entry
+        replace = self.replace_edit.text().strip() if self.replace_box.isChecked() else ""
+        out = []
+        root = self.unprecache_tree.invisibleRootItem()
+        for g in range(root.childCount()):
+            group = root.child(g)
+            for i in range(group.childCount()):
+                item = group.child(i)
+                if item.checkState(0) == Qt.CheckState.Checked:
+                    out.append(Entry(item.data(0, Qt.ItemDataRole.UserRole), replace))
+        return out
+
+    def freed_slots(self) -> int:
+        from valve_qc_merger.server.unprecache import slots_freed
+        if not hasattr(self, "unprecache_tree"):
+            return 0
+        return max(slots_freed(self.unprecache_entries()), 0)
+
+    def _update_freed(self) -> None:
+        count = len(self.unprecache_entries())
+        freed = self.freed_slots()
+        self.freed_label.setText(
+            f"{count} stock model(s) unprecached — frees {freed} model slot(s)"
+            if count else "Nothing ticked yet.")
+
+    def _unprecache_changed(self) -> None:
+        settings = self.project.settings
+        entries = self.unprecache_entries()
+        settings.unprecache = [e.path for e in entries]
+        settings.unprecache_replace = (self.replace_edit.text().strip()
+                                       if self.replace_box.isChecked() else "")
+        self.project.save()
+        self._update_freed()
+        self._show_budget()
+        self._fill_maps_table()
+
+    def export_unprecache(self) -> str | None:
+        from valve_qc_merger.server.unprecache import list_ini
+        entries = self.unprecache_entries()
+        if not entries:
+            self.freed_label.setText("Tick at least one model to unprecache.")
+            return None
+        start = (Path(self.project.settings.game_dir) / "addons" / "unprecacher" / "list.ini"
+                 if self.project.settings.game_dir else self.project.root / "list.ini")
+        path, _ = QFileDialog.getSaveFileName(self, "Export list.ini", str(start),
+                                              "Unprecacher list (*.ini)")
+        if not path:
+            return None
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(list_ini(entries, title=self.project.name), encoding="utf-8")
+        self.freed_label.setText(f"Saved {path}")
+        return path
 
     # -- doctor --------------------------------------------------------------
     def _doctor_tab(self) -> QWidget:
