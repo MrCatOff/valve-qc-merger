@@ -211,6 +211,20 @@ offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
   dock layout are restored on the next start.
 - **Status bar**: project name, asset and build counts; job progress and
   Cancel while a job runs.
+- **Option forms** (`studio.options_form` + `studio.field_specs`): every
+  service option has a sentence-case label, a tooltip, a placeholder that
+  names the real default, and a group — Basic on top, the rest under a
+  collapsible **Advanced options (n)** that opens by itself when one of them
+  is set. Negative flags read positively (`no_verify` → "Verify the result",
+  checked); options the studio sets itself (`dry_run`, `plan_only`, retarget
+  `category` / `studiomdl` / `compile`) are hidden and their stored values
+  kept. Number fields accept only numbers with a decimal point.
+- **Build settings**: name + kind badge + what the merge makes; sections
+  Assets · Hands (merge-v: "Put every model on our hands first", which also
+  locks Shared hands on) · Merge options · Deploy; a footer that never
+  scrolls away: Save … Plan · Compile · Deploy · **Run** (each saves first).
+- **New build**: the merge by what it takes ("View models (v_) · 3 assets")
+  with a one-line description, assets from a category, name, Create.
 - `python tools/ui_screenshots.py OUT_DIR` grabs the main screens (welcome,
   asset, swap-hands asset, Bones, build, Retarget and New build dialogs) from
   a throw-away project — before/after shots for UI changes.

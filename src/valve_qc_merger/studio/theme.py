@@ -130,6 +130,8 @@ QLabel[role="warning"] {{ color: {t['warning']}; }}
 QLabel[role="error"] {{ color: {t['danger']}; }}
 QLabel[role="success"] {{ color: {t['success']}; }}
 QLabel[role="title"] {{ font-size: 26px; font-weight: 600; color: {t['text']}; }}
+QLabel[role="heading"] {{ font-size: 17px; font-weight: 600; color: {t['text']}; }}
+QWidget[role="footer"] {{ background: {t['bg']}; border-top: 1px solid {t['border']}; }}
 QLabel[role="subtitle"] {{ font-size: 14px; color: {t['muted']}; }}
 QLabel[role="section"] {{
     font-size: 11px; font-weight: 700; color: {t['muted']}; letter-spacing: 0.6px;
@@ -191,7 +193,7 @@ QToolBar::separator {{
 }}
 QToolButton {{
     background: transparent; color: {t['text']}; border: 1px solid transparent;
-    border-radius: {r}px; padding: 4px 8px;
+    border-radius: {r}px; padding: 4px 8px; font-size: {FONT_PX}px;
 }}
 QToolButton:hover {{ background: {t['raised']}; border-color: {t['border']}; }}
 QToolButton:pressed {{ background: {t['hover']}; }}

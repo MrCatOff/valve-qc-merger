@@ -75,7 +75,7 @@ def main(out: Path) -> int:
         lambda: grab_dialog(DeriveDialog(["v_anaconda"], window, existing=set(project.assets),
                                          kinds={"v"}), "06_retarget"),
         lambda: grab_dialog(NewBuildDialog(project, window), "07_new_build"),
-        app.quit,
+        lambda: QTimer.singleShot(800, app.quit),  # after the last dialog grab
     ]
     window.show()
     for index, step in enumerate(steps):

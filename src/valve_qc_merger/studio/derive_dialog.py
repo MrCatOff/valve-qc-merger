@@ -345,7 +345,7 @@ class DeriveDialog(QDialog):
                 grid.addWidget(spin, row, column)
                 self.curl_spins[(side, finger)] = spin
         hint = QLabel("A loose grip (our hands are bigger than most originals): close the "
-                      "fingers a few degrees, or raise 'snug max deg' below so the automatic "
+                      "fingers a few degrees, or raise 'Max finger fit' below so the automatic "
                       "fit may curl further.")
         hint.setWordWrap(True)
         hint.setProperty("role", "hint")

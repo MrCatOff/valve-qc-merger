@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -37,11 +36,32 @@ from valve_qc_merger.project.model import DEFAULT_DEPLOY_DIR, DEPLOY_DIRS
 from valve_qc_merger.services.retarget import RetargetOptions
 from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.build_report import LIMITS, load_record, manifest_rows
+from valve_qc_merger.studio.icons import icon
 from valve_qc_merger.studio.options_form import OptionsForm
 from valve_qc_merger.studio.widgets import KIND_TITLES, _fill, _table
 
 OK_COLOR = theme.color("success")
 BAD_COLOR = theme.color("danger")
+
+
+# one line per build kind: what the merge makes
+KIND_DESCRIPTIONS = {
+    "merge-v": "First-person weapons → one v_ model; each weapon is a bodygroup entry the "
+               "server picks with pev->body.",
+    "merge-p": "Weapons in the player's hands → one p_ model with a bodygroup per weapon.",
+    "merge-w": "Weapons lying on the ground → one w_ model with a bodygroup per weapon.",
+    "merge-players": "Player characters → models on one shared rig, a skin per character.",
+    "merge-zhands": "Zombie knife and grenade hands → one model sharing a single grenade.",
+}
+
+
+def _delete_layout(layout) -> None:  # noqa: ANN001 - QLayout
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget() is not None:
+            item.widget().deleteLater()
+        elif item.layout() is not None:
+            _delete_layout(item.layout())
 
 
 def _asset_list(project: Project, kind: str, chosen: list[str]) -> QListWidget:
@@ -75,22 +95,35 @@ class NewBuildDialog(QDialog):
         for kind, spec in BUILD_KINDS.items():
             titles = ", ".join(KIND_TITLES[k] for k in sorted(spec.asset_kinds))
             count = sum(1 for a in project.assets.values() if a.kind in spec.asset_kinds)
-            self.kind_box.addItem(f"{kind}  —  {titles} ({count})", kind)
+            self.kind_box.addItem(f"{titles}  ·  {count} asset{'s' * (count != 1)}", kind)
         self.kind_box.currentIndexChanged.connect(self._suggest)
-        self.retarget_box = QCheckBox("put every view model on our hands first (shared hands; "
-                                      "already retargeted ones are kept as they are)")
+        self.kind_hint = QLabel()
+        theme.set_role(self.kind_hint, "hint")
+        self.kind_hint.setWordWrap(True)
+        self.retarget_box = QCheckBox("Put every model on our hands first")
+        self.retarget_box.setToolTip("Models not yet on our hands are retargeted before the "
+                                     "merge (Retarget results are taken as they are); the "
+                                     "merge then shares one hands bodygroup.")
         self.category_box = QComboBox()
-        self.category_box.addItem("every category", None)
+        self.category_box.addItem("Every category", None)
         for category in sorted(project.categories, key=str.lower):
             self.category_box.addItem(category, category)
         self.category_box.currentIndexChanged.connect(self._suggest)
         form = QFormLayout(self)
-        form.addRow("Kind", self.kind_box)
-        form.addRow("Assets", self.category_box)
+        form.setContentsMargins(20, 18, 20, 16)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+        heading = QLabel("New build")
+        theme.set_role(heading, "heading")
+        form.addRow(heading)
+        form.addRow("Merge", self.kind_box)
+        form.addRow("", self.kind_hint)
+        form.addRow("Assets from", self.category_box)
         form.addRow("Name", self.name_edit)
         form.addRow("", self.retarget_box)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Create")
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
@@ -99,12 +132,16 @@ class NewBuildDialog(QDialog):
             if a.kind in BUILD_KINDS[self.kind_box.itemData(i)].asset_kinds))
         self.kind_box.setCurrentIndex(best)
         self._suggest()
-        self.resize(520, 0)
+        # tall enough for the wrapped kind description at this width
+        height = self.layout().totalHeightForWidth(560)
+        self.resize(560, height if height > 0 else self.sizeHint().height())
         self.build: Build | None = None
 
     def _suggest(self) -> None:
         kind = self.kind_box.currentData()
         self.retarget_box.setVisible(kind == "merge-v")
+        self.kind_hint.setText(KIND_DESCRIPTIONS.get(kind, ""))
+        self.kind_hint.setMinimumHeight(self.kind_hint.heightForWidth(400))
         base = {"merge-v": "view", "merge-p": "player_held", "merge-w": "world",
                 "merge-players": "players", "merge-zhands": "zombie_hands"}[kind]
         category = self.category_box.currentData() if hasattr(self, "category_box") else None
@@ -149,13 +186,22 @@ class BuildPanel(QTabWidget):
         self.project: Project | None = None
         self.build_name = ""
 
-        # -- settings
+        # -- settings: the form scrolls, the actions stay in a footer below it
         self.settings_page = QWidget()
         self.settings_layout = QVBoxLayout(self.settings_page)
+        self.settings_layout.setContentsMargins(12, 12, 12, 12)
+        self.settings_layout.setSpacing(8)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.settings_page)
-        self.addTab(scroll, "Settings")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        settings_tab = QWidget()
+        tab_layout = QVBoxLayout(settings_tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.setSpacing(0)
+        tab_layout.addWidget(scroll, 1)
+        tab_layout.addWidget(self._settings_footer())
+        self.addTab(settings_tab, "Settings")
         # -- results
         results = QWidget()
         layout = QVBoxLayout(results)
@@ -217,6 +263,44 @@ class BuildPanel(QTabWidget):
         self.addTab(outputs, "Outputs")
 
     # -- binding -----------------------------------------------------------
+    def _settings_footer(self) -> QWidget:
+        footer = QWidget()
+        theme.set_role(footer, "footer")
+        footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        row = QHBoxLayout(footer)
+        row.setContentsMargins(12, 8, 12, 8)
+        row.setSpacing(6)
+
+        def button(text: str, name: str, tip: str, slot, primary: bool = False) -> QPushButton:  # noqa: ANN001
+            out = QPushButton(icon(name, theme.TOKENS["on_accent"] if primary else None), text)
+            out.setToolTip(tip)
+            out.clicked.connect(slot)
+            if primary:
+                theme.set_primary(out)
+            return out
+
+        self.save_button = button("Save", "check", "save the settings", self.save)
+        self.plan_button = button(
+            "Plan", "list-checks", "save, then show what a run would make (parts, pev_body, "
+            "rejections) without merging",
+            lambda: self.save() and self.plan_requested.emit(self.build_name))
+        self.compile_button = button("Compile", "hammer", "compile the last run's output",
+                                     lambda: self.compile_requested.emit(self.build_name))
+        self.deploy_button = button(
+            "Deploy", "rocket", "save, then copy the compiled models + manifest into the "
+            "game folder", lambda: self.save() and self.deploy_requested.emit(self.build_name))
+        self.run_button = button("Run", "play", "save, then merge",
+                                 lambda: self.save() and self.run_requested.emit(self.build_name),
+                                 primary=True)
+        row.addWidget(self.save_button)
+        row.addStretch(1)
+        for widget in (self.plan_button, self.compile_button, self.deploy_button,
+                       self.run_button):
+            row.addWidget(widget)
+        self.settings_footer = footer
+        footer.setVisible(False)
+        return footer
+
     def show_build(self, project: Project | None, name: str) -> None:
         self.project, self.build_name = project, name
         self._build_settings()
@@ -228,21 +312,46 @@ class BuildPanel(QTabWidget):
             item = self.settings_layout.takeAt(0)
             if item.widget() is not None:
                 item.widget().deleteLater()
+            elif item.layout() is not None:
+                _delete_layout(item.layout())
+
+    def _section(self, title: str) -> None:
+        label = QLabel(title.upper())
+        theme.set_role(label, "section")
+        label.setContentsMargins(0, 10, 0, 0)
+        self.settings_layout.addWidget(label)
 
     def _build_settings(self) -> None:
         self._clear_settings()
         project = self.project
+        self.settings_footer.setVisible(project is not None
+                                        and self.build_name in project.builds)
         if project is None or self.build_name not in project.builds:
             return
         build = project.builds[self.build_name]
-        title = QLabel(f"<b>{build.name}</b> · {build.kind}")
-        self.settings_layout.addWidget(title)
+        spec = BUILD_KINDS[build.kind]
+        kinds = ", ".join(KIND_TITLES[k] for k in sorted(spec.asset_kinds))
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        title = QLabel(build.name)
+        theme.set_role(title, "heading")
+        head.addWidget(title)
+        badge = QLabel(build.kind)
+        theme.set_role(badge, "kbd")
+        head.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addStretch(1)
+        holder = QWidget()
+        holder.setLayout(head)
+        self.settings_layout.addWidget(holder)
+        about = QLabel(KIND_DESCRIPTIONS.get(build.kind, ""))
+        theme.set_role(about, "hint")
+        about.setWordWrap(True)
+        self.settings_layout.addWidget(about)
 
-        assets_box = QGroupBox("Assets")
-        assets_layout = QVBoxLayout(assets_box)
-        self.all_radio = QRadioButton("every asset of the accepted kinds")
-        self.category_radio = QRadioButton("every asset of the accepted kinds in category")
-        self.pick_radio = QRadioButton("only the checked assets")
+        self._section("Assets")
+        self.all_radio = QRadioButton(f"All {kinds}")
+        self.category_radio = QRadioButton("Only the category")
+        self.pick_radio = QRadioButton("Only the checked assets")
         self.category_combo = QComboBox()
         for category in sorted(project.categories, key=str.lower):
             self.category_combo.addItem(category)
@@ -258,73 +367,65 @@ class BuildPanel(QTabWidget):
         self.category_combo.setEnabled(by_category)
         self.category_radio.toggled.connect(self.category_combo.setEnabled)
         self.asset_list = _asset_list(project, build.kind, build.assets)
-        self.asset_list.setEnabled(bool(build.assets))
-        self.pick_radio.toggled.connect(self.asset_list.setEnabled)
+        self.asset_list.setVisible(bool(build.assets))
+        self.asset_list.setMaximumHeight(180)
+        self.pick_radio.toggled.connect(self.asset_list.setVisible)
         category_row = QHBoxLayout()
+        category_row.setContentsMargins(0, 0, 0, 0)
         category_row.addWidget(self.category_radio)
         category_row.addWidget(self.category_combo, 1)
-        assets_layout.addWidget(self.all_radio)
-        assets_layout.addLayout(category_row)
-        assets_layout.addWidget(self.pick_radio)
-        assets_layout.addWidget(self.asset_list)
-        self.settings_layout.addWidget(assets_box)
+        category_holder = QWidget()
+        category_holder.setLayout(category_row)
+        for widget in (self.all_radio, category_holder, self.pick_radio, self.asset_list):
+            self.settings_layout.addWidget(widget)
 
         self.retarget_check: QCheckBox | None = None
         self.retarget_form: OptionsForm | None = None
         if build.kind == "merge-v":
-            self.retarget_check = QCheckBox("put every asset on our hands first, then merge "
-                                            "with shared hands (retargeted ones kept as is)")
+            self._section("Hands")
+            self.retarget_check = QCheckBox("Put every model on our hands first")
             self.retarget_check.setChecked(build.retarget)
             self.settings_layout.addWidget(self.retarget_check)
-            retarget_box = QGroupBox("Retarget options")
-            retarget_layout = QVBoxLayout(retarget_box)
+            hint = QLabel("Models not yet on our hands are retargeted with the options "
+                          "below; ones made by Retarget or already wearing our hands are "
+                          "taken as they are. The merge then uses one shared hands "
+                          "bodygroup.")
+            theme.set_role(hint, "hint")
+            hint.setWordWrap(True)
+            hint.setContentsMargins(24, 0, 0, 0)
+            self.settings_layout.addWidget(hint)
             self.retarget_form = OptionsForm(RetargetOptions, "retarget",
                                              build.retarget_options)
-            retarget_layout.addWidget(self.retarget_form)
-            retarget_box.setVisible(build.retarget)
-            self.retarget_check.toggled.connect(retarget_box.setVisible)
-            self.settings_layout.addWidget(retarget_box)
+            self.retarget_form.setContentsMargins(24, 4, 0, 0)
+            self.retarget_form.setVisible(build.retarget)
+            self.retarget_check.toggled.connect(self.retarget_form.setVisible)
+            self.settings_layout.addWidget(self.retarget_form)
 
-        deploy_row = QHBoxLayout()
+        self._section("Merge options")
+        self.options_form = OptionsForm(spec.options, build.kind, build.options)
+        self.settings_layout.addWidget(self.options_form)
+        shared = self.options_form._widgets.get("shared_hands")
+        if self.retarget_check is not None and shared is not None:
+            # "on our hands first" always merges with shared hands
+            shared.setEnabled(not build.retarget)
+            self.retarget_check.toggled.connect(lambda on: shared.setEnabled(not on))
+
+        self._section("Deploy")
+        deploy_row = QFormLayout()
+        deploy_row.setContentsMargins(0, 0, 0, 0)
         self.deploy_edit = QLineEdit(build.deploy_dir or "")
-        self.deploy_edit.setPlaceholderText(
-            DEPLOY_DIRS.get(build.kind, DEFAULT_DEPLOY_DIR) + "  (default)")
-        self.deploy_edit.setToolTip("where Deploy copies the compiled models and the "
-                                    "manifest, under the game folder (Project ▸ Settings)")
-        deploy_row.addWidget(QLabel("Deploy to"))
-        deploy_row.addWidget(self.deploy_edit, 1)
-        self.settings_layout.addLayout(deploy_row)
-
-        options_box = QGroupBox(f"{build.kind} options")
-        options_layout = QVBoxLayout(options_box)
-        self.options_form = OptionsForm(BUILD_KINDS[build.kind].options, build.kind,
-                                        build.options)
-        options_layout.addWidget(self.options_form)
-        self.settings_layout.addWidget(options_box)
-
-        row = QHBoxLayout()
-        save = QPushButton("Save")
-        save.clicked.connect(self.save)
-        run = QPushButton("Save && Run")
-        run.clicked.connect(lambda: self.save() and self.run_requested.emit(self.build_name))
-        plan_button = QPushButton("Save && Plan")
-        plan_button.setToolTip("what a run would make (parts, pev_body, rejections) "
-                               "without merging")
-        plan_button.setVisible(build.kind in Project.PLANNABLE)
-        plan_button.clicked.connect(
-            lambda: self.save() and self.plan_requested.emit(self.build_name))
-        compile_button = QPushButton("Compile")
-        compile_button.clicked.connect(lambda: self.compile_requested.emit(self.build_name))
-        deploy_button = QPushButton("Deploy")
-        deploy_button.setToolTip("copy the compiled models + manifest into the game folder")
-        deploy_button.clicked.connect(lambda: self.save() and
-                                      self.deploy_requested.emit(self.build_name))
-        for button in (save, plan_button, run, compile_button, deploy_button):
-            row.addWidget(button)
-        holder = QWidget()
-        holder.setLayout(row)
-        self.settings_layout.addWidget(holder)
+        self.deploy_edit.setPlaceholderText(DEPLOY_DIRS.get(build.kind, DEFAULT_DEPLOY_DIR))
+        tip = ("Where Deploy copies the compiled models and the manifest, inside the game "
+               "folder (Project ▸ Settings).")
+        self.deploy_edit.setToolTip(tip)
+        deploy_label = QLabel("Folder in the game")
+        deploy_label.setToolTip(tip)
+        deploy_row.addRow(deploy_label, self.deploy_edit)
+        deploy_holder = QWidget()
+        deploy_holder.setLayout(deploy_row)
+        self.settings_layout.addWidget(deploy_holder)
         self.settings_layout.addStretch(1)
+        self.plan_button.setVisible(build.kind in Project.PLANNABLE)
 
     def edited_build(self) -> Build:
         """The build as currently shown in the form (raises ValueError)."""
