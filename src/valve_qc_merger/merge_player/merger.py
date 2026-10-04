@@ -222,7 +222,8 @@ def merge_player_models(
             write_smd_text(mesh), encoding="latin-1"
         )
         verts = {(v.position, v.bone) for t in mesh.triangles for v in t.vertices}
-        norms = {(v.normal, v.bone) for t in mesh.triangles for v in t.vertices}
+        norms = {(v.normal, v.bone, t.material.lower())  # per texture, as studiomdl counts
+                 for t in mesh.triangles for v in t.vertices}
         if len(verts) > STOCK_VERT_LIMIT or len(norms) > STOCK_VERT_LIMIT:
             report.warnings.append(
                 f"{model.name}: submodel has {len(verts)} verts / "
@@ -342,8 +343,23 @@ def merge_player_models(
     return report
 
 
+def submodel_size(model: ModelInput) -> tuple[int, int]:
+    """(vertices, normals) of the one submodel merge-p makes of ``model`` —
+    every non-empty mesh concatenated, counted as studiomdl does (position
+    or normal per bone)."""
+    meshes = [smd for smd in model.meshes.values() if smd.triangles]
+    if not meshes:
+        return 0, 0
+    mesh = _concat_meshes(meshes)
+    verts = {(v.position, v.bone) for t in mesh.triangles for v in t.vertices}
+    norms = {(v.normal, v.bone, t.material.lower())  # per texture, as studiomdl counts
+                 for t in mesh.triangles for v in t.vertices}
+    return len(verts), len(norms)
+
+
 __all__ = [
     "merge_player_models",
+    "submodel_size",
     "parse_texturegroups",
     "skin_texture_files",
 ]

@@ -12,7 +12,11 @@ from valve_qc_merger.merge_player.analyze import (
     collapse_weapon_bones,
 )
 from valve_qc_merger.merge_player.loading import load_player_model
-from valve_qc_merger.merge_player.merger import merge_player_models, skin_texture_files
+from valve_qc_merger.merge_player.merger import (
+    merge_player_models,
+    skin_texture_files,
+    submodel_size,
+)
 from valve_qc_merger.merge_player.parts import (
     TEXTURE_BUDGET,
     PlayerBudget,
@@ -26,7 +30,11 @@ from valve_qc_merger.merge_view.discovery import (
     discover_models,
     sanitize_model_dir,
 )
-from valve_qc_merger.merge_view.merger import MergeError, write_manifest_data
+from valve_qc_merger.merge_view.merger import (
+    STOCK_VERT_LIMIT,
+    MergeError,
+    write_manifest_data,
+)
 from valve_qc_merger.services.base import (
     EXIT_DISCOVERY,
     EXIT_FAIL,
@@ -78,6 +86,15 @@ def run_merge_player(opts: MergePlayerOptions,
         except (MergeViewError, PlayerAnalyzeError, ValueError) as exc:
             failures.append(str(exc))
             reporter.log(f"  {model_dir.name:<20} FAIL  {exc}")
+            continue
+        # merge-p makes one submodel per weapon: one that stock studiomdl
+        # cannot compile would fail the whole part — leave it out instead
+        verts, norms = submodel_size(model)
+        if max(verts, norms) > STOCK_VERT_LIMIT:
+            why = (f"model {model.name!r}: {verts} vertices / {norms} normals in one "
+                   f"submodel exceed stock studiomdl's {STOCK_VERT_LIMIT}; left out")
+            failures.append(why)
+            reporter.log(f"  {model.name:<20} SKIP  {why}")
             continue
         pairs.append((model, plan))
         skin_textures[model.name] = skin_texture_files(model.qc_text)

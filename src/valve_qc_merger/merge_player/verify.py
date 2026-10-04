@@ -109,6 +109,10 @@ def verify_player_part(
     checked = 0
     problems: list[str] = []
     merged_index = {name: index for index, name, _p in reference_table}
+    names_by_index = {index: name for index, name, _p in reference_table}
+    reference_parent = {name: names_by_index.get(parent)
+                         for _i, name, parent in reference_table}
+    reparented: list[str] = []
     for model_name in model_names:
         original = load_model(models_dir / model_name, require_anims=False)
         source = max(original.meshes.values(), key=lambda m: len(m.nodes))
@@ -138,7 +142,19 @@ def verify_player_part(
                 continue
             checked += 1
             if is_shared(merged_name):
-                # Shared bones keep their own bind locals verbatim.
+                # Shared bones keep their own bind locals verbatim — unless the
+                # model hangs the bone under another parent than the merged
+                # table (p_balrogm4: R Hand under "R Arm2", not "R Forearm"):
+                # then no local can match, and none needs to — the engine
+                # takes every Bip01 bone from the player by name; what the
+                # weapon needs (its hand-relative offset) is checked below.
+                orig_parent = source.nodes[source_index[orig_name]].parent
+                orig_parent_name = (source.nodes[orig_parent].name
+                                    if orig_parent >= 0 else None)
+                merged_parent = reference_parent[merged_name]
+                if orig_parent_name != merged_parent:
+                    reparented.append(f"{model_name}/{orig_name}")
+                    continue
                 orig_local = source.frames[0].pose_for(source_index[orig_name])
                 new_local = merged_mesh.frames[0].pose_for(
                     merged_index[merged_name]
@@ -186,10 +202,12 @@ def verify_player_part(
                 worst = delta
                 worst_at = where
     ok = worst <= PLACE_EPSILON and not problems
+    note = (f"; {len(reparented)} shared bone(s) under another parent, taken from "
+            f"the player at runtime ({', '.join(reparented[:3])})" if reparented else "")
     results.append(GateResult(
         "placement_preserved", ok,
         f"{checked} bone placements checked, worst delta {worst:.2e} "
-        f"({worst_at})" if not problems else "; ".join(problems[:3]),
+        f"({worst_at}){note}" if not problems else "; ".join(problems[:3]),
     ))
 
     # -- geometry_preserved ------------------------------------------------
@@ -233,7 +251,8 @@ def verify_player_part(
         budget_problems.append(f"{submodels} submodels > {SUBMODEL_LIMIT}")
     for path, smd in meshes.items():
         verts = {(v.position, v.bone) for t in smd.triangles for v in t.vertices}
-        norms = {(v.normal, v.bone) for t in smd.triangles for v in t.vertices}
+        norms = {(v.normal, v.bone, t.material.lower())  # per texture, as studiomdl counts
+                 for t in smd.triangles for v in t.vertices}
         if len(verts) > STOCK_VERT_LIMIT or len(norms) > STOCK_VERT_LIMIT:
             budget_problems.append(
                 f"{path}: {len(verts)}v/{len(norms)}n > {STOCK_VERT_LIMIT}"

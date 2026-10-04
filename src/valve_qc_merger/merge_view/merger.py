@@ -564,7 +564,8 @@ def merge_models(
     for model_name, smds in written.items():
         for smd in smds:
             verts = {(v.position, v.bone) for t in smd.triangles for v in t.vertices}
-            norms = {(v.normal, v.bone) for t in smd.triangles for v in t.vertices}
+            norms = {(v.normal, v.bone, t.material.lower())  # per texture, as studiomdl counts
+                 for t in smd.triangles for v in t.vertices}
             if len(verts) > STOCK_VERT_LIMIT or len(norms) > STOCK_VERT_LIMIT:
                 overruns.add(
                     f"{model_name}: submodel has {len(verts)} verts / "

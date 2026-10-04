@@ -129,3 +129,90 @@ def test_empty_submodels_dropped_with_warning(tmp_path: Path) -> None:
     qc = (out / "p_one.qc").read_text(encoding="latin-1")
     # Only the real reference mesh became a submodel (upgrade/upgrade_2 empty).
     assert qc.count("studio ") == 1
+
+
+def _rewrite_smds(directory: Path, edit) -> None:  # noqa: ANN001 - callable(Smd)->Smd
+    from valve_qc_merger.writers.smd import write_smd_text
+    for path in directory.rglob("*.smd"):
+        smd = edit(parse_smd_file(path))
+        path.write_text(write_smd_text(smd), encoding="latin-1")
+
+
+def test_oversize_model_is_left_out(tmp_path: Path) -> None:
+    """A weapon whose one submodel exceeds stock studiomdl's 2048 vertices
+    would fail the whole part: it is left out (a failure), the rest merges."""
+    import dataclasses
+
+    from valve_qc_merger.models.geometry import Vector3
+    from valve_qc_merger.models.smd import Triangle, Vertex
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    shutil.copytree(_EXAMPLES / "p_anaconda", models_dir / "p_anaconda")
+    shutil.copytree(_EXAMPLES / "p_anaconda", models_dir / "p_huge")
+
+    def bloat(smd):  # noqa: ANN001, ANN202
+        if not smd.triangles:
+            return smd
+        extra = []
+        for copy in range(1, 12):  # shifted copies: 258 -> 3096 vertices
+            for tri in smd.triangles:
+                extra.append(Triangle(tri.material, tuple(
+                    dataclasses.replace(v, position=Vector3(
+                        v.position.x + copy * 40.0, v.position.y, v.position.z))
+                    for v in tri.vertices)))
+        assert isinstance(extra[0].vertices[0], Vertex)
+        return dataclasses.replace(smd, triangles=[*smd.triangles, *extra])
+
+    _rewrite_smds(models_dir / "p_huge", bloat)
+    for qc in (models_dir / "p_huge").glob("*.qc"):
+        qc.rename(qc.with_name("p_huge.qc"))
+    out = tmp_path / "out"
+    assert main(["merge-p", str(models_dir), "--out", str(out), "--name", "p_t"]) != 0
+    qc = (out / "p_t.qc").read_text(encoding="latin-1")
+    assert qc.count("studio ") == 1 and "p_huge" not in qc
+    assert "p_anaconda" in (out / "models.ini").read_text()
+
+
+def test_shared_bone_under_another_parent_passes_the_gate(tmp_path: Path) -> None:
+    """p_balrogm4 hangs ``Bip01 R Hand`` under ``R Arm2`` (not ``R Forearm``):
+    its bind local cannot survive the shared table — the engine takes Bip01
+    bones from the player anyway, so only the hand-relative weapon counts."""
+    import dataclasses
+
+    from valve_qc_merger.models.geometry import Vector3
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    shutil.copytree(_EXAMPLES / "p_anaconda", models_dir / "p_anaconda")
+    shutil.copytree(_EXAMPLES / "p_anaconda", models_dir / "p_oddarm")
+
+    def odd_arm(smd):  # noqa: ANN001, ANN202
+        index = next(n.index for n in smd.nodes if n.name == "Bip01 R Forearm")
+        nodes = [dataclasses.replace(n, name="Bip01 R Arm2") if n.index == index else n
+                 for n in smd.nodes]
+        frames = [dataclasses.replace(frame, poses=tuple(
+            dataclasses.replace(p, position=Vector3(p.position.x, p.position.y + 6.0,
+                                                    p.position.z))
+            if p.bone == index else p for p in frame.poses)) for frame in smd.frames]
+        return dataclasses.replace(smd, nodes=nodes, frames=frames)
+
+    _rewrite_smds(models_dir / "p_oddarm", odd_arm)
+    for qc in (models_dir / "p_oddarm").glob("*.qc"):
+        qc.rename(qc.with_name("p_oddarm.qc"))
+    out = tmp_path / "out"
+    assert main(["merge-p", str(models_dir), "--out", str(out), "--name", "p_t"]) == 0
+
+
+def test_normals_count_per_texture_as_studiomdl_does() -> None:
+    """studiomdl keeps a normal per (direction, bone, texture): one shared
+    direction on two textures is two normals (p_linkgun: 1059 -> 2118)."""
+    import dataclasses
+
+    model = _load_player_model(_EXAMPLES / "p_anaconda")
+    from valve_qc_merger.merge_player.merger import submodel_size
+    _verts, normals = submodel_size(model)
+    mesh = next(iter(model.meshes.values()))
+    twin = dataclasses.replace(mesh, triangles=[
+        *mesh.triangles,
+        *(dataclasses.replace(t, material=t.material + "_b") for t in mesh.triangles)])
+    model.meshes = {**model.meshes, "twin": twin}
+    assert submodel_size(model)[1] == normals * 2  # the same directions, two textures

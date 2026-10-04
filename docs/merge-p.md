@@ -72,14 +72,22 @@ idle animation.
 - Empty decompiler submodels (0-triangle `upgrade.smd` placeholders) are
   dropped with a warning.
 
+## Models left out
+
+Each weapon becomes ONE submodel (all its meshes concatenated). A weapon
+whose submodel would exceed stock studiomdl's 2048 vertices or normals —
+normals count once per texture, as studiomdl keeps them — is left out with
+a failure line naming the counts; the rest of the pack still merges and
+compiles.
+
 ## The verification gate
 
 | Check | Proves |
 |---|---|
 | `tables_consistent` | one node table across the part's SMDs, parents before children |
-| `placement_preserved` | shared bones keep their bind locals verbatim; every weapon bone's hand-relative transform (geometry bind AND idle frame) matches the pristine original |
+| `placement_preserved` | shared bones keep their bind locals verbatim (a shared bone the model hangs under another parent than the merged table — e.g. `Bip01 R Hand` under `R Arm2` — is only listed: the engine takes Bip01 bones from the player by name); every weapon bone's hand-relative transform (geometry bind AND idle frame) matches the pristine original |
 | `geometry_preserved` | every merged mesh vertex bit-matches an original vertex |
-| `budgets` | bones ≤ 127, submodels ≤ 32, verts/normals ≤ 2048 per submodel, textures ≤ 100 and present on disk, labels < 32 chars, QC paths ≤ 60 chars |
+| `budgets` | bones ≤ 127, submodels ≤ 32, verts/normals ≤ 2048 per submodel (normals counted per texture, as studiomdl does), textures ≤ 100 and present on disk, labels < 32 chars, QC paths ≤ 60 chars |
 
 Any failed check fails the run (exit 2). `--no-verify` skips the gate.
 
