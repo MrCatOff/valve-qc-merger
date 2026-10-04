@@ -1,8 +1,8 @@
 # Server tools (ReHLDS + ReGameDLL + ReAPI)
 
 The studio targets servers on **ReHLDS + ReGameDLL + ReAPI**. Project ▸
-**Server budget & doctor…** (Ctrl+Shift+S, toolbar *Server*) opens one window
-with two tabs.
+**Server tools…** (Ctrl+Shift+S, toolbar *Server*) opens one window with the
+tabs Budget, Doctor, Unprecache, Config, Entities and FastDL (each below).
 
 ## Limits
 
@@ -262,3 +262,16 @@ added or removed.
   original map still join.
 
 `valve_qc_merger.server.entities` does the reading and writing without Qt.
+
+## FastDL check
+
+The **FastDL** tab asks the download mirror for every file of a local
+folder — the exported package's `cstrike/` (what you upload) or the game
+folder — and compares sizes: **missing** (the client falls back to the slow
+in-game download, or fails with `sv_allowdownload 0`), **size** (a stale
+copy: a broken model on the client), **error** (no answer, HTTP errors).
+The mirror URL comes from `sv_downloadurl` in the game folder's
+`server.cfg`. Files are asked with `HEAD` (a one-byte ranged `GET` where a
+host refuses `HEAD`), eight at a time, by their path as is — a Linux web
+server is case-sensitive. *Problems only*, *Stop* and *Copy report* as in
+the Doctor. `valve_qc_merger.server.fastdl` is Qt-free.

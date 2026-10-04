@@ -204,7 +204,8 @@ def _resize(rgba: np.ndarray, width: int, height: int) -> np.ndarray:
         return weights / weights.sum(axis=1, keepdims=True)
 
     rows, cols = axis_weights(src_h, height), axis_weights(src_w, width)
-    out = np.einsum("ij,jkc,lk->ilc", rows, image, cols)
+    out = np.tensordot(rows, image, axes=(1, 0))  # (height, src_w, 4)
+    out = np.tensordot(out, cols, axes=(1, 1)).transpose(0, 2, 1)  # (height, width, 4)
     alpha = out[..., 3:4]
     out[..., :3] = np.where(alpha > 0, out[..., :3] * 255.0 / np.maximum(alpha, 1e-9), 0)
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)

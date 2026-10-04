@@ -274,7 +274,7 @@ class MainWindow(QMainWindow):
                                                            self.import_sound_folder)
         project_menu.addSeparator()
         self.act_previews = project_menu.addAction("Weapon previews…", self.make_previews)
-        self.act_server = project_menu.addAction("Server budget && doctor…", self.show_server,
+        self.act_server = project_menu.addAction("Server tools…", self.show_server,
                                                  QKeySequence("Ctrl+Shift+S"))
         self.act_settings = project_menu.addAction("Settings…", self.edit_settings)
         self.act_reveal = project_menu.addAction("Show project folder",

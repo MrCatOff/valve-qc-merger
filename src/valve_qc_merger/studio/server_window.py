@@ -101,8 +101,9 @@ class ServerWindow(QDialog):
         self.issues: list[Issue] = []
         layout = kit.dialog_layout(self)
         layout.addWidget(kit.header(
-            "Server", "Precache budgets and mod-folder health for ReHLDS + ReGameDLL + "
-            "ReAPI: models 512, sounds 512, generic 4096."))
+            "Server", "Precache budgets, mod-folder health, configs, map entities and the "
+            "download mirror for ReHLDS + ReGameDLL + ReAPI: models 512, sounds 512, "
+            "generic 4096."))
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self.tabs.addTab(self._budget_tab(), icon("gauge"), "Budget")
@@ -114,7 +115,10 @@ class ServerWindow(QDialog):
         from valve_qc_merger.studio.entities_panel import EntitiesPanel
         self.entities = EntitiesPanel(project)
         self.tabs.addTab(self.entities, icon("map"), "Entities")
-        self.resize(820, 720)
+        from valve_qc_merger.studio.fastdl_panel import FastDlPanel
+        self.fastdl = FastDlPanel(project)
+        self.tabs.addTab(self.fastdl, icon("rocket"), "FastDL")
+        self.resize(900, 740)
         self.refresh()
 
     # -- budget --------------------------------------------------------------
