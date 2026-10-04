@@ -155,7 +155,9 @@ def decompile_mdl(mdl: Path, out_root: Path) -> DecompileResult:
     # -- textures ----------------------------------------------------------
     tex_names = _file_names([t.name for t in model.textures], ".bmp")
     for texture, file_name in zip(model.textures, tex_names, strict=True):
-        if file_name.lower() != texture.name.lower():
+        # a real rename (too long, non-ASCII, unsafe characters) is worth a
+        # warning; only adding the missing ".bmp" (version 9 names) is not
+        if file_name.lower() not in (texture.name.lower(), f"{texture.name}.bmp".lower()):
             warnings.append(f"texture {texture.name!r} saved as {file_name!r}")
         palette = [tuple(texture.palette[i * 3:i * 3 + 3]) for i in range(256)]
         if len(texture.palette) < 768 or len(texture.pixels) < texture.width * texture.height:

@@ -19,8 +19,11 @@ copies because the services sanitise file names in place.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import stat
+import sys
 import time
 import tomllib
 from collections.abc import Callable
@@ -170,6 +173,35 @@ def _qc_dir(directory: Path) -> Path | None:
 
 def _uses_grenade_texture(directory: Path, prefix: str = "frogbomb") -> bool:
     return any(p.name.lower().startswith(prefix) for p in directory.rglob("*.bmp"))
+
+
+def remove_tree(path: Path) -> bool:
+    """Delete ``path`` for good; True when it is gone. Unlike
+    ``rmtree(ignore_errors=True)`` it gets past what stops Windows: read-only
+    files and folders (made writable and retried) and paths over 260
+    characters (long CSO texture names: the extended-length path prefix)."""
+    if not path.exists():
+        return True
+    target = path
+    if os.name == "nt":
+        target = Path("\\\\?\\" + str(path.resolve()))
+
+    def retry(func, failed, _exc) -> None:  # noqa: ANN001 - shutil callback
+        for writable in (failed, os.path.dirname(failed)):
+            try:
+                os.chmod(writable, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+            except OSError:
+                pass
+        try:
+            func(failed)
+        except OSError:
+            pass  # still in use: reported by the caller
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(target, onexc=retry)
+    else:  # pragma: no cover - 3.11
+        shutil.rmtree(target, onerror=retry)
+    return not path.exists()
 
 
 def refine_kinds(assets: list[Asset], root: Path) -> None:
@@ -576,15 +608,20 @@ class Project:
         shutil.rmtree(latest)
         return True
 
-    def remove_asset(self, name: str, *, delete_files: bool = True) -> None:
+    def remove_asset(self, name: str, *, delete_files: bool = True) -> list[Path]:
+        """Forget an asset (and delete its folder and undo history). Returns
+        the folders that could not be deleted (a file open elsewhere)."""
         asset = self.assets.pop(name)
+        leftovers: list[Path] = []
         if delete_files:
-            shutil.rmtree(self.root / asset.path, ignore_errors=True)
-            shutil.rmtree(self._history_dir(name), ignore_errors=True)
+            leftovers = [folder for folder in (self.root / asset.path,
+                                               self._history_dir(name))
+                         if not remove_tree(folder)]
         for build in self.builds.values():
             if name in build.assets:
                 build.assets.remove(name)
         self.save()
+        return leftovers
 
     def set_kind(self, name: str, kind: str) -> None:
         if kind not in ASSET_KINDS:

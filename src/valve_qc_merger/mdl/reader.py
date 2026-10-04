@@ -1,4 +1,4 @@
-"""Read a GoldSource (Half-Life 1, version 10) ``.mdl`` into plain dataclasses.
+"""Read a GoldSource (Half-Life 1, version 10 or 9) ``.mdl`` into plain dataclasses.
 
 Layouts follow the HLSDK ``studio.h``. Only what a decompile needs is kept;
 everything is decoded eagerly except animation frames, which
@@ -16,6 +16,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 STUDIO_VERSION = 10
+# Version 9 (older studiomdl builds; CSO p_/w_ models such as the "infinity"
+# pistols) has the version-10 layout byte for byte — every count/offset of
+# the header and every struct size line up; its texture names merely lack
+# the ".bmp" (the decompiler adds it). Read with the same code; studiomdl
+# then compiles the decompile as version 10.
+STUDIO_VERSIONS = (9, 10)
 HEADER_SIZE = 244
 
 # Motion / controller type bits (studio.h). studiomdl subtracts the linear
@@ -35,7 +41,7 @@ NF_ADDITIVE, NF_MASKED = 0x20, 0x40
 
 
 class MdlError(ValueError):
-    """Not a readable GoldSource v10 model."""
+    """Not a readable GoldSource v9/v10 model."""
 
 
 def _cstr(raw: bytes) -> bytes:
@@ -307,8 +313,9 @@ def read_mdl(path: Path) -> StudioModel:
             raise MdlError(f"{path.name} is a sequence-group file; open the main model")
         raise MdlError(f"{path.name} is not a GoldSource model (IDST)")
     version = struct.unpack_from("<i", data, 4)[0]
-    if version != STUDIO_VERSION:
-        raise MdlError(f"{path.name}: studio version {version} (only {STUDIO_VERSION})")
+    if version not in STUDIO_VERSIONS:
+        raise MdlError(f"{path.name}: studio version {version} (readable: "
+                       f"{', '.join(map(str, STUDIO_VERSIONS))})")
     name = _cstr(data[8:72]).decode("latin-1")
     eyeposition = _vec(data, 76)
     bbmin, bbmax = _vec(data, 88), _vec(data, 100)  # header "min/max"

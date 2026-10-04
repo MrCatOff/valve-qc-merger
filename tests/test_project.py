@@ -156,3 +156,23 @@ def test_compile_service_with_a_fake_studiomdl(tmp_path: Path) -> None:
 
     fake.write_text("#!/bin/sh\necho ERROR: bad\n")  # exits 0, writes nothing
     assert not run_compile(CompileOptions(qc=qc, studiomdl=fake), reporter).ok
+
+
+def test_remove_asset_deletes_read_only_folders(tmp_path: Path) -> None:
+    """Remove from project must really delete the folder: read-only files and
+    folders (a common Windows reason rmtree silently left them) included."""
+    import os
+    import stat
+
+    from valve_qc_merger.project.model import remove_tree
+    project = Project.create(tmp_path / "pack")
+    (asset,) = project.import_decompiled(Path(__file__).parent / "examples" / "v_anaconda")
+    folder = project.asset_dir(asset.name)
+    locked = folder / "locked"
+    locked.mkdir()
+    (locked / "texture.bmp").write_bytes(b"BM")
+    os.chmod(locked / "texture.bmp", stat.S_IREAD)
+    os.chmod(locked, stat.S_IREAD | stat.S_IEXEC)  # files inside cannot be unlinked
+    assert project.remove_asset(asset.name) == []
+    assert not folder.exists()
+    assert remove_tree(tmp_path / "never-existed")

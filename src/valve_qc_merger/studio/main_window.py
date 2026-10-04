@@ -557,10 +557,19 @@ class MainWindow(QMainWindow):
             f"Remove {name} from the project and delete its folder?")
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self.project.remove_asset(name)
+        if self._shown_asset == name:  # nothing of it stays on screen
+            self.viewport.set_scene(None)
+            self._shown_asset = ""
+        leftovers = self.project.remove_asset(name)
         self._info_cache.pop(name, None)
         self._scene_cache.pop(name, None)
         self.log.append_line(f"removed {name}")
+        for folder in leftovers:
+            self.log.append_line(f"warn: could not delete {folder} (a file in it is open "
+                                 "in another program?) — delete it by hand")
+        if leftovers:
+            self.toast.show_message("warning", f"{name} removed, its folder was not",
+                                    f"{leftovers[0]} is in use; delete it by hand")
         self.explorer.show_project(self.project)
 
     def set_kind(self, name: str, kind: str) -> None:

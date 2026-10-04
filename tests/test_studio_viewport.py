@@ -106,3 +106,61 @@ def test_offscreen_render_draws_the_model(tmp_path: Path) -> None:
     drawn = sum(image.pixelColor(x, y) != background
                 for x in range(0, 160, 4) for y in range(0, 120, 4))
     assert drawn > 40  # the textured quads cover a good part of the frame
+
+
+def _import_mini(tmp_path: Path, version: int = 10) -> Path:
+    """mini.mdl imported the way the studio does (in-app decompiler)."""
+    import shutil
+    import struct
+
+    from valve_qc_merger.project import Project
+    from valve_qc_merger.services.base import CollectingReporter
+    source = Path(__file__).parent / "examples" / "mdl"
+    work = tmp_path / "mdl"
+    work.mkdir()
+    for name in ("mini.mdl",):
+        shutil.copy(source / name, work / name)
+    if version != 10:
+        data = bytearray((work / "mini.mdl").read_bytes())
+        struct.pack_into("<i", data, 4, version)
+        (work / "mini.mdl").write_bytes(bytes(data))
+    project = Project.create(tmp_path / "pack")
+    (asset,) = project.import_mdl(work / "mini.mdl", reporter=CollectingReporter())
+    return project.asset_dir(asset.name)
+
+
+@pytest.mark.parametrize("version", [10, 9])
+def test_imported_model_finds_and_reads_every_texture(tmp_path: Path, version: int) -> None:
+    """The viewport draws a material untextured when its file is not found
+    or not readable — every texture of an imported model must be both
+    (studio version 9 reads with the version 10 layout)."""
+    from valve_qc_merger.studio.model_info import texture_rgba
+    scene = build_scene(_import_mini(tmp_path, version))
+    assert scene.textures
+    for material, path in scene.textures.items():
+        assert path is not None and path.is_file(), material
+        width, height, rgba = texture_rgba(path)
+        assert len(rgba) == width * height * 4
+
+
+def test_offscreen_render_is_textured(tmp_path: Path) -> None:
+    """Rendered colours come from the textures (mini's are green), not the
+    flat grey of an untextured draw — on every platform with OpenGL."""
+    pytest.importorskip("PySide6.QtOpenGL")
+    asset = _import_mini(tmp_path)
+    script = tmp_path / "render.py"
+    script.write_text(_RENDER)
+    out = tmp_path / "frame.png"
+    env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"}
+    run = subprocess.run([sys.executable, str(script), str(asset), str(out)],
+                         capture_output=True, text=True, timeout=120, env=env)
+    no_display = run.returncode != 0 and ("platform" in run.stderr.lower()
+                                          or os.environ.get("CI"))
+    if "NO_GL" in run.stdout or no_display:
+        pytest.skip(f"no OpenGL here: {run.stdout.strip() or run.stderr.strip()[:200]}")
+    assert run.returncode == 0, run.stderr
+    from PySide6.QtGui import QImage
+    image = QImage(str(out))
+    green = sum(1 for x in range(0, 160, 2) for y in range(0, 120, 2)
+                if (c := image.pixelColor(x, y)).green() > c.red() + 60)
+    assert green > 30, f"untextured render ({green} green samples)"
