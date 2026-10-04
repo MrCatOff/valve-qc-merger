@@ -268,7 +268,9 @@ The centre of the window shows the selected asset (`studio.viewport`):
   the bottom-left corner that turns with the camera. With nothing loaded it
   says what to do and how the mouse works.
 - **Display bar** (floating, top-right): textures, wireframe, bones (lines +
-  joints, drawn on top), attachments, floor grid; **Frame** (also
+  joints, drawn on top), attachments, **hitboxes** (`$hbox` boxes posed by
+  their bones, coloured by hit group: head red, chest orange, stomach yellow,
+  arms blue, legs green, generic white), floor grid; **Frame** (also
   double-click / `F`) and **First person** (the eye at the model origin
   looking down SMD -Y — what the game shows for a v_ model) with its own
   **FOV** box next to it: vertical, as the game draws view models — 74° by
@@ -279,7 +281,10 @@ The centre of the window shows the selected asset (`studio.viewport`):
   between runs. Switching models keeps first person (Frame leaves it);
   **Before**
   (`B`, derived assets) — while it shows the source a "BEFORE · <source>"
-  badge sits in the top-left corner.
+  badge sits in the top-left corner. Explorer ▸ right-click an asset ▸
+  **Compare with ▸ <asset>** turns the button into **Compare**: `B` flips
+  between the two in the same camera, sequence and frame ("COMPARE · <asset>"
+  badge); selecting another asset ends the pair.
 - **Timeline** (under the viewport): sequence, previous frame / play-pause /
   next frame, scrubber, frame counter, speed (0.1–2×). Frames interpolate
   like the engine (positions linearly, rotations by quaternion slerp);

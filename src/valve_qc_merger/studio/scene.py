@@ -13,6 +13,7 @@ SMD space (studiomdl's +90 deg turn makes that +X in game).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -113,6 +114,8 @@ class ModelScene:
     attachments: list[tuple[int, int, np.ndarray]] = field(default_factory=list)
     # $texturegroup rows (row 0 = the textures the meshes use); [] = no skins
     skins: list[list[str]] = field(default_factory=list)
+    # $hbox: (bone index, hit group, mins (3,), maxs (3,)) in the bone's frame
+    hitboxes: list[tuple[int, int, np.ndarray, np.ndarray]] = field(default_factory=list)
 
     def with_skin(self, index: int) -> ModelScene:
         """This scene drawn with skin row ``index``: every material of row 0
@@ -207,6 +210,25 @@ class ModelScene:
         return allp.min(0), allp.max(0)
 
 
+_HBOX = re.compile(r'^\s*\$hbox\s+(-?\d+)\s+"?([^"\n]+?)"?\s+'
+                   r'(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+'
+                   r'(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)', re.IGNORECASE | re.MULTILINE)
+
+
+def parse_hitboxes(qc_text: str, bone_names: list[str]
+                   ) -> list[tuple[int, int, np.ndarray, np.ndarray]]:
+    """``$hbox group "bone" x y z X Y Z`` lines whose bone the model has."""
+    index = {n.lower(): i for i, n in enumerate(bone_names)}
+    out = []
+    for group, bone, *values in _HBOX.findall(qc_text):
+        b = index.get(bone.strip().lower())
+        if b is None:
+            continue
+        nums = np.array([float(v) for v in values])
+        out.append((b, int(group), nums[:3], nums[3:]))
+    return out
+
+
 def _smd_locals(smd: Smd, names: list[str],
                 fallback: tuple[np.ndarray, np.ndarray]) -> list[tuple[np.ndarray, np.ndarray]]:
     """Per frame: local (positions (B,3), quats (B,4)) in the global bone order."""
@@ -261,6 +283,7 @@ def build_scene(directory: Path, model: ModelInput | None = None) -> ModelScene:
         groups=_entries_with_blanks(model.qc_text, model.bodygroups), batches=[],
         sequences=[], textures={}, render_modes=modes,
         skins=parse_texturegroups(model.qc_text),
+        hitboxes=parse_hitboxes(model.qc_text, names),
     )
 
     for stem, mesh in model.meshes.items():

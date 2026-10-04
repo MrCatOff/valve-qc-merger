@@ -182,6 +182,7 @@ class Explorer(QTreeWidget):
     sound_fix_requested = Signal(list)  # sound names
     sound_remove_requested = Signal(str)
     sound_play_requested = Signal(str)
+    compare_requested = Signal(str, str)  # asset, the asset to compare it with
     sprite_selected = Signal(str)  # a sprite / HUD file (its sprites/ path)
     sprite_import_requested = Signal()
     sprite_new_requested = Signal()
@@ -620,6 +621,14 @@ class Explorer(QTreeWidget):
                            lambda: self.rederive_requested.emit(name, False))
             menu.addAction("Retarget settings…",
                            lambda: self.rederive_requested.emit(name, True))
+        if self._project is not None and len(self._project.assets) > 1:
+            compare = menu.addMenu("Compare with")
+            kind = self._project.assets[name].kind
+            others = sorted((a for a in self._project.assets.values() if a.name != name),
+                            key=lambda a: (a.kind != kind, a.name.lower()))
+            for other in others[:40]:
+                compare.addAction(other.name, lambda o=other.name:
+                                  self.compare_requested.emit(name, o))
         menu.addSeparator()
         move = menu.addMenu("Move to category")
         current = self._project.assets[name].category if self._project else ""

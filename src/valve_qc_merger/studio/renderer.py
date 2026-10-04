@@ -113,6 +113,28 @@ GRID_X = (0.62, 0.28, 0.30)  # the X and Y axes through the origin
 GRID_Y = (0.30, 0.56, 0.36)
 
 
+# GoldSource hit groups: 0 generic, 1 head, 2 chest, 3 stomach, 4/5 arms, 6/7 legs
+HITGROUP_COLORS = {0: (0.85, 0.85, 0.85), 1: (1.0, 0.25, 0.25), 2: (1.0, 0.6, 0.15),
+                   3: (1.0, 0.9, 0.2), 4: (0.3, 0.8, 1.0), 5: (0.3, 0.55, 1.0),
+                   6: (0.4, 1.0, 0.45), 7: (0.2, 0.75, 0.35), 10: (0.8, 0.4, 1.0)}
+_BOX_EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4),
+              (0, 4), (1, 5), (2, 6), (3, 7)]
+
+
+def hitbox_lines(hitboxes, rot: np.ndarray, trans: np.ndarray) -> np.ndarray:  # noqa: ANN001
+    """(N, 6) line vertices of every hitbox box, posed by its bone."""
+    out = []
+    for bone, group, lo, hi in hitboxes:
+        corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
+                            for z in (lo[2], hi[2])])
+        world = corners @ rot[bone].T + trans[bone]
+        colour = HITGROUP_COLORS.get(group, (0.85, 0.85, 0.85))
+        for a, b in _BOX_EDGES:
+            out.append([*world[a], *colour])
+            out.append([*world[b], *colour])
+    return np.array(out, dtype=np.float32).reshape(-1, 6)
+
+
 def _nice_step(raw: float) -> float:
     """1, 2 or 5 times a power of ten, at least ``raw``."""
     if raw <= 0:
@@ -216,6 +238,7 @@ class ViewState:
     textured: bool = True
     highlight_bone: int | None = None  # drawn on top even with bones hidden
     show_grid: bool = True  # floor grid under the model (orbit camera only)
+    show_hitboxes: bool = False  # $hbox boxes, coloured by hit group
     mirror_x: bool = False  # right-handed view model (the game's cl_righthand 1)
     background_top: tuple[float, float, float] = (0.17, 0.19, 0.235)
     background_bottom: tuple[float, float, float] = (0.075, 0.082, 0.10)
@@ -458,6 +481,8 @@ class Renderer:
             pts = np.array([rot[bone] @ offset + trans[bone]
                             for _i, bone, offset in scene.attachments])
             overlay.append(crosses(pts, ATTACH_COLOR, 1.4))
+        if state.show_hitboxes and scene.hitboxes:
+            overlay.append(hitbox_lines(scene.hitboxes, rot, trans))
         hb = state.highlight_bone
         if hb is not None and 0 <= hb < len(trans):
             parent = scene.parents[hb]

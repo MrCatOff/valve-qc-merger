@@ -308,8 +308,11 @@ class ViewportPanel(QWidget):
         self.bones_box = self._toggle("bone", "Bones", False, "show_bones")
         self.attach_box = self._toggle("anchor", "Attachments", True, "show_attachments")
         self.grid_box = self._toggle("grid-3x3", "Floor grid", True, "show_grid")
+        self.hitbox_box = self._toggle("box", "Hitboxes ($hbox), coloured by hit group: head "
+                                       "red, chest orange, stomach yellow, arms blue, legs "
+                                       "green", False, "show_hitboxes")
         for box in (self.textures_box, self.wire_box, self.bones_box, self.attach_box,
-                    self.grid_box):
+                    self.hitbox_box, self.grid_box):
             bar.addWidget(box)
         bar.addWidget(_divider())
         frame_button = self._tool("focus", "Frame the model (double-click)")
@@ -363,6 +366,7 @@ class ViewportPanel(QWidget):
         self.compare_badge.hide()
         self.compare_button.toggled.connect(self._show_compare_badge)
         self._compare_source: str | None = None
+        self._compare_kind = "source"
         self.viewport.installEventFilter(self)
 
         # -- timeline: sequence, transport, scrubber, frame, speed
@@ -465,8 +469,9 @@ class ViewportPanel(QWidget):
         self.compare_badge.move(12, 12)
 
     def _show_compare_badge(self, on: bool) -> None:
-        self.compare_badge.setText(f"BEFORE  ·  {self._compare_source}"
-                                   if self._compare_source else "BEFORE")
+        label = "BEFORE" if self._compare_kind == "source" else "COMPARE"
+        self.compare_badge.setText(f"{label}  ·  {self._compare_source}"
+                                   if self._compare_source else label)
         self.compare_badge.setVisible(on)
         self._place_overlays()
 
@@ -560,18 +565,23 @@ class ViewportPanel(QWidget):
         viewport.update()
         self.skin_changed.emit(index)
 
-    def set_compare(self, source: str | None) -> None:
-        """Offer the before/after flip against ``source`` (None: hide it)."""
+    def set_compare(self, source: str | None, kind: str = "source") -> None:
+        """Offer the flip against ``source`` (None: hide it): the asset's own
+        source (``source``, "Before") or any asset picked to compare with
+        (``other``, "Compare")."""
         self.compare_button.blockSignals(True)
         self.compare_button.setChecked(False)
         self.compare_button.blockSignals(False)
         self.compare_button.setEnabled(source is not None)
         self._compare_source = source
+        self._compare_kind = kind
+        self.compare_button.setText("Before" if kind == "source" else "Compare")
         self.compare_badge.hide()
         self.compare_button.setToolTip(
-            f"Show the source model {source} in the same pose and camera "
-            "(B flips before/after)" if source is not None
-            else "Before/after: only for assets made by Retarget")
+            (f"Show the source model {source}" if kind == "source"
+             else f"Show {source}") + " in the same pose and camera (B flips)"
+            if source is not None
+            else "Before/after: assets made by Retarget, or Compare with… in the Explorer")
 
     # -- scene -------------------------------------------------------------
     def set_scene(self, scene: ModelScene | None, *, keep_view: bool = False) -> None:

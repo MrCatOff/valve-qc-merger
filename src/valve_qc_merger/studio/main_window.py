@@ -193,6 +193,7 @@ class MainWindow(QMainWindow):
         self.sound_panel.reveal_requested.connect(self._reveal_sound)
         self.sound_panel.asset_requested.connect(self._reveal_asset)
         self.explorer.sprite_selected.connect(self._select_sprite)
+        self.explorer.compare_requested.connect(self.compare_assets)
         self.explorer.sprite_import_requested.connect(self.import_sprites)
         self.explorer.sprite_new_requested.connect(self.new_sprite)
         self.explorer.hud_new_requested.connect(self.new_weapon_hud)
@@ -484,6 +485,17 @@ class MainWindow(QMainWindow):
         from valve_qc_merger.project import sounds
         if self.project is not None:
             self._open_path(sounds.sound_path(self.project, name).parent)
+
+    def compare_assets(self, name: str, other: str) -> None:
+        """Explorer ▸ Compare with: B flips the viewport between ``name`` and
+        ``other`` (same camera, sequence by name, frame)."""
+        if self.project is None:
+            return
+        self._compare_pair = (name, other)
+        self.explorer.select("asset", name)
+        self._select_asset(name)
+        self.viewport.set_compare(other, "other")
+        self.statusBar().showMessage(f"B flips between {name} and {other}", 6000)
 
     # -- sprites ---------------------------------------------------------------
     def _select_sprite(self, name: str) -> None:
@@ -1432,7 +1444,12 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError):
             self.inspector.qc_page.set_text(None)
         self.inspector.show_status(self.explorer.statuses.get(name))
-        self.viewport.set_compare(source if source in self.project.assets else None)
+        pair = getattr(self, "_compare_pair", None)
+        if pair is not None and pair[0] == name and pair[1] in self.project.assets:
+            self.viewport.set_compare(pair[1], "other")
+        else:
+            self._compare_pair = None
+            self.viewport.set_compare(source if source in self.project.assets else None)
         self._fov_kind = asset.kind
         self.viewport.set_fov(self.fov_for(asset.kind))
         self.viewport.set_view_model(asset.kind in VIEW_MODEL_KINDS, self.right_hand())
@@ -1501,7 +1518,10 @@ class MainWindow(QMainWindow):
         if project is None or not name or name not in project.assets:
             return
         derived = project.assets[name].derived
-        target = derived["from"] if show_source and derived else name
+        pair = getattr(self, "_compare_pair", None)
+        other = pair[1] if pair is not None and pair[0] == name else (
+            derived["from"] if derived else None)
+        target = other if show_source and other else name
         loaded = self._asset_scene(target)
         if loaded is not None:
             self.viewport.set_scene(loaded[1], keep_view=True)
