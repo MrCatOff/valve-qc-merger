@@ -333,7 +333,8 @@ def test_tooltips_are_sentence_case() -> None:
     import re
     studio = Path(__file__).parents[1] / "src" / "valve_qc_merger" / "studio"
     lower = [f"{p.name}: {m.group(0)}" for p in studio.glob("*.py")
-             for m in re.finditer(r'setToolTip\(\s*f?"[a-z][^"]{0,30}', p.read_text())]
+             for m in re.finditer(r'setToolTip\(\s*f?"[a-z][^"]{0,30}',
+                                       p.read_text(encoding="utf-8"))]
     assert lower == []
 
 
