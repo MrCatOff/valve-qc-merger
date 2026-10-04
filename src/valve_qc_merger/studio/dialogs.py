@@ -199,3 +199,70 @@ class SettingsDialog(QDialog):
 
 
 __all__ = ["NewProjectDialog", "SettingsDialog"]
+
+
+PREVIEW_SIZES = [(256, 128), (384, 192), (512, 256), (768, 384), (1024, 512)]
+
+
+class PreviewDialog(QDialog):
+    """Project ▸ Weapon previews: which view models, how big, where to."""
+
+    def __init__(self, folder: str, categories: list[str], counts: dict[str | None, int],
+                 parent: QWidget | None = None) -> None:
+        from PySide6.QtWidgets import QSpinBox
+        super().__init__(parent)
+        self.setWindowTitle("Weapon previews")
+        layout = kit.dialog_layout(self)
+        layout.addWidget(kit.header(
+            "Weapon previews", "A picture of every weapon for your players: drawn from its "
+            "view model without the hands, side on, on a transparent background. You get "
+            "one PNG per weapon, a grid sheet and an HTML catalog (MOTD or a site) with the "
+            "asset notes as descriptions."))
+        self.category_box = QComboBox()
+        self.category_box.addItem(f"Every view model ({counts.get(None, 0)})", None)
+        for category in categories:
+            if counts.get(category):
+                self.category_box.addItem(f"{category} ({counts[category]})", category)
+        self.size_box = QComboBox()
+        for width, height in PREVIEW_SIZES:
+            self.size_box.addItem(f"{width} × {height}", (width, height))
+        self.size_box.setCurrentIndex(2)
+        self.left_box = QCheckBox("Barrel points left")
+        self.sheet_box = QCheckBox("Grid sheet (sheet.png), columns")
+        self.sheet_box.setChecked(True)
+        self.columns_spin = kit.number_spin(QSpinBox())
+        self.columns_spin.setRange(1, 16)
+        self.columns_spin.setValue(4)
+        self.sheet_box.toggled.connect(self.columns_spin.setEnabled)
+        sheet_row = QWidget()
+        row = QHBoxLayout(sheet_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.sheet_box)
+        row.addWidget(self.columns_spin)
+        row.addStretch(1)
+        self.folder_edit = QLineEdit(folder)
+        form = kit.form()
+        form.addRow("Weapons", self.category_box)
+        form.addRow("Image size", self.size_box)
+        form.addRow("", self.left_box)
+        form.addRow("", sheet_row)
+        form.addRow("Save into", _path_row(self.folder_edit, self._pick))
+        layout.addLayout(form)
+        layout.addWidget(kit.hint(
+            "Hands are found by bodygroup, texture, the stock CSO hand meshes or bone names; "
+            "a weapon that is the hands (zombie claws, gauntlets) is drawn as it is and "
+            "listed in the log."))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Make previews")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addSpacing(6)
+        layout.addWidget(buttons)
+        self.resize(600, self.sizeHint().height())
+
+    def _pick(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Save previews into",
+                                                  self.folder_edit.text())
+        if folder:
+            self.folder_edit.setText(folder)

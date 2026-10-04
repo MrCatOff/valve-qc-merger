@@ -188,3 +188,32 @@ unknown stay, and the old file is kept as `<name>.bak`. A new `game.cfg`
 starts as the documented reference with your values. Passwords
 (`sv_password`, `rcon_password`) are never listed. `valve_qc_merger.server.cfg`
 does the parsing and writing.
+
+## Weapon previews
+
+**Project ▸ Weapon previews…** draws a picture of every view model (or one
+category's) for your players — menus, a MOTD, a forum post. The v_ model is
+the source: every weapon has one (knives have no w_), and it is far more
+detailed than the p_. The hands go first — by bodygroup (`hands`, `arms`),
+by texture name (`hand`, `glove`, `sleeve`…), by the stock CSO hand meshes
+(their triangle counts give them away even in a decompile that lost every
+name), else by bone (hand/finger/arm bones and their chains) — then the
+weapon is posed on the first frame of its idle and turned to show its right
+side: barrel horizontal and pointing right (or left, an option), a knife
+held upright laid down, pieces the idle parks away from the weapon (a speed
+loader under the camera, CSO's giant hidden planes) left out, a pair of
+pistols aimed by one of them. Additive parts (an ice blade, glows) are added
+on top unlit, as the engine does. A weapon that *is* the hands (zombie
+claws, a gauntlet) is drawn as it is and listed in the log.
+
+Into the chosen folder (default `<project>/previews`):
+
+- `images/<weapon>.png` — transparent, supersampled, named without `v_`;
+- `sheet.png` — a grid of cards with the names (columns of your choice);
+- `index.html` — a self-contained page (no scripts) with a card per weapon
+  and the asset's **Notes** as its description, a section per category —
+  host it next to `images/` and point a MOTD or `say` link at it;
+- `weapons.txt` — `name|category|image|description` per weapon, for plugins.
+
+`valve_qc_merger.preview` renders in software (numpy, no GPU), so the
+result is the same on every machine.

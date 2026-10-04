@@ -273,6 +273,7 @@ class MainWindow(QMainWindow):
         self.act_import_sound_dir = project_menu.addAction("Import sound folder…",
                                                            self.import_sound_folder)
         project_menu.addSeparator()
+        self.act_previews = project_menu.addAction("Weapon previews…", self.make_previews)
         self.act_server = project_menu.addAction("Server budget && doctor…", self.show_server,
                                                  QKeySequence("Ctrl+Shift+S"))
         self.act_settings = project_menu.addAction("Settings…", self.edit_settings)
@@ -333,6 +334,7 @@ class MainWindow(QMainWindow):
         ("act_plan_build", "list-checks", "Plan"), ("act_run_build", "play", "Run"),
         ("act_compile_build", "hammer", "Compile"), ("act_deploy_build", "rocket", "Deploy"),
         ("act_delete_build", "trash-2", ""), ("act_server", "gauge", "Server"),
+        ("act_previews", "image", ""),
         ("act_export_package", "package", "Package"),
     ]
     TOOLBAR = ["act_import_mdl", "act_derive", "act_rederive", None, "act_new_build",
@@ -421,6 +423,50 @@ class MainWindow(QMainWindow):
             return summary
 
         self.jobs.start(f"Import {root.name}", work)
+
+    def make_previews(self) -> None:
+        """Project ▸ Weapon previews: a PNG per view model without the hands,
+        a grid sheet and an HTML catalog, as one background job."""
+        from valve_qc_merger.preview.catalog import build_catalog, preview_assets
+        from valve_qc_merger.preview.render import Options
+        from valve_qc_merger.studio.dialogs import PreviewDialog
+        project = self.project
+        if project is None or self.jobs.busy:
+            return
+        categories = sorted(project.categories, key=str.lower)
+        counts: dict[str | None, int] = {None: len(preview_assets(project))}
+        for category in categories:
+            counts[category] = len(preview_assets(project, category))
+        if not counts[None]:
+            QMessageBox.information(self, "Weapon previews",
+                                    "The project has no view models (v_) yet.")
+            return
+        dialog = PreviewDialog(str(project.root / "previews"), categories, counts, self)
+        if dialog.exec() != PreviewDialog.DialogCode.Accepted:
+            return
+        folder = Path(dialog.folder_edit.text().strip() or project.root / "previews")
+        assets = preview_assets(project, dialog.category_box.currentData())
+        width, height = dialog.size_box.currentData()
+        options = Options(width=width, height=height, barrel_left=dialog.left_box.isChecked())
+        columns = dialog.columns_spin.value() if dialog.sheet_box.isChecked() else 0
+
+        def work(reporter: Reporter) -> str:
+            catalog = build_catalog(project, assets, folder, options, reporter=reporter)
+            for line in catalog.failed:
+                reporter.log(f"  warn: {line}")
+            for entry in catalog.entries:
+                if entry.hands == "kept":
+                    reporter.log(f"  warn: {entry.asset}: drawn with its hands (none found "
+                                 "to leave out, or the weapon is the hands)")
+            if columns and catalog.previews:
+                from valve_qc_merger.studio.preview_sheet import sheet
+                sheet(catalog.previews, [e.name for e in catalog.entries],
+                      columns).save(str(folder / "sheet.png"))
+            reporter.log(f"  {len(catalog.entries)} preview(s) → {folder}")
+            return str(folder)
+
+        self.jobs.start("Weapon previews", work)
+        self._open_after_job = folder
 
     # -- sounds ----------------------------------------------------------------
     def import_sound_files(self) -> None:
@@ -717,6 +763,7 @@ class MainWindow(QMainWindow):
         for action in (self.act_import_mdl, self.act_import_mdl_dir, self.act_import_dec,
                        self.act_settings, self.act_reveal, self.act_close, self.act_find,
                        self.act_new_category, self.act_new_build, self.act_server,
+                       self.act_previews,
                        self.act_import_sounds, self.act_import_sound_dir,
                        self.act_export_package, self.act_import_sprites,
                        self.act_new_sprite, self.act_new_hud, self.act_import_server):
@@ -1606,6 +1653,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{title}: {payload}", 8000)
         self._report_job(title, ok, str(payload) if not ok else "", seconds,
                          self.log.warnings - warnings, self.log.errors - errors)
+        folder = getattr(self, "_open_after_job", None)
+        self._open_after_job = None
+        if ok and folder is not None and Path(folder).is_dir():
+            self._open_path(Path(folder))
         window = getattr(self, "server_window", None)
         if window is not None and window.isVisible():
             window.refresh()  # a build ran: new outputs, new budget
