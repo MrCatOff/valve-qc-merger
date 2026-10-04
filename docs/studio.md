@@ -319,8 +319,11 @@ output, so Inspector ▸ Bones ▸ Undo restores it. A merge-v build with
 assets made by Retarget (swap hands) and models already wearing our hands
 (bone-local match with `storage/handswap/cso_reference_hands.smd`) are taken
 as they are, keeping their tuned grip; a failed retarget is listed under the
-build's Failures instead of silently dropping the weapon, and a derived asset
-built together with its own source is flagged as the same weapon twice.
+build's Failures instead of silently dropping the weapon. A weapon is merged
+once: when its swap-hands asset (`v_elite_hands`) is in the build, the source
+(`v_elite`) and its other variants are left out (logged; the Explorer status
+says "left out of <build>: by v_elite_hands"). Without the option, a derived
+asset built together with its own source is flagged as the same weapon twice.
 Without that option the build mixes freely only WITHOUT `shared_hands` (each
 weapon keeps its own hands); with `shared_hands` a model wearing other hands
 is rejected. A derived asset goes into

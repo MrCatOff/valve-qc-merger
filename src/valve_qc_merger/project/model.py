@@ -639,6 +639,13 @@ class Project:
         self.save()
 
     def build_assets(self, build: Build) -> list[Asset]:
+        """The assets a build merges (see :meth:`superseded_assets`)."""
+        chosen = self.chosen_assets(build)
+        superseded = self.superseded_assets(build, chosen)
+        return [a for a in chosen if a.name not in superseded]
+
+    def chosen_assets(self, build: Build) -> list[Asset]:
+        """The assets a build names (or its kind/category selects)."""
         accepted = BUILD_KINDS[build.kind].asset_kinds
         if build.assets:
             missing = [n for n in build.assets if n not in self.assets]
@@ -655,6 +662,30 @@ class Project:
                                f"assets of another kind: {wrong}")
         return chosen
 
+    def _origin(self, asset: Asset) -> str:
+        """The non-derived asset ``asset`` was (transitively) made from."""
+        seen = {asset.name}
+        while asset.derived and asset.derived.get("from") in self.assets:
+            asset = self.assets[asset.derived["from"]]
+            if asset.name in seen:
+                break
+            seen.add(asset.name)
+        return asset.name
+
+    def superseded_assets(self, build: Build, chosen: list[Asset]) -> dict[str, str]:
+        """``{dropped: kept}`` for a build that puts every asset on our hands:
+        one weapon must not be merged twice, so when a weapon's Retarget
+        (swap hands) result is in the build, its source and other variants
+        are left out — the swap-hands asset carries the tuned grip."""
+        if not build.retarget:
+            return {}
+        swapped: dict[str, str] = {}
+        for asset in chosen:
+            if asset.derived and asset.derived.get("mode") == "hands":
+                swapped.setdefault(self._origin(asset), asset.name)
+        return {a.name: swapped[self._origin(a)] for a in chosen
+                if self._origin(a) in swapped and a.name != swapped[self._origin(a)]}
+
     def build_dir(self, name: str) -> Path:
         return self.root / "builds" / name
 
@@ -665,6 +696,8 @@ class Project:
         options, notes) or None when the build has no assets."""
         build = self.builds[name]
         assets = self.build_assets(build)
+        for dropped, kept in self.superseded_assets(build, self.chosen_assets(build)).items():
+            reporter.log(f"  {dropped}: left out, {kept} is the same weapon on our hands")
         if not assets:
             reporter.log(f"error: build {name!r} has no assets")
             return None

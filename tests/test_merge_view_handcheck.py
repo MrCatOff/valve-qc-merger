@@ -77,9 +77,11 @@ def test_build_retargets_only_what_needs_it(models: Path, tmp_path: Path) -> Non
     log = "\n".join(reporter.lines)
     assert "retarget v_raw_hands: already on our hands" in log
     assert "retarget v_rt_moved: already on our hands" in log
-    assert "retarget: 1 converted, 2 already on our hands, 0 failed" in log
+    # v_raw is the same weapon as v_raw_hands: left out, not retargeted twice
+    assert "v_raw: left out, v_raw_hands is the same weapon on our hands" in log
+    assert "retarget: 0 converted, 2 already on our hands, 0 failed" in log
     record = json.loads((project.build_dir("pack") / "last_run.json").read_text())
-    assert any("v_raw_hands and its source v_raw" in w for w in record["warnings"])
+    assert not any("the same weapon twice" in w for w in record["warnings"])
     assert result.gates and all(g.passed for g in result.gates)
 
 

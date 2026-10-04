@@ -27,6 +27,7 @@ class AssetStatus:
     stale: bool = False  # derived, and the source changed since
     builds: list[str] = field(default_factory=list)  # builds that take it
     problems: list[str] = field(default_factory=list)  # "<build>: <failure>"
+    replaced: list[str] = field(default_factory=list)  # "<build>: by <asset>"
 
     @property
     def level(self) -> str:
@@ -47,6 +48,7 @@ class AssetStatus:
             out.append("source changed since this was made: Re-run retarget")
         out += [f"✗ {p}" for p in self.problems]
         out.append(f"in builds: {', '.join(self.builds)}" if self.builds else "in no build")
+        out += [f"left out of {r} (same weapon on our hands)" for r in self.replaced]
         return out
 
 
@@ -91,11 +93,16 @@ def project_status(project: Project) -> dict[str, AssetStatus]:
     statuses = {name: AssetStatus() for name in project.assets}
     for build in project.builds.values():
         try:
-            members = project.build_assets(build)
+            chosen = project.chosen_assets(build)
         except ProjectError:
             continue
-        for asset in members:
-            statuses[asset.name].builds.append(build.name)
+        superseded = project.superseded_assets(build, chosen)
+        for asset in chosen:
+            if asset.name in superseded:
+                statuses[asset.name].replaced.append(
+                    f"{build.name}: by {superseded[asset.name]}")
+            else:
+                statuses[asset.name].builds.append(build.name)
     for name, problems in _build_problems(project).items():
         statuses[name].problems = problems
     edits: dict[str, float] = {}

@@ -51,7 +51,9 @@ def test_hands_builds_and_staleness(project: Project) -> None:
     raw, hands = status["v_anaconda"], status["v_anaconda_hands"]
     assert (raw.hands, hands.hands) == ("own", "ours")
     assert raw.level == "own" and hands.level == "ours"
-    assert raw.builds == ["view"] and hands.builds == ["view"]
+    # the source is the same weapon as its swap-hands result: left out of view
+    assert raw.builds == [] and hands.builds == ["view"]
+    assert raw.replaced == ["view: by v_anaconda_hands"]
     assert not hands.stale
     # editing the source after the retarget makes the derived asset stale
     qc = next(project.asset_dir("v_anaconda").glob("*.qc"))
@@ -93,7 +95,8 @@ def test_explorer_badges_and_inspector(project: Project, tmp_path: Path) -> None
         assert win.explorer.select("asset", "v_anaconda")
         item = win.explorer.currentItem()
         assert not item.icon(0).isNull()
-        assert "own hands" in item.toolTip(0) and "in builds: view" in item.toolTip(0)
+        assert "own hands" in item.toolTip(0)
+        assert "left out of view: by v_anaconda_hands" in item.toolTip(0)
         assert "own hands" in win.inspector.status_label.text()
     finally:
         win.close()
@@ -112,11 +115,28 @@ def test_plan_tab(project: Project, tmp_path: Path) -> None:
         assert win.jobs.wait(120_000)
         panel = win.build_panel
         assert panel.currentIndex() == panel.plan_tab
-        assert panel.plan_table.rowCount() == 2
+        # v_anaconda and its swap-hands result are one weapon: only the
+        # swap-hands asset (the tuned grip) is planned
+        assert panel.plan_table.rowCount() == 1
         assert "1 part(s)" in panel.plan_summary.text()
-        assert "the same weapon twice" in panel.plan_rejected.text()
-        panel._plan_row_activated(1, 0)
-        assert win.explorer.current_asset() == panel.plan_table.item(1, 2).text()
+        assert "the same weapon twice" not in panel.plan_rejected.text()
+        panel._plan_row_activated(0, 0)
+        assert win.explorer.current_asset() == panel.plan_table.item(0, 2).text()
+        assert panel.plan_table.item(0, 2).text() == "v_anaconda_hands"
         assert not (project.build_dir("view") / "output").exists()
     finally:
         win.close()
+
+
+def test_retarget_build_takes_a_weapon_once(project: Project) -> None:
+    """With "on our hands first" a weapon and its swap-hands result are not
+    merged twice: the swap-hands asset wins (explicit lists too)."""
+    view = project.builds["view"]
+    assert [a.name for a in project.build_assets(view)] == ["v_anaconda_hands"]
+    assert project.superseded_assets(view, list(project.assets.values())) == {
+        "v_anaconda": "v_anaconda_hands"}
+    explicit = Build("explicit", "merge-v", assets=["v_anaconda", "v_anaconda_hands"],
+                     retarget=True)
+    assert [a.name for a in project.build_assets(explicit)] == ["v_anaconda_hands"]
+    own = Build("own", "merge-v")  # own hands: nothing is swapped, both stay
+    assert len(project.build_assets(own)) == 2
