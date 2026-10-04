@@ -14,6 +14,8 @@ datas = [
     (os.path.join(ROOT, "storage", "handswap"), os.path.join("storage", "handswap")),
     (os.path.join(ROOT, "storage", "players_donor"), os.path.join("storage", "players_donor")),
     (os.path.join(ROOT, "storage", "zhands"), os.path.join("storage", "zhands")),
+    (os.path.join(ROOT, "src", "valve_qc_merger", "studio", "icons"),
+     os.path.join("valve_qc_merger", "studio", "icons")),
     (os.path.join(ROOT, "src", "valve_qc_merger", "retarget", "worker.py"),
      os.path.join("valve_qc_merger", "retarget")),
 ]
@@ -34,7 +36,7 @@ a = Analysis(  # noqa: F821
     [os.path.join(ROOT, "tools", "studio_entry.py")],
     pathex=[os.path.join(ROOT, "src")],
     datas=datas,
-    hiddenimports=["PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets"],
+    hiddenimports=["PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets", "PySide6.QtSvg"],
     excludes=excludes,
     noarchive=False,
 )

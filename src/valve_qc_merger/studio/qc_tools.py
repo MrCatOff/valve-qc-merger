@@ -78,7 +78,7 @@ class SequenceDialog(QDialog):
         info = QLabel(f"Animation: {animation}{extra}"
                       + (f" · {frames} frames" if frames else ""))
         info.setWordWrap(True)
-        info.setStyleSheet("color: gray")
+        info.setProperty("role", "hint")
 
         self.events = QTableWidget(0, len(self.COLUMNS))
         self.events.setHorizontalHeaderLabels(self.COLUMNS)
@@ -182,12 +182,12 @@ class QcHighlighter(QSyntaxHighlighter):
             return out
 
         self.rules = [
-            (re.compile(r"-?\b\d+(?:\.\d+)?\b"), fmt("#b07d2b")),
-            (re.compile(r"\bACT_[A-Za-z0-9_]+\b"), fmt("#8e5bd6")),
-            (re.compile(r"\b(?:fps|loop|event|studio|blank)\b"), fmt("#2f8fb0")),
-            (re.compile(r"\$[A-Za-z]+"), fmt("#3b7dd8", bold=True)),
-            (re.compile(r'"[^"]*"'), fmt("#3fa34d")),
-            (re.compile(r"//.*$"), fmt("#8a8f98")),
+            (re.compile(r"-?\b\d+(?:\.\d+)?\b"), fmt("#e0b26a")),
+            (re.compile(r"\bACT_[A-Za-z0-9_]+\b"), fmt("#c49bff")),
+            (re.compile(r"\b(?:fps|loop|event|studio|blank)\b"), fmt("#5fc4e0")),
+            (re.compile(r"\$[A-Za-z]+"), fmt("#7ba3ff", bold=True)),
+            (re.compile(r'"[^"]*"'), fmt("#7fd1a3")),
+            (re.compile(r"//.*$"), fmt("#6b7282")),
         ]
 
     def highlightBlock(self, text: str) -> None:  # noqa: N802 - Qt override
@@ -211,7 +211,7 @@ class QcPage(QWidget):
         self.save_button = QPushButton("Save QC")
         self.revert_button = QPushButton("Revert")
         self.status = QLabel("")
-        self.status.setStyleSheet("color: gray")
+        self.status.setProperty("role", "hint")
         self.save_button.clicked.connect(lambda: self.save_requested.emit(
             self.editor.toPlainText()))
         self.revert_button.clicked.connect(self._revert)
@@ -268,7 +268,7 @@ class SkinsPage(QWidget):
             lambda row, *_a: row >= 0 and self.skin_selected.emit(row))
         self.note = QLabel("")
         self.note.setWordWrap(True)
-        self.note.setStyleSheet("color: gray")
+        self.note.setProperty("role", "hint")
         layout = QVBoxLayout(self)
         layout.addWidget(self.table, 1)
         layout.addWidget(self.note)

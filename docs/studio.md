@@ -189,6 +189,32 @@ valve-qc-studio [project-folder]   # or: python -m valve_qc_merger.studio
 `studio.model_info` (the Inspector's data) is Qt-free; the GUI is covered by
 offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
 
+### Look and chrome
+
+- **Theme** (`studio.theme`): one dark theme built from design tokens
+  (`TOKENS`: surfaces, borders, text, accent, success/warning/danger) — a
+  QPalette for Fusion plus one style sheet. Widgets never hard-code colours:
+  they set a `role` property (`hint`, `warning`, `title`, `section`, `card`,
+  `link`, …) or `primary=true` (accent buttons), or call `theme.color()`.
+- **Icons** (`studio.icons`): [Lucide](https://lucide.dev) SVGs (ISC,
+  `studio/icons/LICENSE`) tinted to the theme at run time (`icon(name)`;
+  disabled state included). Add an icon by dropping its SVG from
+  `lucide-static` into `studio/icons/`.
+- **Toolbar**: Import · Retarget · Re-run | New build · Plan · **Run** ·
+  Compile · Deploy, then Find and Settings. Actions that work on the
+  selection are enabled only with an asset (Retarget) or a build (Run …)
+  selected; tooltips show the shortcut.
+- **Welcome screen** in place of the viewport while no project is open:
+  New / Open, recent projects, three getting-started steps.
+- **View** menu: show/hide the toolbar and each dock (a dock's ✕ hides it;
+  double-click its title floats it) and **Reset layout**. Window size and
+  dock layout are restored on the next start.
+- **Status bar**: project name, asset and build counts; job progress and
+  Cancel while a job runs.
+- `python tools/ui_screenshots.py OUT_DIR` grabs the main screens (welcome,
+  asset, swap-hands asset, Bones, build, Retarget and New build dialogs) from
+  a throw-away project — before/after shots for UI changes.
+
 ## Viewport (M3)
 
 The centre of the window shows the selected asset (`studio.viewport`):

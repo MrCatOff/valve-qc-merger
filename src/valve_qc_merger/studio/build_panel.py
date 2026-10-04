@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -35,12 +35,13 @@ from PySide6.QtWidgets import (
 from valve_qc_merger.project import BUILD_KINDS, Build, Project, ProjectError
 from valve_qc_merger.project.model import DEFAULT_DEPLOY_DIR, DEPLOY_DIRS
 from valve_qc_merger.services.retarget import RetargetOptions
+from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.build_report import LIMITS, load_record, manifest_rows
 from valve_qc_merger.studio.options_form import OptionsForm
 from valve_qc_merger.studio.widgets import KIND_TITLES, _fill, _table
 
-OK_COLOR = QColor("#3fa34d")
-BAD_COLOR = QColor("#d64545")
+OK_COLOR = theme.color("success")
+BAD_COLOR = theme.color("danger")
 
 
 def _asset_list(project: Project, kind: str, chosen: list[str]) -> QListWidget:

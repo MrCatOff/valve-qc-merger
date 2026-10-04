@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.renderer import Renderer, ViewState, gl_format
 from valve_qc_merger.studio.scene import ModelScene
 
@@ -70,8 +71,8 @@ class Viewport(QOpenGLWidget):
         if self.gl_error:
             from PySide6.QtGui import QPainter
             painter = QPainter(self)
-            painter.fillRect(self.rect(), Qt.GlobalColor.darkGray)
-            painter.setPen(Qt.GlobalColor.white)
+            painter.fillRect(self.rect(), theme.color("panel"))
+            painter.setPen(theme.color("muted"))
             painter.drawText(self.rect().adjusted(20, 20, -20, -20),
                              Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
                              "The 3D viewport needs OpenGL 3.3 (update the graphics "

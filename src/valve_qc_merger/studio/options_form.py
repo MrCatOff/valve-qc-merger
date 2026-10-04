@@ -21,10 +21,12 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLineEdit,
-    QPushButton,
     QSpinBox,
+    QToolButton,
     QWidget,
 )
+
+from valve_qc_merger.studio.icons import icon
 
 # Set by the build (where the staged inputs and the output go).
 HIDDEN = {"models_dir", "out", "weapon_dir", "source", "qc"}
@@ -120,8 +122,9 @@ class OptionsForm(QWidget):
             layout = QHBoxLayout(row)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.addWidget(edit, 1)
-            browse = QPushButton("…")
-            browse.setFixedWidth(28)
+            browse = QToolButton()
+            browse.setIcon(icon("folder-open"))
+            browse.setToolTip("Choose a file…")
             browse.clicked.connect(lambda: self._browse(edit))
             layout.addWidget(browse)
             row.edit = edit  # type: ignore[attr-defined]

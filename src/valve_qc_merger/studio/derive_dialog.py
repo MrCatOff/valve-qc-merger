@@ -167,7 +167,8 @@ class DeriveDialog(QDialog):
             modes_layout.addWidget(radio)
             hint = QLabel(hints.get(key, ""))
             hint.setWordWrap(True)
-            hint.setStyleSheet("color: gray; margin-left: 22px")
+            hint.setProperty("role", "hint")
+            hint.setContentsMargins(22, 0, 0, 0)
             modes_layout.addWidget(hint)
             radio.setEnabled(key == mode if name is not None else key in allowed)
         layout.addWidget(modes)
@@ -213,7 +214,7 @@ class DeriveDialog(QDialog):
         tuning_layout = QHBoxLayout(tuning_row)
         tuning_layout.setContentsMargins(0, 0, 0, 0)
         self.tuning_label = QLabel(f"prefilled from {tuning.FILE_NAME}" if prefilled else "")
-        self.tuning_label.setStyleSheet("color: gray")
+        self.tuning_label.setProperty("role", "hint")
         self.save_tuning_button = QPushButton(f"Save to {tuning.FILE_NAME}")
         self.save_tuning_button.setToolTip(
             f"store these offsets as {sources[0]}'s grip tuning: every later retarget of "
@@ -277,7 +278,11 @@ class DeriveDialog(QDialog):
         self.mode_group.idToggled.connect(self._mode_toggled)
         self.mode_group.button(self._mode_keys.index(mode)).setChecked(True)
         self._mode_toggled(self._mode_keys.index(mode), True)
-        self.resize(580, min(860, self.screen().availableGeometry().height() - 60)
+        # wide enough for the widest options page (the scroll area never
+        # scrolls sideways): its minimum + the vertical scroll bar + margins
+        width = max(580, max(self.pages.widget(i).minimumSizeHint().width()
+                             for i in range(self.pages.count())) + 48)
+        self.resize(width, min(860, self.screen().availableGeometry().height() - 60)
                     if self.screen() is not None else 760)
 
     @property
@@ -343,7 +348,7 @@ class DeriveDialog(QDialog):
                       "fingers a few degrees, or raise 'snug max deg' below so the automatic "
                       "fit may curl further.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray")
+        hint.setProperty("role", "hint")
         outer.addWidget(hint)
         return box
 

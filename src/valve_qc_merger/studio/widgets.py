@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from valve_qc_merger.project import ASSET_KINDS, Project
+from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.model_info import ModelInfo, texture_rgba
 
 KIND_TITLES = {
@@ -52,8 +53,8 @@ UNCATEGORIZED = "Uncategorized"
 NEW_CATEGORY = "\x00new"  # move_to_category target: ask for a new name
 
 # status badge per AssetStatus.level
-STATUS_COLORS = {"problem": "#d64545", "stale": "#e0a030", "ours": "#3fa34d",
-                 "own": "#8a8f98"}
+STATUS_COLORS = {"problem": theme.TOKENS["danger"], "stale": theme.TOKENS["warning"],
+                 "ours": theme.TOKENS["success"], "own": theme.TOKENS["muted"]}
 STATUS_HINTS = {"problem": "failed or rejected in its last build",
                 "stale": "its source changed: re-run",
                 "ours": "on our hands", "own": "own hands (not retargeted)"}
@@ -586,7 +587,7 @@ class Inspector(QTabWidget):
             lambda: self._asset and self.notes_changed.emit(self._asset, self.notes.text()))
         self.warnings_label = QLabel("")
         self.warnings_label.setWordWrap(True)
-        self.warnings_label.setStyleSheet("color: #c58a00")
+        self.warnings_label.setProperty("role", "warning")
         # long names/paths (Windows paths cannot wrap at '\\') must never set
         # the dock's minimum width: the full text is in the tooltip
         for label in (self.name_label, self.category_label, self.status_label,

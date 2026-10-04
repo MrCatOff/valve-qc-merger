@@ -93,7 +93,7 @@ class BonesPage(QWidget):
                       "a root). World poses are kept; vertices of a deleted bone move to "
                       "its parent.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #8a8a8a")
+        hint.setProperty("role", "hint")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.tree, 1)
@@ -155,7 +155,7 @@ class AttachmentsPage(QWidget):
         hint = QLabel("Offsets are in the bone's frame. GoldSource uses up to 4 "
                       "(0 = muzzle flash, 1 = shell eject on most weapons).")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #8a8a8a")
+        hint.setProperty("role", "hint")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.table, 1)

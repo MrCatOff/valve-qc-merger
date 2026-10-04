@@ -4,29 +4,38 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QKeySequence
+from PySide6.QtCore import QSettings, QSize, Qt, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
+    QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
+    QToolBar,
+    QToolButton,
     QWidget,
 )
 
+from valve_qc_merger import __version__
 from valve_qc_merger.merge_view.discovery import load_model
 from valve_qc_merger.project import Project, ProjectError
 from valve_qc_merger.services.base import Reporter
+from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.build_panel import BuildPanel, NewBuildDialog
 from valve_qc_merger.studio.build_report import load_record, record_part_stats
 from valve_qc_merger.studio.dialogs import NewProjectDialog, SettingsDialog
+from valve_qc_merger.studio.icons import ICON_SIZE, icon
 from valve_qc_merger.studio.jobs import JobRunner
 from valve_qc_merger.studio.model_info import ModelInfo, read_model_info
 from valve_qc_merger.studio.scene import ModelScene, build_scene
 from valve_qc_merger.studio.viewport import ViewportPanel
+from valve_qc_merger.studio.welcome import WelcomePage
 from valve_qc_merger.studio.widgets import (
     KIND_TITLES,
     Explorer,
@@ -37,6 +46,33 @@ from valve_qc_merger.studio.widgets import (
 )
 
 RECENT_LIMIT = 8
+
+
+class DockTitleBar(QWidget):
+    """A dock's title: small caps label + close; double-click floats it."""
+
+    def __init__(self, dock: QDockWidget) -> None:
+        super().__init__(dock)
+        self.dock = dock
+        theme.set_role(self, "dock-bar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 4, 4, 4)
+        self.label = QLabel(dock.windowTitle().upper())
+        theme.set_role(self.label, "dock-title")
+        layout.addWidget(self.label)
+        layout.addStretch(1)
+        close = QToolButton()
+        close.setIcon(icon("x", theme.TOKENS["muted"]))
+        close.setIconSize(QSize(14, 14))
+        close.setToolTip(f"Hide {dock.windowTitle()} (View menu shows it again)")
+        close.setAutoRaise(True)
+        close.clicked.connect(dock.close)
+        layout.addWidget(close)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        self.dock.setFloating(not self.dock.isFloating())
+        event.accept()
 
 
 class MainWindow(QMainWindow):
@@ -53,7 +89,14 @@ class MainWindow(QMainWindow):
         self.resize(1400, 860)
 
         self.viewport = ViewportPanel()
-        self.setCentralWidget(self.viewport)
+        self.welcome = WelcomePage(__version__)
+        self.welcome.new_requested.connect(self.new_project)
+        self.welcome.open_requested.connect(self.open_project_dialog)
+        self.welcome.recent_requested.connect(lambda path: self.open_project(Path(path)))
+        self.center = QStackedWidget()
+        self.center.addWidget(self.welcome)
+        self.center.addWidget(self.viewport)
+        self.setCentralWidget(self.center)
         self._scene_cache: dict[str, ModelScene] = {}
 
         self.explorer = Explorer()
@@ -68,16 +111,23 @@ class MainWindow(QMainWindow):
         self._dock("Inspector", self.right, Qt.DockWidgetArea.RightDockWidgetArea, 520)
         self._dock("Log", self.log, Qt.DockWidgetArea.BottomDockWidgetArea, 180)
 
+        self.counts_label = QLabel()
         self.progress = QProgressBar()
-        self.progress.setMaximumWidth(260)
+        self.progress.setMaximumWidth(220)
         self.progress.setVisible(False)
         self.cancel_button = QPushButton("Cancel")
+        theme.set_role(self.cancel_button, "link")
         self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self.jobs.cancel)
         self.statusBar().addPermanentWidget(self.progress)
         self.statusBar().addPermanentWidget(self.cancel_button)
+        self.statusBar().addPermanentWidget(self.counts_label)
+        self.statusBar().setSizeGripEnabled(False)
 
         self._build_menus()
+        self._build_toolbar()
+        self._build_view_menu()
+        self.explorer.currentItemChanged.connect(lambda *_: self._update_actions())
         self.explorer.asset_selected.connect(self._select_asset)
         self.explorer.build_selected.connect(self._select_build)
         self.explorer.build_run_requested.connect(self.run_build)
@@ -126,12 +176,22 @@ class MainWindow(QMainWindow):
         self.jobs.progress.connect(self._job_progress)
         self.jobs.done.connect(self._job_done)
         self._update_actions()
+        self.center.setCurrentWidget(self.welcome)
+        self._default_state = self.saveState()
+        geometry = self.settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        state = self.settings.value("window/state")
+        if state is not None:
+            self.restoreState(state)
 
     # -- layout ------------------------------------------------------------
     def _dock(self, title: str, widget: QWidget, area: Qt.DockWidgetArea, size: int) -> None:
         dock = QDockWidget(title, self)
         dock.setObjectName(title)
         dock.setWidget(widget)
+        dock.setTitleBarWidget(DockTitleBar(dock))
+        self.docks = [*getattr(self, "docks", []), dock]
         self.addDockWidget(area, dock)
         horizontal = area in (Qt.DockWidgetArea.LeftDockWidgetArea,
                               Qt.DockWidgetArea.RightDockWidgetArea)
@@ -169,7 +229,8 @@ class MainWindow(QMainWindow):
         self.act_rederive = asset_menu.addAction(
             "Re-run retarget", lambda: self.rederive_asset(self.explorer.current_asset(), False),
             QKeySequence("Ctrl+Shift+R"))
-        asset_menu.addAction("Find…", self._focus_filter, QKeySequence.StandardKey.Find)
+        self.act_find = asset_menu.addAction("Find…", self._focus_filter,
+                                             QKeySequence.StandardKey.Find)
         asset_menu.addSeparator()
         self.act_new_category = asset_menu.addAction("New category…", self.new_category)
 
@@ -197,19 +258,101 @@ class MainWindow(QMainWindow):
             "Delete selected build…", lambda: self.delete_build(self.explorer.current_build()))
         self._refresh_recent()
 
+    # (action attribute, icon, short toolbar label) — menus keep their long texts
+    ACTION_ICONS = [
+        ("act_new", "file-plus", "New"), ("act_open", "folder-open", "Open"),
+        ("act_import_mdl", "file-down", "Import"), ("act_import_mdl_dir", "folder-input", ""),
+        ("act_import_dec", "file-box", ""), ("act_settings", "settings", "Settings"),
+        ("act_reveal", "folder-search", ""), ("act_derive", "hand", "Retarget"),
+        ("act_rederive", "refresh-cw", "Re-run"), ("act_find", "search", "Find"),
+        ("act_new_category", "folder-plus", ""), ("act_new_build", "package-plus", "New build"),
+        ("act_plan_build", "list-checks", "Plan"), ("act_run_build", "play", "Run"),
+        ("act_compile_build", "hammer", "Compile"), ("act_deploy_build", "rocket", "Deploy"),
+        ("act_delete_build", "trash-2", ""),
+    ]
+    TOOLBAR = ["act_import_mdl", "act_derive", "act_rederive", None, "act_new_build",
+               "act_plan_build", "act_run_build", "act_compile_build", "act_deploy_build",
+               "stretch", "act_find", "act_settings"]
+
+    def _build_toolbar(self) -> None:
+        for attr, name, label in self.ACTION_ICONS:
+            action: QAction = getattr(self, attr)
+            action.setIcon(icon(name))
+            if label:
+                action.setIconText(label)
+            keys = action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+            text = action.text().replace("&", "").rstrip("…")
+            action.setToolTip(f"{text} ({keys})" if keys else text)
+        bar = QToolBar("Toolbar")
+        bar.setObjectName("Toolbar")
+        bar.setMovable(False)
+        bar.setIconSize(ICON_SIZE)
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        for attr in self.TOOLBAR:
+            if attr is None:
+                bar.addSeparator()
+            elif attr == "stretch":
+                spacer = QWidget()
+                spacer.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                     QSizePolicy.Policy.Preferred)
+                bar.addWidget(spacer)
+            else:
+                bar.addAction(getattr(self, attr))
+        run = bar.widgetForAction(self.act_run_build)
+        self.act_run_build.setIcon(icon("play", theme.TOKENS["on_accent"]))
+        theme.set_primary(run)
+        for attr in ("act_find", "act_settings"):
+            bar.widgetForAction(getattr(self, attr)).setToolButtonStyle(
+                Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.toolbar = bar
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
+
+    def _build_view_menu(self) -> None:
+        menu = self.menuBar().addMenu("&View")
+        menu.addAction(self.toolbar.toggleViewAction())
+        for dock in self.docks:
+            menu.addAction(dock.toggleViewAction())
+        menu.addSeparator()
+        self.act_reset_layout = menu.addAction(icon("layout-dashboard"), "Reset layout",
+                                               self.reset_layout)
+
+    def reset_layout(self) -> None:
+        for dock in self.docks:
+            dock.setFloating(False)
+        self.restoreState(self._default_state)
+        for dock in self.docks:
+            dock.show()
+        self.toolbar.show()
+
     def _update_actions(self) -> None:
         has = self.project is not None
         idle = not self.jobs.busy
         for action in (self.act_import_mdl, self.act_import_mdl_dir, self.act_import_dec,
-                       self.act_settings, self.act_reveal, self.act_close,
-                       self.act_derive, self.act_rederive, self.act_new_category,
-                       self.act_new_build, self.act_run_build, self.act_compile_build,
-                       self.act_plan_build, self.act_deploy_build,
-                       self.act_run_compile_build, self.act_delete_build):
+                       self.act_settings, self.act_reveal, self.act_close, self.act_find,
+                       self.act_new_category, self.act_new_build):
             action.setEnabled(has and idle)
+        # what acts on the selection is enabled only when there is one
+        asset = has and bool(self.explorer.selected_assets())
+        build = has and bool(self.explorer.current_build())
+        for action in (self.act_derive, self.act_rederive):
+            action.setEnabled(asset and idle)
+        for action in (self.act_run_build, self.act_compile_build, self.act_plan_build,
+                       self.act_deploy_build, self.act_run_compile_build,
+                       self.act_delete_build):
+            action.setEnabled(build and idle)
         for action in (self.act_new, self.act_open):
             action.setEnabled(idle)
         self.recent_menu.setEnabled(idle)
+        self._update_counts()
+
+    def _update_counts(self) -> None:
+        project = self.project
+        if project is None:
+            self.counts_label.setText("No project")
+            return
+        assets, builds = len(project.assets), len(project.builds)
+        self.counts_label.setText(f"{project.name}  ·  {assets} asset{'s' * (assets != 1)}"
+                                  f"  ·  {builds} build{'s' * (builds != 1)}")
 
     # -- project lifecycle -------------------------------------------------
     def new_project(self) -> None:
@@ -252,6 +395,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(project_title(project))
         self.explorer.show_project(project)
         self.inspector.show_asset(project, None)
+        self.center.setCurrentWidget(self.viewport if project is not None else self.welcome)
         if project is not None:
             self._remember(project.root)
             self.log.append_line(f"opened {project.root}")
@@ -276,6 +420,8 @@ class MainWindow(QMainWindow):
             self.recent_menu.addAction(path, lambda p=path: self.open_project(Path(p)))
         if not recent:
             self.recent_menu.addAction("(none)").setEnabled(False)
+        if hasattr(self, "welcome"):
+            self.welcome.set_recent(recent)
 
     # -- assets ------------------------------------------------------------
     def import_mdl_files(self) -> None:
@@ -1011,6 +1157,8 @@ class MainWindow(QMainWindow):
                 return
             self.jobs.cancel()
             self.jobs.wait(30_000)
+        self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue("window/state", self.saveState())
         self.viewport.viewport.release_gl()
         event.accept()
 
