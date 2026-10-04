@@ -287,7 +287,7 @@ class NewSpriteDialog(QDialog):
         layout.addLayout(buttons_row)
         form = kit.form()
         self.name_edit = QLineEdit("effects/my_sprite")
-        self.name_edit.setToolTip("path under sprites/ (no .spr)")
+        self.name_edit.setToolTip("Path under sprites/ (no .spr)")
         self.format_box = QComboBox()
         for fmt in FORMATS:
             self.format_box.addItem(fmt, fmt)
@@ -335,7 +335,7 @@ class WeaponHudDialog(QDialog):
             "invisible), an optional selected icon and ammo icon, packed into one sheet."))
         form = kit.form()
         self.weapon_edit = QLineEdit("weapon_")
-        self.weapon_edit.setToolTip("the weapon's HUD name — sprites/<name>.txt "
+        self.weapon_edit.setToolTip("The weapon's HUD name — sprites/<name>.txt "
                                     "(what your plugin's WeaponList sends)")
         self.icon_edit = QLineEdit()
         self.selected_edit = QLineEdit()
