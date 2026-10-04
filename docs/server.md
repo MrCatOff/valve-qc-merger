@@ -100,6 +100,12 @@ Build ▸ **Export server package…** (Ctrl+Shift+E) writes
   `_ANIM_<SEQUENCE>` numbers from the manifest.
 - `vqm_resources.res` — the same files as a `.res` list (copy as
   `maps/<map>.res` for a map to send them).
+- `rechecker/resources.ini` — rules for
+  [ReChecker](https://github.com/rehlds/ReChecker): every packed model and
+  sprite with its true hash (the first 8 hex digits of its MD5) accepted
+  (`IGNORE`) and any other copy kicked (`UNKNOWN … "kick [userid] …"
+  BREAK`) — a modified model or sprite (see-through walls, glowing players)
+  is the classic cheat this stops. Append it to ReChecker's `resources.ini`.
 - `package_report.txt` — files and sizes, what a new player downloads,
   sounds the models play that nothing provides, builds left out (not run or
   not compiled).

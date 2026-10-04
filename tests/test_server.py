@@ -202,6 +202,8 @@ def test_export_package_writes_tree_include_res_and_report(tmp_path: Path) -> No
     assert "models/v_pack_p1.mdl" in res and "sound/weapons/pack_clipin.wav" in res
     text = (tmp_path / "out" / "package_report.txt").read_text()
     assert "sound/weapons/nowhere.wav" in text and "FastDL" in text
+    checks = (tmp_path / "out" / "rechecker" / "resources.ini").read_text()
+    assert '"models/v_pack_p1.mdl"' in checks and "IGNORE" in checks
 
     project.settings.client_sounds = "sound"
     inc = export_package(project, tmp_path / "out2")
@@ -265,3 +267,23 @@ def test_unprecache_tab(tmp_path: Path, monkeypatch) -> None:
                         lambda *a, **k: (str(target), ""))
     assert window.export_unprecache() == str(target)
     assert "models/w_ak47.mdl c models/w_supplybox.mdl" in target.read_text()
+
+
+def test_rechecker_rules(tmp_path: Path) -> None:
+    import hashlib
+
+    from valve_qc_merger.server.rechecker import rules, short_hash
+    model = tmp_path / "v_pack.mdl"
+    model.write_bytes(b"IDST model bytes")
+    sound = tmp_path / "x.wav"
+    sound.write_bytes(b"RIFF")
+    assert short_hash(model) == hashlib.md5(b"IDST model bytes").hexdigest()[:8]
+    text = rules({"models/v_pack.mdl": model, "sound/x.wav": sound})
+    lines = [line for line in text.splitlines() if not line.startswith(";")]
+    assert len(lines) == 2  # sounds are left out by default
+    assert lines[0].startswith('"models/v_pack.mdl"') and lines[0].endswith(
+        f"{short_hash(model)}\tIGNORE")
+    assert "UNKNOWN" in lines[1] and "kick [userid]" in lines[1] and lines[1].endswith("BREAK")
+    with_sounds = rules({"models/v_pack.mdl": model, "sound/x.wav": sound},
+                        include_sounds=True)
+    assert '"sound/x.wav"' in with_sounds

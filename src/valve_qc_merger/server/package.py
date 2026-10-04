@@ -12,6 +12,8 @@
   per weapon its model, ``pev_body`` and sequence numbers;
 - ``vqm_resources.res`` — the same files in the ``.res`` format (copy as
   ``maps/<map>.res`` to make a map send them);
+- ``rechecker/resources.ini`` — ReChecker rules: every packed model and
+  sprite with its hash accepted, any modified copy kicked;
 - ``package_report.txt`` — files, sizes and what a new player downloads.
 """
 
@@ -121,6 +123,10 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
     (out / "amxx" / "vqm_resources.inc").write_text(
         amxx_include(result, project.settings.client_sounds, project.name), encoding="utf-8")
     (out / "vqm_resources.res").write_text(res_file(result), encoding="utf-8")
+    from valve_qc_merger.server.rechecker import rules
+    (out / "rechecker").mkdir(parents=True, exist_ok=True)
+    (out / "rechecker" / "resources.ini").write_text(
+        rules({path: mod / path for path in result.files}), encoding="utf-8")
     (out / "package_report.txt").write_text(report(result), encoding="utf-8")
     return result
 
@@ -227,7 +233,8 @@ def report(result: PackageResult) -> str:
         lines += ["", "Builds left out (not run or not compiled): "
                   + ", ".join(result.skipped_builds)]
     lines += ["", f"Upload {MOD_FOLDER}/ to the server and to the sv_downloadurl host "
-              "(FastDL) as is; add amxx/vqm_resources.inc to your weapon plugin."]
+              "(FastDL) as is; add amxx/vqm_resources.inc to your weapon plugin; append "
+              "rechecker/resources.ini to ReChecker's resources.ini to kick modified copies."]
     return "\n".join(lines) + "\n"
 
 
