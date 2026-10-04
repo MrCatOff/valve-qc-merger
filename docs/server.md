@@ -39,11 +39,14 @@ Scans a mod folder (default: the game folder) — `models`, `sprites`,
 - **errors**: a `T.mdl` / `01.mdl` companion a model needs is missing; a
   sound a model plays (events 5004/1004/1008) is in neither the folder, the
   `<mod>_downloads` folder nor `valve`; a path over 63 characters; a model
-  that cannot be read;
+  or map that cannot be read; a model or sprite a map's entity uses that no
+  folder has;
 - **warnings**: upper case in a path (the Linux server is case-sensitive),
   a sound referenced with another case than the file, non-ASCII or spaces,
   textures over 512 px, WAV files the engine mangles (not 8/16-bit PCM,
-  stereo, a rate other than 11025/22050/44100, clipping);
+  stereo, a rate other than 11025/22050/44100, clipping); a sound a map's
+  entity plays, or a texture WAD its worldspawn lists (`wad` key), that no
+  folder has — clients then see missing textures unless the map embeds them;
 - **info**: identical files (one could serve both).
 
 Filter by severity or text, double-click a row to show the file, *Copy
@@ -217,3 +220,21 @@ Into the chosen folder (default `<project>/previews`):
 
 `valve_qc_merger.preview` renders in software (numpy, no GPU), so the
 result is the same on every machine.
+
+## Sprays and WADs
+
+**Asset ▸ New spray (tempdecal.wad)…** turns an image into the spray file
+a player's client sends: one `{LOGO` texture (lump type `0x40`), 255
+colours, palette index 255 (blue) where the image is transparent. Sizes keep
+the image's aspect with both sides a multiple of 16, at most 256, and 14336
+pixels in all (112 × 128 and the like — the client refuses bigger); an image
+is not scaled up unless you pick that. Stock HLDS takes only 64 × 64 logos
+(offered too); ReHLDS takes the bigger ones with
+`sv_rehlds_allow_large_sprays 1`, its default. The file goes into `cstrike/`
+(make it read-only, or the game overwrites it with the Options spray).
+
+**Asset ▸ Open WAD…** shows every texture of a WAD3 — map textures,
+`decals.wad` (drawn as the engine does: the index is the opacity, the last
+palette colour the colour), sprays — with a filter and *Export PNG…*.
+`valve_qc_merger.sprite.wad` reads and writes WAD3 (with the three mip
+levels) and makes sprays without Qt.

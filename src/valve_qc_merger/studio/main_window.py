@@ -295,6 +295,9 @@ class MainWindow(QMainWindow):
         self.act_import_sprites = asset_menu.addAction("Import sprites…", self.import_sprites)
         self.act_new_sprite = asset_menu.addAction("New sprite from images…", self.new_sprite)
         self.act_new_hud = asset_menu.addAction("New weapon HUD…", self.new_weapon_hud)
+        asset_menu.addSeparator()
+        self.act_new_spray = asset_menu.addAction("New spray (tempdecal.wad)…", self.new_spray)
+        self.act_open_wad = asset_menu.addAction("Open WAD…", self.open_wad)
 
         build_menu = bar.addMenu("&Build")
         self.act_new_build = build_menu.addAction("New build…", self.new_build,
@@ -626,6 +629,22 @@ class MainWindow(QMainWindow):
         self.log.append_line(f"made sprites/{name}")
         self.explorer.show_project(self.project)
         self.explorer.select("sprite", name)
+
+    def new_spray(self) -> None:
+        """Asset ▸ New spray: an image -> tempdecal.wad (needs no project)."""
+        from valve_qc_merger.studio.wad_tools import SprayDialog
+        folder = self.project.settings.game_dir if self.project is not None else ""
+        SprayDialog(folder or "", self).exec()
+
+    def open_wad(self) -> None:
+        """Asset ▸ Open WAD: browse the textures of a WAD3."""
+        from valve_qc_merger.studio.wad_tools import WadViewer
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open WAD", self.settings.value("last_wad", str(Path.home())),
+            "WAD3 (*.wad)")
+        if path:
+            self.settings.setValue("last_wad", str(Path(path).parent))
+            WadViewer(path, self).exec()
 
     def new_weapon_hud(self) -> None:
         from valve_qc_merger.project import sprites

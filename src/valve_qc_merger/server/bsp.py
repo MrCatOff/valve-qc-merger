@@ -31,6 +31,7 @@ class MapResources:
     models: set[str] = field(default_factory=set)  # entity .mdl/.spr (game paths)
     sounds: set[str] = field(default_factory=set)  # entity .wav (relative to sound/)
     entities: int = 0
+    wads: list[str] = field(default_factory=list)  # worldspawn "wad": file names
 
     @property
     def model_slots(self) -> int:
@@ -59,6 +60,8 @@ def read_map_resources(path: Path) -> MapResources:
     result = MapResources(name=Path(path).stem, brush_models=mod_len // DMODEL_SIZE)
     ents = entities(text)
     result.entities = len(ents)
+    world = next((e for e in ents if e.get("classname") == "worldspawn"), {})
+    result.wads = wad_names(world.get("wad", ""))
     for entity in ents:
         for key, value in entity.items():
             low = value.lower().replace("\\", "/")
@@ -69,4 +72,16 @@ def read_map_resources(path: Path) -> MapResources:
     return result
 
 
-__all__ = ["BspError", "MapResources", "entities", "read_map_resources"]
+def wad_names(value: str) -> list[str]:
+    """The file names a worldspawn ``wad`` key lists (``\\half-life\\cstrike\\
+    cs_dust.wad;…`` -> ``["cs_dust.wad"]``): the engine looks them up by name
+    in the mod folder and the folders after it."""
+    names = []
+    for part in value.split(";"):
+        name = part.strip().replace("\\", "/").rsplit("/", 1)[-1]
+        if name and name.lower() not in (n.lower() for n in names):
+            names.append(name)
+    return names
+
+
+__all__ = ["BspError", "MapResources", "entities", "read_map_resources", "wad_names"]

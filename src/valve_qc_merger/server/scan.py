@@ -101,9 +101,14 @@ class FolderInventory:
 
 def scan_folder(root: Path) -> FolderInventory:
     """Every file under the resource folders of a mod folder (``models``,
-    ``sprites``, ``sound``, ``maps``, ``gfx``, ``events``)."""
+    ``sprites``, ``sound``, ``maps``, ``gfx``, ``events``) and its texture
+    WADs (``*.wad`` at the top: what maps name in their worldspawn)."""
     root = Path(root)
     inventory = FolderInventory(root)
+    if root.is_dir():
+        for path in root.glob("*"):
+            if path.is_file() and path.suffix.lower() == ".wad":
+                inventory.files[path.name] = path.stat().st_size
     for top in RESOURCE_DIRS:
         base = root / top
         if not base.is_dir():

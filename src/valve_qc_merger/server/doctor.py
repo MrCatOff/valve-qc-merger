@@ -71,6 +71,8 @@ def check_folder(root: Path, *, progress: Callable[[int, int, str], None] | None
         if progress is not None:
             progress(done, len(main_models), relative)
         issues.extend(_model_issues(inventory, relative, fallback))
+    for relative in inventory.of_kind(".bsp"):
+        issues.extend(_map_issues(inventory, relative, fallback))
     if wav_check is not None:
         for relative in inventory.of_kind(".wav"):
             for problem in wav_check(root / relative):
@@ -86,6 +88,36 @@ def fallback_folders(root: Path) -> list[Path]:
     root = Path(root)
     return [p for p in (root.with_name(root.name + "_downloads"), root.with_name("valve"))
             if p.is_dir() and p.resolve() != root.resolve()]
+
+
+def _map_issues(inventory: FolderInventory, relative: str,
+                fallback: list[FolderInventory]) -> list[Issue]:
+    """WADs, models, sprites and sounds a map needs that no folder has."""
+    from valve_qc_merger.server.bsp import BspError, read_map_resources
+    try:
+        resources = read_map_resources(inventory.root / relative)
+    except (BspError, OSError) as exc:
+        return [Issue("error", "map", relative, f"cannot be read: {exc}")]
+
+    def found(target: str) -> bool:
+        return inventory.exists(target) or any(f.exists(target) for f in fallback)
+
+    issues = []
+    for wad in resources.wads:
+        if not found(wad):
+            issues.append(Issue("warning", "missing", relative,
+                                f"its worldspawn lists {wad}, which is not in the folder "
+                                "(clients without it see missing textures unless the map "
+                                "embeds them)"))
+    for model in sorted(resources.models):
+        if not found(model):
+            issues.append(Issue("error", "missing", relative,
+                                f"an entity uses {model}, which is not in the folder"))
+    for sound in sorted(resources.sounds):
+        if not found(f"sound/{sound}"):
+            issues.append(Issue("warning", "missing", relative,
+                                f"an entity plays sound/{sound}, which is not in the folder"))
+    return issues
 
 
 def _model_issues(inventory: FolderInventory, relative: str,

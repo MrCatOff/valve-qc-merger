@@ -64,6 +64,28 @@ def test_map_resources_count_brush_models_and_entity_files(tmp_path: Path) -> No
     assert res.model_slots == 5
 
 
+def test_map_wads_and_doctor_map_checks(tmp_path: Path) -> None:
+    from valve_qc_merger.server.bsp import wad_names
+    assert wad_names("\\half-life\\cstrike\\cs_dust.wad;C:/x/Halflife.wad;;cs_dust.wad") \
+        == ["cs_dust.wad", "Halflife.wad"]
+    mod = tmp_path / "cstrike"
+    (mod / "maps").mkdir(parents=True)
+    write_bsp(mod / "maps" / "de_test.bsp", ENTITIES, 3)
+    (mod / "sprites").mkdir()
+    (mod / "sprites" / "glow01.spr").write_bytes(b"IDSP")
+    valve = tmp_path / "valve"
+    valve.mkdir()
+    (valve / "halflife.wad").write_bytes(b"WAD3")  # the base game has it
+    found = [i for i in check_folder(mod) if i.path == "maps/de_test.bsp"]
+    text = [(i.severity, i.message) for i in found]
+    assert ("error", "an entity uses models/props/barrel.mdl, which is not in the folder") \
+        in text
+    assert any(s == "warning" and "sound/ambience/wind.wav" in m for s, m in text)
+    assert not any("halflife.wad" in m for _s, m in text) and len(found) == 2
+    (valve / "halflife.wad").unlink()
+    assert any("lists halflife.wad" in i.message for i in check_folder(mod))
+
+
 def test_model_refs_read_events_and_textures() -> None:
     refs = model_refs(_MINI)
     assert refs.version == 10 and not refs.error
@@ -151,9 +173,9 @@ def test_server_window_budget_and_doctor(tmp_path: Path) -> None:
     assert window.bars["models"].bar.property("level") == "error"
     assert window.maps_table.item(0, 4).text() == "over a limit"
 
-    window.scan()  # mini.mdl plays weapons/x.wav, which is missing
+    window.scan()  # mini.mdl plays weapons/x.wav; the map's barrel and glow are missing
     assert any(i.category == "missing" for i in window.issues)
-    assert "1 error" in window.summary_label.text()
+    assert "3 errors" in window.summary_label.text()
     window.severity_box.setCurrentIndex(window.severity_box.findData("info"))
     assert window.issues_table.rowCount() == 0
     assert "missing" in "\n".join(f"{i.category}" for i in window.issues)
