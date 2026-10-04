@@ -220,6 +220,35 @@ class Viewport(QOpenGLWidget):
         self.update()
 
 
+class EventSlider(QSlider):
+    """The frame scrubber with a tick above each sound event's frame."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self.markers: list[int] = []
+
+    def set_markers(self, frames: list[int]) -> None:
+        self.markers = sorted(set(frames))
+        self.setToolTip("" if not frames else
+                        f"Sound events at frame(s) {', '.join(map(str, self.markers))}")
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().paintEvent(event)
+        if not self.markers or self.maximum() <= self.minimum():
+            return
+        from PySide6.QtWidgets import QStyle
+        painter = QPainter(self)
+        painter.setPen(QPen(theme.color("warning"), 2))
+        handle = 14  # the theme's handle width: keep ticks over the groove
+        span = self.width() - handle
+        for frame in self.markers:
+            x = handle / 2 + QStyle.sliderPositionFromValue(
+                self.minimum(), self.maximum(), frame, span)
+            painter.drawLine(QPointF(x, 1), QPointF(x, 5))
+        painter.end()
+
+
 def _divider() -> QWidget:
     line = QWidget()
     line.setFixedSize(1, 18)
@@ -310,6 +339,16 @@ class ViewportPanel(QWidget):
         bar.addWidget(self.fov_spin)
         bar.addWidget(self.right_hand_box)
         bar.addWidget(_divider())
+        from valve_qc_merger.studio import audio
+        self.sound_box = self._tool("volume-2", "Event sounds: play the sounds a sequence's "
+                                    "events name (5004) as the animation plays")
+        self.sound_box.setCheckable(True)
+        self.sound_box.setChecked(audio.available())
+        self.sound_box.setEnabled(audio.available())
+        bar.addWidget(self.sound_box)
+        self._sound_events: dict[int, list[tuple[int, str]]] = {}
+        self._sound_resolver = None
+        bar.addWidget(_divider())
         self.compare_button = self._tool("git-compare", "")
         self.compare_button.setText("Before")
         self.compare_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -342,7 +381,7 @@ class ViewportPanel(QWidget):
         self.play_button.toggled.connect(self._toggle_play)
         self.next_button = self._tool("step-forward", "Next frame (→)")
         self.next_button.clicked.connect(lambda: self.step(1))
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = EventSlider()
         self.slider.setMinimumWidth(80)
         self.slider.valueChanged.connect(self._slider_moved)
         self.frame_label = QLabel("0 / 0")
@@ -445,6 +484,37 @@ class ViewportPanel(QWidget):
 
     def _remember_right_hand(self, on: bool) -> None:
         self._right_hand = on
+
+    def set_sound_events(self, events: dict[int, list[tuple[int, str]]],
+                         resolver=None) -> None:  # noqa: ANN001 - callable(name)->Path|None
+        """``{sequence index: [(frame, sound)]}`` to mark and play; ``resolver``
+        turns a sound name (``weapons/x.wav``) into a file."""
+        self._sound_events = events
+        self._sound_resolver = resolver
+        self._update_markers()
+
+    def _update_markers(self) -> None:
+        state = self.viewport.state
+        events = self._sound_events.get(state.sequence, []) if state.sequence is not None \
+            else []
+        self.slider.set_markers([frame for frame, _sound in events])
+
+    def _play_events(self, start: float, end: float, wrapped: bool) -> None:
+        """Play every event of the sequence whose frame was passed."""
+        if not self.sound_box.isChecked() or self._sound_resolver is None:
+            return
+        state = self.viewport.state
+        events = self._sound_events.get(state.sequence, []) if state.sequence is not None \
+            else []
+        if not events:
+            return
+        from valve_qc_merger.studio import audio
+        for frame, sound in events:
+            passed = (start < frame <= end) if not wrapped else (frame > start or frame <= end)
+            if passed:
+                path = self._sound_resolver(sound)
+                if path is not None:
+                    audio.play(path)
 
     def set_fov(self, fov: float) -> None:
         """Show ``fov`` (first person) without announcing it as an edit."""
@@ -615,6 +685,7 @@ class ViewportPanel(QWidget):
             return
         self.viewport.state.sequence = index
         self.viewport.state.frame = 0.0
+        self._update_markers()
         frames = scene.sequences[index].frames
         self.slider.blockSignals(True)
         self.slider.setRange(0, max(frames - 1, 0))
@@ -630,6 +701,9 @@ class ViewportPanel(QWidget):
 
     def _toggle_play(self, playing: bool) -> None:
         self.play_button.setIcon(icon("pause" if playing else "play"))
+        if playing:  # an event on the frame playback starts from sounds too
+            frame = self.viewport.state.frame
+            self._play_events(frame - 0.5, frame, False)
         self._clock = time.monotonic()
         if playing:
             self.timer.start()
@@ -644,11 +718,16 @@ class ViewportPanel(QWidget):
         now = time.monotonic()
         elapsed, self._clock = now - self._clock, now
         seq = scene.sequences[state.sequence]
+        before = state.frame
         state.frame += elapsed * seq.fps * self.speed_box.currentData()
+        wrapped = False
         if seq.loop:
+            wrapped = state.frame >= max(seq.frames, 1)
             state.frame %= max(seq.frames, 1)
         elif state.frame >= seq.frames - 1:
             state.frame = 0.0  # non-looping sequences replay from the start
+            wrapped = True
+        self._play_events(before, state.frame, wrapped)
         self.slider.blockSignals(True)
         self.slider.setValue(int(state.frame))
         self.slider.blockSignals(False)

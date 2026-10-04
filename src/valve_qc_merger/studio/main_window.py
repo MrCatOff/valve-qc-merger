@@ -110,6 +110,9 @@ class MainWindow(QMainWindow):
         self.right = QStackedWidget()
         self.right.addWidget(self.inspector)
         self.right.addWidget(self.build_panel)
+        from valve_qc_merger.studio.sound_panel import SoundPanel
+        self.sound_panel = SoundPanel()
+        self.right.addWidget(self.sound_panel)
         self._dock("Inspector", self.right, Qt.DockWidgetArea.RightDockWidgetArea, 520)
         self._dock("Log", self.log, Qt.DockWidgetArea.BottomDockWidgetArea, 200)
         # the log stays out of the way until asked for (or a job fails)
@@ -176,6 +179,16 @@ class MainWindow(QMainWindow):
         self.explorer.category_delete_requested.connect(self.delete_category)
         self.explorer.category_builds_requested.connect(self.create_category_builds)
         self.explorer.rederive_requested.connect(self.rederive_asset)
+        self.explorer.sound_selected.connect(self._select_sound)
+        self.explorer.sound_import_requested.connect(self.import_sound_files)
+        self.explorer.sound_fix_requested.connect(self.fix_sounds)
+        self.explorer.sound_remove_requested.connect(self.remove_sound)
+        self.explorer.sound_play_requested.connect(self.play_sound)
+        self.sound_panel.fix_requested.connect(self.fix_sounds)
+        self.sound_panel.undo_requested.connect(self.undo_sound_fix)
+        self.sound_panel.remove_requested.connect(self.remove_sound)
+        self.sound_panel.reveal_requested.connect(self._reveal_sound)
+        self.sound_panel.asset_requested.connect(self._reveal_asset)
         self.inspector.kind_changed.connect(self.set_kind)
         self.inspector.notes_changed.connect(self._set_notes)
         self.inspector.retarget_requested.connect(lambda name: self.derive_assets([name]))
@@ -242,6 +255,10 @@ class MainWindow(QMainWindow):
                                                          self.import_mdl_folder)
         self.act_import_dec = project_menu.addAction("Import decompiled folder…",
                                                      self.import_decompiled_folder)
+        self.act_import_sounds = project_menu.addAction("Import sounds…",
+                                                        self.import_sound_files)
+        self.act_import_sound_dir = project_menu.addAction("Import sound folder…",
+                                                           self.import_sound_folder)
         project_menu.addSeparator()
         self.act_server = project_menu.addAction("Server budget && doctor…", self.show_server,
                                                  QKeySequence("Ctrl+Shift+S"))
@@ -351,6 +368,105 @@ class MainWindow(QMainWindow):
         help_menu.addSeparator()
         self.act_about = help_menu.addAction("About valve-qc-merger Studio", self.show_about)
 
+    # -- sounds ----------------------------------------------------------------
+    def import_sound_files(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Import sounds", self.settings.value("last_sound_import", str(Path.home())),
+            "WAV sounds (*.wav)")
+        if files:
+            self.settings.setValue("last_sound_import", str(Path(files[0]).parent))
+            self._import_sounds([Path(f) for f in files])
+
+    def import_sound_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Import every WAV of a folder (paths after sound/ are kept)",
+            self.settings.value("last_sound_import", str(Path.home())))
+        if folder:
+            self.settings.setValue("last_sound_import", folder)
+            self._import_sounds([Path(folder)])
+
+    def _import_sounds(self, sources: list[Path]) -> None:
+        from valve_qc_merger.project import sounds
+        if self.project is None:
+            return
+        names = sounds.import_sounds(self.project, sources)
+        self.log.append_line(f"imported {len(names)} sound(s)")
+        self.explorer.show_project(self.project)
+        if names:
+            self.explorer.select("sound", names[0])
+            self.toast.show_message("success", f"{len(names)} sound(s) imported",
+                                    "named by their path after sound/")
+
+    def _select_sound(self, name: str) -> None:
+        from valve_qc_merger.project import sounds
+        if self.project is None or not name:
+            return
+        self.right.setCurrentWidget(self.sound_panel)
+        path = sounds.sound_path(self.project, name)
+        users = sounds.sound_users(self.project).get(name.lower(), [])
+        self.sound_panel.show_sound(name, path if path.is_file() else None, users,
+                                    sounds.can_undo_fix(self.project, name))
+
+    def fix_sounds(self, names: list[str]) -> None:
+        from valve_qc_merger.project import sounds
+        from valve_qc_merger.sound.wav import WavError
+        from valve_qc_merger.studio.sound_panel import FixDialog
+        if self.project is None or not names:
+            return
+        dialog = FixDialog(names, self)
+        if dialog.exec() != FixDialog.DialogCode.Accepted:
+            return
+        options = dialog.options()
+        failed = []
+        for name in names:
+            try:
+                sounds.fix_sound(self.project, name, options)
+            except (WavError, OSError, ValueError) as exc:
+                failed.append(f"{name}: {exc}")
+        for line in failed:
+            self.log.append_line(f"warn: fix {line}")
+        self.log.append_line(f"fixed {len(names) - len(failed)} sound(s)")
+        self.explorer.show_project(self.project)
+        self.explorer.select("sound", names[0])
+        self._select_sound(names[0])
+        self.toast.show_message("warning" if failed else "success",
+                                f"{len(names) - len(failed)} of {len(names)} sound(s) fixed",
+                                failed[0] if failed else "the originals are kept: Undo fix")
+
+    def undo_sound_fix(self, name: str) -> None:
+        from valve_qc_merger.project import sounds
+        if self.project is None:
+            return
+        sounds.undo_fix(self.project, name)
+        self.explorer.show_project(self.project)
+        self.explorer.select("sound", name)
+        self._select_sound(name)
+
+    def remove_sound(self, name: str) -> None:
+        from valve_qc_merger.project import sounds
+        if self.project is None:
+            return
+        answer = QMessageBox.question(self, "Remove sound",
+                                      f"Remove sound/{name} from the project's library?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        sounds.remove_sound(self.project, name)
+        self.log.append_line(f"removed sound/{name}")
+        self.explorer.show_project(self.project)
+
+    def play_sound(self, name: str) -> None:
+        from valve_qc_merger.project import sounds
+        from valve_qc_merger.studio import audio
+        if self.project is not None:
+            path = sounds.resolve(self.project, name)
+            if path is not None:
+                audio.play(path)
+
+    def _reveal_sound(self, name: str) -> None:
+        from valve_qc_merger.project import sounds
+        if self.project is not None:
+            self._open_path(sounds.sound_path(self.project, name).parent)
+
     def show_server(self) -> None:
         """Project ▸ Server: precache budget per map + the mod-folder doctor
         (one window, refreshed every time it is shown)."""
@@ -404,7 +520,8 @@ class MainWindow(QMainWindow):
         idle = not self.jobs.busy
         for action in (self.act_import_mdl, self.act_import_mdl_dir, self.act_import_dec,
                        self.act_settings, self.act_reveal, self.act_close, self.act_find,
-                       self.act_new_category, self.act_new_build, self.act_server):
+                       self.act_new_category, self.act_new_build, self.act_server,
+                       self.act_import_sounds, self.act_import_sound_dir):
             action.setEnabled(has and idle)
         # what acts on the selection is enabled only when there is one
         asset = has and bool(self.explorer.selected_assets())
@@ -1169,7 +1286,30 @@ class MainWindow(QMainWindow):
         self.viewport.set_fov(self.fov_for(asset.kind))
         self.viewport.set_view_model(asset.kind in VIEW_MODEL_KINDS, self.right_hand())
         self.viewport.set_scene(scene, keep_view=keep)
+        self._set_sound_events(name, scene)
         self._log_renderer(name)
+
+    def _set_sound_events(self, name: str, scene) -> None:  # noqa: ANN001 - ModelScene
+        """The asset's sound events (5004 ...) on the timeline, played with
+        the animation; files come from the library, then the game folder."""
+        from valve_qc_merger.project import sounds
+        from valve_qc_merger.project.qc_edit import qc_file
+        project = self.project
+        try:
+            text = qc_file(project.asset_dir(name)).read_text(encoding="latin-1")
+        except (OSError, ValueError):
+            self.viewport.set_sound_events({})
+            return
+        by_name = sounds.sequence_sounds(text)
+        index = {seq.name: i for i, seq in enumerate(scene.sequences)}
+        events = {index[seq]: found for seq, found in by_name.items() if seq in index}
+        cache: dict[str, Path | None] = {}
+
+        def resolver(sound: str) -> Path | None:
+            if sound not in cache:
+                cache[sound] = sounds.resolve(project, sound)
+            return cache[sound]
+        self.viewport.set_sound_events(events, resolver)
 
     def _log_renderer(self, name: str) -> None:
         """What the viewport could not do (textures it could not upload) and,

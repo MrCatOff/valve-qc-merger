@@ -177,6 +177,11 @@ class Explorer(QTreeWidget):
     category_rename_requested = Signal(str)
     category_delete_requested = Signal(str)
     category_builds_requested = Signal(str)
+    sound_selected = Signal(str)  # a sound of the library (its sound/ path)
+    sound_import_requested = Signal()
+    sound_fix_requested = Signal(list)  # sound names
+    sound_remove_requested = Signal(str)
+    sound_play_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -227,8 +232,38 @@ class Explorer(QTreeWidget):
             item.setData(0, ROLE_NAME, name)
             if name == selected_build:
                 self.setCurrentItem(item)
+        self._fill_sounds(project)
         self.expandAll()
         self._apply_filter()
+
+    def _fill_sounds(self, project: Project) -> None:
+        """Sounds (N): the library as folders of files, a badge on files the
+        engine would mangle."""
+        from valve_qc_merger.project.sounds import list_sounds, sound_path
+        from valve_qc_merger.studio.sound_panel import sound_problems
+        names = list_sounds(project)
+        root = QTreeWidgetItem(self, [f"Sounds ({len(names)})"])
+        root.setData(0, ROLE_KIND, "sounds")
+        folders: dict[str, QTreeWidgetItem] = {"": root}
+        for name in names:
+            parent = root
+            parts = name.split("/")
+            for depth in range(1, len(parts)):
+                key = "/".join(parts[:depth])
+                if key not in folders:
+                    folder = QTreeWidgetItem(folders["/".join(parts[:depth - 1])],
+                                             [parts[depth - 1]])
+                    folder.setData(0, ROLE_KIND, "sound-folder")
+                    folder.setData(0, ROLE_NAME, key)
+                    folders[key] = folder
+                parent = folders[key]
+            item = QTreeWidgetItem(parent, [parts[-1]])
+            item.setData(0, ROLE_KIND, "sound")
+            item.setData(0, ROLE_NAME, name)
+            found = sound_problems(sound_path(project, name))
+            if found:
+                item.setIcon(0, status_icon("stale"))
+                item.setToolTip(0, "\n".join(found))
 
     # -- tree connectors (├─ └─ │) -------------------------------------------
     def drawBranches(self, painter: QPainter, rect, index) -> None:  # noqa: ANN001, N802
@@ -313,10 +348,10 @@ class Explorer(QTreeWidget):
             children = [walk(item.child(i)) for i in range(item.childCount())]
             if kind == "asset":
                 visible = self._asset_passes(str(item.data(0, ROLE_NAME))) or any(children)
-            elif kind == "build":
+            elif kind in ("build", "sound"):
                 visible = (not self._filter_level and
                            self._filter_text in str(item.data(0, ROLE_NAME)).lower())
-            elif kind in ("assets", "builds"):
+            elif kind in ("assets", "builds", "sounds"):
                 visible = True
             else:  # category / kind group: only if something inside shows
                 visible = any(children) or not self.filtering
@@ -427,6 +462,9 @@ class Explorer(QTreeWidget):
 
     def _on_current(self, item: QTreeWidgetItem | None, _previous: object) -> None:
         kind = item.data(0, ROLE_KIND) if item is not None else None
+        if kind == "sound":
+            self.sound_selected.emit(str(item.data(0, ROLE_NAME)))
+            return
         if kind == "build":
             self.build_selected.emit(str(item.data(0, ROLE_NAME)))
         else:
@@ -459,8 +497,39 @@ class Explorer(QTreeWidget):
                 return True
         return False
 
+    def current_sound(self) -> str:
+        item = self.currentItem()
+        if item is not None and item.data(0, ROLE_KIND) == "sound":
+            return str(item.data(0, ROLE_NAME))
+        return ""
+
+    def sounds_under(self, item: QTreeWidgetItem) -> list[str]:
+        if item.data(0, ROLE_KIND) == "sound":
+            return [str(item.data(0, ROLE_NAME))]
+        out: list[str] = []
+        for i in range(item.childCount()):
+            out += self.sounds_under(item.child(i))
+        return out
+
     def _context_menu(self, pos) -> None:  # noqa: ANN001 - QPoint
         item = self.itemAt(pos)
+        if item is not None and item.data(0, ROLE_KIND) in ("sounds", "sound-folder",
+                                                             "sound"):
+            menu = QMenu(self)
+            if item.data(0, ROLE_KIND) == "sound":
+                name = str(item.data(0, ROLE_NAME))
+                menu.addAction("Play", lambda: self.sound_play_requested.emit(name))
+            names = self.sounds_under(item)
+            if names:
+                menu.addAction("Fix…" if len(names) == 1 else f"Fix {len(names)} sounds…",
+                               lambda: self.sound_fix_requested.emit(names))
+            if item.data(0, ROLE_KIND) == "sound":
+                menu.addAction("Remove", lambda: self.sound_remove_requested.emit(
+                    str(item.data(0, ROLE_NAME))))
+            menu.addSeparator()
+            menu.addAction("Import sounds…", self.sound_import_requested.emit)
+            menu.exec(self.viewport().mapToGlobal(pos))
+            return
         if item is not None and item.data(0, ROLE_KIND) in ("assets", "category"):
             menu = QMenu(self)
             menu.addAction("New category…", self.category_new_requested.emit)

@@ -49,3 +49,35 @@ Scans a mod folder (default: the game folder) — `models`, `sprites`,
 Filter by severity or text, double-click a row to show the file, *Copy
 report* for the shown rows. `valve_qc_merger.server` is Qt-free (`bsp`,
 `scan`, `doctor`, `budget`, `limits`).
+
+## Sounds
+
+The project keeps a **sound library** in `<project>/sounds/`, mirroring the
+game's `sound/`: a sound is named by its path there (`weapons/ak47_clipin.wav`),
+the name model events (5004) and plugins use. Project ▸ **Import sounds…** /
+**Import sound folder…** copy WAV files in: the path after a `sound` folder
+is kept (`…/cstrike/sound/weapons/x.wav` → `weapons/x.wav`); a plain folder
+keeps its own name (`…/zombie/hit/claw.wav` → `zombie/hit/claw.wav`).
+
+The Explorer lists them under **Sounds** as folders; a ▲ marks a file the
+engine would mangle. Selecting one shows the **sound panel**: waveform (loop
+cue points dashed), format, channels, rate, bits, length, peak, loop, size,
+the engine check, and the project's models that play it (click to open).
+**Play / Stop** use the system player (Windows `winsound`, macOS `afplay`,
+Linux `paplay`/`aplay`: nothing extra in the build).
+
+**Fix…** (one sound, a folder, or all — Explorer context menu) rewrites the
+file as 16-bit PCM: mono (world sounds must be), an engine rate (keep a valid
+one, else the nearest higher of 11025/22050/44100, or force one), optionally
+normalised to a peak (e.g. −1 dBFS) and trimmed of leading/trailing silence
+(never a looping sound). Cue points move with resampling. The original stays
+in `.history/sounds/` until **Undo fix**.
+
+**Sound events with the animation**: a view model's sound events show as
+amber ticks on the timeline, and while a sequence plays each event's sound
+plays on its frame (looping wraps included). Files come from the library,
+then the game folder, `<mod>_downloads` and `valve` (case-insensitive). The
+speaker button in the viewport's bar turns event sounds off.
+
+`valve_qc_merger.sound.wav` (read/check/fix, Qt-free) and
+`valve_qc_merger.project.sounds` (the library) do the work.
