@@ -128,3 +128,25 @@ def test_build_saves_its_retargets_and_reuses_them(models: Path, tmp_path: Path)
     project.run_build("all", third)
     assert "v_raw: left out, v_raw_hands is the same weapon on our hands" in \
         "\n".join(third.lines)
+
+
+def test_hands_only_model_is_rejected_not_a_crash(tmp_path: Path) -> None:
+    """Zombie claws (a v_ model that is all hands) leave no weapon entry:
+    the merge rejects them and merges the rest."""
+    import re
+    import shutil
+
+    from valve_qc_merger.services.merge_view import MergeViewOptions, run_merge_view
+    examples = Path(__file__).parent / "examples"
+    models_dir = tmp_path / "models"
+    shutil.copytree(examples / "v_anaconda", models_dir / "v_anaconda")
+    claws = models_dir / "v_claws"
+    shutil.copytree(examples / "v_anaconda", claws)
+    qc = claws / "v_anaconda.qc"
+    text = re.sub(r'\$bodygroup "weapon"\s*\{[^}]*\}\s*', "", qc.read_text(encoding="latin-1"))
+    (claws / "v_claws.qc").write_text(text, encoding="latin-1")
+    qc.unlink()
+    result = run_merge_view(MergeViewOptions(models_dir=models_dir, out=tmp_path / "out",
+                                             name="v_pack"), CollectingReporter())
+    assert any("'v_claws': no weapon mesh, only hands" in f for f in result.failures)
+    assert result.outputs  # v_anaconda still merged

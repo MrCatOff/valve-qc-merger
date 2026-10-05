@@ -269,7 +269,8 @@ class BudgetLine:
 def budget(map_resources: MapResources | None, load: ProjectLoad, *,
            extra: dict[str, int] | None = None,
            client_sounds_as: str = "generic", unprecached: int = 0,
-           stock_models: int = 0, unmerged: int = 0, left_out: int = 0,
+           stock_models: int = 0, stock_sounds: int = 0, unmerged: int = 0,
+           left_out: int = 0,
            as_imported: int | None = None,
            client_sounds: int | None = None) -> dict[str, BudgetLine]:
     """Slots per kind (models / sounds / generic) for one map ("no map": the
@@ -277,7 +278,8 @@ def budget(map_resources: MapResources | None, load: ProjectLoad, *,
     precaches the view models' client sounds — ``generic`` (ReHLDS: 4096
     slots, nothing else uses them) or ``sound``. ``stock_models``: the
     stock CS models the game DLL precaches (weapons, shields, players,
-    shells — :data:`.stock.STOCK_MODELS`), counted for the user.
+    shells, gibs, items, effect sprites — :data:`.stock.STOCK_MODELS`) and
+    ``stock_sounds`` the sounds it precaches (:data:`.stock.STOCK_SOUNDS`).
     ``unmerged``: project models no build takes (they stay as they are);
     ``left_out``: models a build's merge rejected (they stay as they are);
     ``as_imported``: count the project's models as imported instead (no
@@ -304,8 +306,11 @@ def budget(map_resources: MapResources | None, load: ProjectLoad, *,
                           len(load.client_sounds) if client_sounds is None
                           else int(client_sounds)))
     if stock_models:
-        parts["models"].append(("stock CS weapons, shields, players, shells",
+        parts["models"].append(("ReGameDLL: weapons, players, items, effect sprites",
                                 int(stock_models)))
+    if stock_sounds:
+        parts["sounds"].append(("ReGameDLL: weapons, players, radio, impacts",
+                                int(stock_sounds)))
     for key in parts:
         parts[key].append(("other game DLL + plugins (your estimate)",
                            int(extra.get(key, 0))))

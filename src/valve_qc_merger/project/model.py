@@ -340,7 +340,9 @@ class Project:
             extra_sounds=int(settings.get("extra_sounds", 0)),
             extra_generic=int(settings.get("extra_generic", 0)),
             client_sounds=str(settings.get("client_sounds", "generic")),
-            unprecache=[str(p) for p in settings.get("unprecache", [])],
+            # shields live in models/shield/ (written as models/ before 0.9)
+            unprecache=[re.sub(r"^models/([vp])_shield_", r"models/shield/\1_shield_",
+                               str(p)) for p in settings.get("unprecache", [])],
             unprecache_replace=str(settings.get("unprecache_replace", "")),
             count_stock=bool(settings.get("count_stock", True)))
         project.categories = list(meta.get("categories", []))
@@ -819,11 +821,13 @@ class Project:
         return asset.name
 
     def superseded_assets(self, build: Build, chosen: list[Asset]) -> dict[str, str]:
-        """``{dropped: kept}`` for a build that puts every asset on our hands:
+        """``{dropped: kept}`` for a build that puts every asset on our hands
+        (retarget, or merge-v with shared hands):
         one weapon must not be merged twice, so when a weapon's Retarget
         (swap hands) result is in the build, its source and other variants
         are left out — the swap-hands asset carries the tuned grip."""
-        if not build.retarget:
+        if not (build.retarget or (build.kind == "merge-v"
+                                   and build.options.get("shared_hands"))):
             return {}
         swapped: dict[str, str] = {}
         for asset in chosen:

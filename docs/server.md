@@ -25,12 +25,15 @@ Pick a map (from the game folder of Project ▸ Settings, `maps/*.bsp`, or any
 BSP with *Open BSP…*; read directly: brush models + entity models/sprites/
 sounds) and see the slots it takes together with this project's compiled
 builds, the sounds their view models play (event 5004) and — ticked by
-default — the 120 stock CS models ReGameDLL precaches (weapons, shields,
-players, shells; minus what you unprecache). A line above the bars says
-whether it fits and how many model slots are free. What else ReGameDLL
-(effect sprites, gibs, hostages) and the AMXX plugins precache the studio
-cannot see: enter those counts once (saved in the project; `rescount` /
-`reslist` on a ReHLDS server tell them).
+default — what ReGameDLL precaches on every map: 169 models and sprites
+(weapons with their shields, player models, items, gibs, shells, effect
+sprites) and 293 sounds (weapons, players, radio, impacts), minus what you
+unprecache. The list (`storage/server/regamedll_precache.txt`) is read from
+ReGameDLL's source; bots (only with bots allowed) and what a map's entities
+add when they spawn are not in it. A line above the bars says whether it
+fits and how many model slots are free. What the AMXX plugins precache the
+studio cannot see: enter those counts once (saved in the project; `rescount`
+/ `reslist` on a ReHLDS server tell them).
 
 The bars count the project **after merge**: each build's parts, the models
 no build takes and the models a merge left out (both stay as they are). Above the bars a second line

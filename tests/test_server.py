@@ -160,25 +160,25 @@ def test_server_window_budget_and_doctor(tmp_path: Path) -> None:
     shutil.copy(_MINI, mod / "models" / "v_mini.mdl")
     project = Project.create(tmp_path / "pack")
     project.settings.game_dir = str(mod)
-    project.settings.extra_models = 350
+    project.settings.extra_models = 301
     window = ServerWindow(project)
     assert [window.map_box.itemText(i) for i in range(window.map_box.count())] == \
         [NO_MAP, "de_test"]
     window.map_box.setCurrentText("de_test")
     models = window.bars["models"]
-    # 30 brush + 2 entity + 120 stock CS models + 350 estimated
+    # 30 brush + 2 entity + 169 ReGameDLL models/sprites + 301 estimated
     assert models.numbers.text().startswith("502 / 512")
     assert models.bar.property("level") == "warning"
     assert window.verdict_text() == "With de_test, after merge: fits — 10 model slot(s) free"
     window.stock_box.setChecked(False)
-    assert window.bars["models"].numbers.text().startswith("382 / 512")
+    assert window.bars["models"].numbers.text().startswith("333 / 512")
     assert not Project.open(project.root).settings.count_stock
     window.stock_box.setChecked(True)
     window.extra["models"].setValue(500)  # saved to the project, budget redone
     assert Project.open(project.root).settings.extra_models == 500
     assert window.bars["models"].bar.property("level") == "error"
     assert window.verdict_text().startswith(
-        "With de_test, after merge: over the limit — models by 140")
+        "With de_test, after merge: over the limit — models by 189")
     assert window.maps_table.item(0, 5).text() == "over a limit"
 
     window.scan()  # mini.mdl plays weapons/x.wav; the map's barrel and glow are missing
@@ -317,3 +317,25 @@ def test_rechecker_rules(tmp_path: Path) -> None:
     with_sounds = rules({"models/v_pack.mdl": model, "sound/x.wav": sound},
                         include_sounds=True)
     assert '"sound/x.wav"' in with_sounds
+
+
+def test_regamedll_precache_list() -> None:
+    from valve_qc_merger.server.budget import ProjectLoad, budget
+    from valve_qc_merger.server.stock import GROUPS, PRECACHED, STOCK_MODELS, STOCK_SOUNDS
+    assert STOCK_MODELS == len(PRECACHED["models"]) > 150 and STOCK_SOUNDS > 250
+    assert "models/shield/v_shield_usp.mdl" in PRECACHED["models"]
+    assert "sprites/smokepuff.spr" in PRECACHED["models"]
+    assert "weapons/ak47-1.wav" in PRECACHED["sounds"]
+    every = {p for _t, _w, paths in GROUPS.values() for p in paths}
+    assert every <= set(PRECACHED["models"])  # unprecache offers real precache paths
+    lines = budget(None, ProjectLoad(), stock_models=STOCK_MODELS, stock_sounds=STOCK_SOUNDS)
+    assert lines["sounds"].used == STOCK_SOUNDS and lines["models"].used == STOCK_MODELS
+
+
+def test_old_shield_paths_are_migrated(tmp_path: Path) -> None:
+    from valve_qc_merger.project import Project
+    project = Project.create(tmp_path / "pack")
+    project.settings.unprecache = ["models/v_shield_usp.mdl", "models/v_ak47.mdl"]
+    project.save()
+    assert Project.open(project.root).settings.unprecache == [
+        "models/shield/v_shield_usp.mdl", "models/v_ak47.mdl"]

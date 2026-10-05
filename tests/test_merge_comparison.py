@@ -94,12 +94,12 @@ def test_budget_shows_both(tmp_path: Path) -> None:
             window.saved_label.text()
         window.add_map(write_bsp(tmp_path / "zm_x.bsp", ENTITIES, 100))
         text = window.verdict_text()
-        # 100 brush + 2 entity + 120 stock + 4 after merge = 226 → 286 free; imported 5
-        assert text.startswith("With zm_x, after merge: fits — 286 model slot(s) free")
-        assert "As imported (no merge): fits — 285 model slot(s) free" in text
+        # 100 brush + 2 entity + 169 ReGameDLL + 4 after merge = 275 → 237 free
+        assert text.startswith("With zm_x, after merge: fits — 237 model slot(s) free")
+        assert "As imported (no merge): fits — 236 model slot(s) free" in text
         row = next(r for r in range(window.maps_table.rowCount())
                    if window.maps_table.item(r, 0).text() == "zm_x")
-        assert window.maps_table.item(row, 1).text() == "226 / 512"
-        assert window.maps_table.item(row, 2).text() == "227 / 512"
+        assert window.maps_table.item(row, 1).text() == "275 / 512"
+        assert window.maps_table.item(row, 2).text() == "276 / 512"
     finally:
         window.close()

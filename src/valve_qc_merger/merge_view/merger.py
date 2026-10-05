@@ -521,6 +521,10 @@ def merge_models(
     report.sequences = len(sequence_order)
 
     # --- bodygroups + pev_body -------------------------------------------
+    empty = [m.name for m in models if not weapon_paths.get(m.name)]
+    if empty:
+        raise MergeError(f"no weapon mesh in {', '.join(empty)} (only hands): "
+                         "nothing to put in the weapon bodygroup")
     groups: list[tuple[str, list[str]]] = []
     if shared_hand_paths:
         # ONE shared hands bodygroup for the whole model (male/female), emitted

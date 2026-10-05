@@ -187,6 +187,14 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
                 model, max_decimation=opts.max_decimation if opts.shared_hands else 0.0)
             if parts.fold_report is not None:
                 reporter.log(f"  {model.name:<20} {parts.warnings[-1]}")
+            if not parts.weapon_stems:
+                # nothing but hands (zombie claws, a gauntlet): no weapon entry
+                # to merge — such models go through merge-zhands
+                message = (f"model {model.name!r}: no weapon mesh, only hands (zombie "
+                           "claws?) — rejected; make it a Zombie hands asset")
+                failures.append(message)
+                reporter.log(f"  {model.name:<20} REJECT  {message}")
+                continue
             if opts.shared_hands and len(parts.weapon_stems) > 1:
                 # A multi-part weapon needs an extra weapon bodygroup, which
                 # multiplies pev_body past the 255 WRITE_BYTE ceiling once

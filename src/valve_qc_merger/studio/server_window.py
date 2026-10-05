@@ -182,18 +182,22 @@ class ServerWindow(QDialog):
         layout.addWidget(kit.section("Game DLL + plugins"))
         from PySide6.QtWidgets import QCheckBox
 
-        from valve_qc_merger.server.stock import STOCK_MODELS
+        from valve_qc_merger.server.stock import STOCK_MODELS, STOCK_SOUNDS
         self.stock_box = QCheckBox(
-            f"Count the stock CS models ReGameDLL precaches ({STOCK_MODELS}: weapons, "
-            "shields, players, shells — minus what you unprecache)")
+            f"Count what ReGameDLL precaches on every map: {STOCK_MODELS} models and "
+            f"sprites, {STOCK_SOUNDS} sounds (minus what you unprecache)")
+        self.stock_box.setToolTip(
+            "Read from ReGameDLL's source: weapons (v_/p_/w_, shields), player models, "
+            "items, gibs, shells, effect sprites; weapon, player, radio and impact "
+            "sounds. Not counted: bots (only with bots allowed) and what a map's "
+            "entities add when they spawn.")
         self.stock_box.setChecked(self.project.settings.count_stock)
         self.stock_box.toggled.connect(lambda _on: self._estimates_changed())
         layout.addWidget(self.stock_box)
         layout.addWidget(kit.hint(
-            "The studio sees the map, this project's builds and the stock models — not "
-            "what else ReGameDLL (effect sprites, gibs, hostages) and your AMXX plugins "
-            "precache: enter those counts (rescount / reslist on a ReHLDS server with every "
-            "plugin loaded) for a true total."))
+            "The studio sees the map, this project and ReGameDLL — not what your AMXX "
+            "plugins precache: enter those counts (rescount / reslist on a ReHLDS server "
+            "with every plugin loaded, minus the map and ReGameDLL) for a true total."))
         estimates = QHBoxLayout()
         self.extra: dict[str, QSpinBox] = {}
         for key, title in (("models", "Models"), ("sounds", "Sounds"),
@@ -296,11 +300,12 @@ class ServerWindow(QDialog):
     def _lines(self, map_resources: MapResources | None,
                as_imported: bool = False) -> dict[str, BudgetLine]:
         extra = {key: spin.value() for key, spin in self.extra.items()}
-        from valve_qc_merger.server.stock import STOCK_MODELS
+        from valve_qc_merger.server.stock import STOCK_MODELS, STOCK_SOUNDS
         return budget(map_resources, self.load, extra=extra,
                       client_sounds_as=self.client_box.currentData(),
                       unprecached=self.freed_slots() if self.stock_box.isChecked() else 0,
                       stock_models=STOCK_MODELS if self.stock_box.isChecked() else 0,
+                      stock_sounds=STOCK_SOUNDS if self.stock_box.isChecked() else 0,
                       unmerged=self.comparison.unmerged,
                       left_out=self.comparison.left_out,
                       as_imported=self.comparison.imported if as_imported else None,

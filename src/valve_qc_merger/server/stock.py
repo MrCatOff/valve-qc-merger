@@ -31,7 +31,7 @@ GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "w": ("World models (w_)", "dropped weapons use another model (e.g. a supply box on "
           "ZM servers) — replace them with it", tuple(f"models/w_{w}.mdl" for w in WORLD)),
     "shield": ("Tactical shield", "the shield is disabled on your server",
-               tuple(f"models/{k}_shield_{w}.mdl" for k in ("v", "p") for w in SHIELD)
+               tuple(f"models/shield/{k}_shield_{w}.mdl" for k in ("v", "p") for w in SHIELD)
                + ("models/w_shield.mdl", "models/p_shield.mdl")),
     "players": ("Player models", "a skin plugin replaces every stock player model",
                 tuple(f"models/player/{p}/{p}.mdl" for p in PLAYERS)),
@@ -40,7 +40,35 @@ GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
 }
 
 
-STOCK_MODELS = sum(len(paths) for _title, _why, paths in GROUPS.values())
+
+
+def _precache_list() -> dict[str, list[str]]:
+    """``storage/server/regamedll_precache.txt``: what ReGameDLL precaches on
+    every map load, read from its source (``[models]`` incl. sprites,
+    ``[sounds]``)."""
+    from valve_qc_merger.resources import data_root
+    path = data_root() / "storage" / "server" / "regamedll_precache.txt"
+    out: dict[str, list[str]] = {"models": [], "sounds": []}
+    section = ""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+        elif section in out:
+            out[section].append(line)
+    return out
+
+
+PRECACHED = _precache_list()
+# what the game DLL alone takes on every map (sprites count as models)
+STOCK_MODELS = len(PRECACHED["models"]) or sum(len(p) for _t, _w, p in GROUPS.values())
+STOCK_SOUNDS = len(PRECACHED["sounds"])
 
 
 def existing(paths: tuple[str, ...] | list[str], game_dir: Path | None) -> list[str]:
@@ -50,4 +78,5 @@ def existing(paths: tuple[str, ...] | list[str], game_dir: Path | None) -> list[
     return [p for p in paths if (Path(game_dir) / p).is_file()]
 
 
-__all__ = ["GROUPS", "STOCK_MODELS", "PLAYERS", "SHELLS", "SHIELD", "WEAPONS", "WORLD", "existing"]
+__all__ = ["GROUPS", "PLAYERS", "PRECACHED", "SHELLS", "SHIELD", "STOCK_MODELS", "STOCK_SOUNDS",
+           "WEAPONS", "WORLD", "existing"]
