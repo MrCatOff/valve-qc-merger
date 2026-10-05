@@ -14,7 +14,7 @@ from pathlib import Path
 
 # events whose option names a sound file
 SOUND_EVENTS = {5004: "client sound", 1004: "sound", 1008: "voice"}
-RESOURCE_DIRS = ("models", "sprites", "sound", "maps", "gfx", "events")
+RESOURCE_DIRS = ("models", "sprites", "sound", "maps", "gfx", "events", "overviews")
 
 
 @dataclass

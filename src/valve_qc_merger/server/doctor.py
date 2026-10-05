@@ -102,13 +102,24 @@ def _map_issues(inventory: FolderInventory, relative: str,
     def found(target: str) -> bool:
         return inventory.exists(target) or any(f.exists(target) for f in fallback)
 
+    from valve_qc_merger.server.maps import map_needs
     issues = []
-    for wad in resources.wads:
-        if not found(wad):
+    try:
+        extra = map_needs(inventory.root / relative, inventory.root).res
+    except (BspError, OSError):
+        extra = list(resources.wads)
+    for wanted in extra:
+        if found(wanted):
+            continue
+        if wanted.lower().endswith(".wad"):
             issues.append(Issue("warning", "missing", relative,
-                                f"its worldspawn lists {wad}, which is not in the folder "
+                                f"its worldspawn lists {wanted}, which is not in the folder "
                                 "(clients without it see missing textures unless the map "
                                 "embeds them)"))
+        else:
+            issues.append(Issue("warning", "missing", relative,
+                                f"needs {wanted} (sky, detail texture or overview), which "
+                                "is not in the folder"))
     for model in sorted(resources.models):
         if not found(model):
             issues.append(Issue("error", "missing", relative,

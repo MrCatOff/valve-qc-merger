@@ -2,7 +2,7 @@
 
 The studio targets servers on **ReHLDS + ReGameDLL + ReAPI**. Project ▸
 **Server tools…** (Ctrl+Shift+S, toolbar *Server*) opens one window with the
-tabs Budget, Doctor, Unprecache, Config, Entities and FastDL (each below).
+tabs Budget, Doctor, Unprecache, Config, Entities, Maps and FastDL (each below).
 
 ## Limits
 
@@ -47,6 +47,7 @@ Scans a mod folder (default: the game folder) — `models`, `sprites`,
   stereo, a rate other than 11025/22050/44100, clipping); a sound a map's
   entity plays, or a texture WAD its worldspawn lists (`wad` key), that no
   folder has — clients then see missing textures unless the map embeds them;
+  a sky side, detail texture or overview a map needs that no folder has;
 - **info**: identical files (one could serve both).
 
 Filter by severity or text, double-click a row to show the file, *Copy
@@ -262,6 +263,25 @@ added or removed.
   original map still join.
 
 `valve_qc_merger.server.entities` does the reading and writing without Qt.
+
+## Maps and .res files
+
+Clients download what the server precaches — but not a map's texture WADs,
+its sky, its detail textures or its overview. Those belong in
+`maps/<map>.res`; without it a player who got only the BSP sees missing
+textures and a black sky. The **Maps** tab lists every map of the game
+folder and of `mapcycle.txt` with its model slots (brush models + entity
+models), entities, what it needs and what no folder has, and the state of
+its `.res` (none, outdated, up to date, not needed). The details below show
+each file: in the `.res`, not in it yet, missing, or a base-game file every
+client has (`valve/`: left out of the `.res`). A map the mapcycle names but
+`maps/` lacks is flagged.
+
+Needs are read from the BSP: worldspawn `wad` (WADs at the mod's top),
+`skyname` (`gfx/env/<sky>{up,dn,lf,rt,ft,bk}.tga`), `maps/<map>_detail.txt`
+(its `gfx/<name>.tga` detail textures) and `overviews/<map>.txt` with its
+image. **Write .res for selected** writes the files (an old one is kept as
+`.bak`). `valve_qc_merger.server.maps` does it without Qt.
 
 ## FastDL check
 

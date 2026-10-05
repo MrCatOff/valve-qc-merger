@@ -115,6 +115,9 @@ class ServerWindow(QDialog):
         from valve_qc_merger.studio.entities_panel import EntitiesPanel
         self.entities = EntitiesPanel(project)
         self.tabs.addTab(self.entities, icon("map"), "Entities")
+        from valve_qc_merger.studio.maps_panel import MapsPanel
+        self.maps_panel = MapsPanel(project)
+        self.tabs.addTab(self.maps_panel, icon("layers"), "Maps")
         from valve_qc_merger.studio.fastdl_panel import FastDlPanel
         self.fastdl = FastDlPanel(project)
         self.tabs.addTab(self.fastdl, icon("rocket"), "FastDL")
