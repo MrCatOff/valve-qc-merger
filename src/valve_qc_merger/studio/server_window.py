@@ -124,8 +124,23 @@ class ServerWindow(QDialog):
         from valve_qc_merger.studio.fastdl_panel import FastDlPanel
         self.fastdl = FastDlPanel(project)
         self.tabs.addTab(self.fastdl, icon("rocket"), "FastDL")
-        self.resize(900, 740)
+        from valve_qc_merger.studio.logs_panel import LogsPanel
+        self.logs = LogsPanel(project, self.show_tab)
+        self.tabs.addTab(self.logs, icon("square-terminal"), "Logs")
+        self.resize(1040, 760)
         self.refresh()
+
+    def show_tab(self, key: str) -> None:
+        """Bring the tab for ``key`` (budget, doctor, unprecache, config,
+        entities, maps, download, fastdl, logs) to the front."""
+        pages = {"budget": 0, "doctor": 1, "unprecache": 2, "config": self.config,
+                 "entities": self.entities, "maps": self.maps_panel,
+                 "download": self.download, "fastdl": self.fastdl, "logs": self.logs}
+        page = pages.get(key)
+        if isinstance(page, int):
+            self.tabs.setCurrentIndex(page)
+        elif page is not None:
+            self.tabs.setCurrentWidget(page)
 
     # -- budget --------------------------------------------------------------
     def _budget_tab(self) -> QWidget:

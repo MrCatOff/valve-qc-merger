@@ -2,8 +2,8 @@
 
 The studio targets servers on **ReHLDS + ReGameDLL + ReAPI**. Project ▸
 **Server tools…** (Ctrl+Shift+S, toolbar *Server*) opens one window with the
-tabs Budget, Doctor, Unprecache, Config, Entities, Maps, Download and FastDL
-(each below).
+tabs Budget, Doctor, Unprecache, Config, Entities, Maps, Download, FastDL
+and Logs (each below).
 
 ## Limits
 
@@ -333,3 +333,24 @@ The mirror URL comes from `sv_downloadurl` in the game folder's
 host refuses `HEAD`), eight at a time, by their path as is — a Linux web
 server is case-sensitive. *Problems only*, *Stop* and *Copy report* as in
 the Doctor. `valve_qc_merger.server.fastdl` is Qt-free.
+
+## Logs
+
+The **Logs** tab reads the server's logs (`logs/`, `addons/amxmodx/logs/`,
+the 20 newest), log files you pick, or a console (server or client) copied
+to the clipboard, and lists what a resource pack breaks — grouped by kind
+and by the file or plugin, counted, with the first place it shows up:
+
+- errors: a precache limit reached (models 512, sounds 512, generic 512 /
+  4096), a model used without being precached, precaching outside
+  `plugin_precache`, a model that is missing or of the wrong version, no
+  free edicts, engine memory, too many resources, an AMXX plugin that fails
+  to load (a missing module such as ReAPI named), other `Host_Error`s and
+  crashes;
+- warnings: a sound played without a precache, files that cannot be opened,
+  network buffer overflows, AMXX run-time errors.
+
+Each finding says what to do; *Open …* jumps to the tab that helps (Budget,
+Doctor, Entities, Download). The patterns are loose on purpose — the
+wording differs between HLDS, ReHLDS and AMXX versions.
+`valve_qc_merger.server.logs` is Qt-free.
