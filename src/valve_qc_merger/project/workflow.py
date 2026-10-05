@@ -52,6 +52,8 @@ class ServerImport:
     models: list[str] = field(default_factory=list)  # assets added
     skipped: list[str] = field(default_factory=list)  # already in the project
     failed: list[str] = field(default_factory=list)  # "<file>: why"
+    ignored: list[str] = field(default_factory=list)  # map props, effects, NPCs
+    game_dir_set: bool = False  # the folder became the project's game folder
     sounds: list[str] = field(default_factory=list)
     sprites: list[str] = field(default_factory=list)
 
@@ -61,32 +63,26 @@ def import_server_folder(project: Project, root: Path, *, models: bool = True,
                          category: str | None = None,
                          reporter: Reporter | None = None) -> ServerImport:
     """Bring a server's mod folder (``…/cstrike``) into the project:
-    ``models/`` (each model on its own, existing names skipped), the sounds
+    ``models/`` (each model on its own, existing names skipped; map props,
+    effects and NPCs — neither weapons nor players — left out), the sounds
     of ``sound/`` (``used``: only those the imported models play — a stock
     folder holds thousands; ``all``; ``none``) and the weapon HUDs of
     ``sprites/`` (``weapon_*.txt`` and the sheets they draw from)."""
     from valve_qc_merger.project import sounds as sound_library
     from valve_qc_merger.project import sprites as sprite_library
-    from valve_qc_merger.project.model import ProjectError
-    from valve_qc_merger.services.decompile import find_models
     from valve_qc_merger.sprite.hud import sheets_of
     reporter = reporter or Reporter()
     root = Path(root)
     result = ServerImport()
+    if not project.settings.game_dir:
+        project.settings.game_dir = str(root)  # budgets, maps and the doctor use it
+        result.game_dir_set = True
     if models and (root / "models").is_dir():
-        files = find_models(root / "models")
-        for done, mdl in enumerate(files):
-            reporter.check()
-            reporter.progress(done, len(files), mdl.name)
-            if mdl.stem in project.assets:
-                result.skipped.append(mdl.stem)
-                continue
-            try:
-                added = project.import_mdl(mdl, reporter=reporter, category=category)
-            except (ProjectError, OSError, ValueError) as exc:
-                result.failed.append(f"{mdl.name}: {exc}")
-                continue
-            result.models += [a.name for a in added]
+        outcome = project.import_models([root / "models"], category=category,
+                                        reporter=reporter)
+        result.models = [a.name for a in outcome.added]
+        result.skipped, result.ignored, result.failed = (outcome.skipped, outcome.ignored,
+                                                          outcome.failed)
     sound_root = root / "sound"
     if sounds != "none" and sound_root.is_dir():
         if sounds == "all":

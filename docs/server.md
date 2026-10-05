@@ -21,11 +21,17 @@ Models and sounds stay at 512 on every server: they are the client's tables
 
 ## Budget
 
-Pick a map (from the game folder of Project ▸ Settings, `maps/*.bsp`, read
-directly: brush models + entity models/sprites/sounds) and see the slots it
-takes together with this project's compiled builds and the sounds their view
-models play (event 5004). The studio cannot see what ReGameDLL and the AMXX
-plugins precache: enter those counts once (saved in the project). Choose
+Pick a map (from the game folder of Project ▸ Settings, `maps/*.bsp`, or any
+BSP with *Open BSP…*; read directly: brush models + entity models/sprites/
+sounds) and see the slots it takes together with this project's compiled
+builds, the sounds their view models play (event 5004) and — ticked by
+default — the 120 stock CS models ReGameDLL precaches (weapons, shields,
+players, shells; minus what you unprecache). A line above the bars says
+whether it fits and how many model slots are free. What else ReGameDLL
+(effect sprites, gibs, hostages) and the AMXX plugins precache the studio
+cannot see: enter those counts once (saved in the project; `rescount` /
+`reslist` on a ReHLDS server tell them). Imported models count once a build
+merges them. Choose
 where your weapon plugin puts the view models' client sounds — on ReHLDS
 `precache_generic` (4096 slots) keeps them off the 512 sounds. Bars turn
 amber past 90 % and red over the limit; *Every map* lists them all. The line
@@ -175,10 +181,13 @@ and the library sheets they use) are download-only (**generic**,
 - **Project ▸ Import server folder…** brings a mod folder in as one job:
   every model of `models/` (decompiled in the app, one by one — names already
   in the project are skipped, a broken model is reported and the rest goes
-  on), the sounds of `sound/` (by default only those the imported models
+  on; map props, effects and NPCs — neither a `v_`/`p_`/`w_` weapon nor a
+  player model with the player aim sequences — are left out and listed), the
+  sounds of `sound/` (by default only those the imported models
   play — a stock folder holds thousands — or all, or none) and the weapon
   HUDs of `sprites/` (`weapon_*.txt` and the sheets they draw from), into a
-  category of your choice. `valve_qc_merger.project.workflow` does it.
+  category of your choice; a project without a game folder gets this one.
+  `valve_qc_merger.project.workflow` does it.
 - The Explorer filter (Ctrl+F) searches sounds and sprites too.
 
 ## Unprecache stock models

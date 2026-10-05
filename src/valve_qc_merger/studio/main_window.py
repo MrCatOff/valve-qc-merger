@@ -423,6 +423,13 @@ class MainWindow(QMainWindow):
                        f"{len(result.sprites)} sprite file(s)"
                        + (f"; {len(result.skipped)} already here" if result.skipped else ""))
             reporter.log(f"  imported {summary}")
+            if result.ignored:
+                reporter.log(f"  {len(result.ignored)} model(s) left out — map props, "
+                             "effects, NPCs (not weapon or player models): "
+                             + ", ".join(result.ignored[:12])
+                             + (" …" if len(result.ignored) > 12 else ""))
+            if result.game_dir_set:
+                reporter.log(f"  game folder set to {root} (budgets, maps, doctor)")
             return summary
 
         self.jobs.start(f"Import {root.name}", work)
@@ -943,20 +950,42 @@ class MainWindow(QMainWindow):
             return
 
         def work(reporter: Reporter) -> list[str]:
-            names: list[str] = []
-            for done, source in enumerate(sources):
-                reporter.check()
-                reporter.progress(done, len(sources), source.name)
-                if mdl:
-                    added = project.import_mdl(source, reporter=reporter,
-                                               category=category or None)
-                else:
-                    added = project.import_decompiled(source, category=category or None)
-                names += [a.name for a in added]
-                for asset in added:
-                    where = f"  [{asset.category}]" if asset.category else ""
-                    reporter.log(f"  + {asset.name:<28} {KIND_TITLES[asset.kind]}{where}")
-            return names
+            from valve_qc_merger.project.model import ImportOutcome
+            if mdl:
+                outcome = project.import_models(sources, category=category or None,
+                                                reporter=reporter)
+            else:
+                outcome = ImportOutcome()
+                for done, source in enumerate(sources):
+                    reporter.check()
+                    reporter.progress(done, len(sources), source.name)
+                    folders = [source] if any(source.glob("*.qc")) else sorted(
+                        d for d in source.iterdir() if d.is_dir() and any(d.glob("*.qc")))
+                    for folder in folders:
+                        if folder.name in project.assets:
+                            outcome.skipped.append(folder.name)
+                            continue
+                        try:
+                            outcome.added += project.import_decompiled(
+                                folder, category=category or None)
+                        except (ProjectError, OSError, ValueError) as exc:
+                            outcome.failed.append(f"{folder.name}: {exc}")
+            for asset in outcome.added:
+                where = f"  [{asset.category}]" if asset.category else ""
+                reporter.log(f"  + {asset.name:<28} {KIND_TITLES[asset.kind]}{where}")
+            if outcome.skipped:
+                reporter.log(f"  {len(outcome.skipped)} already in the project, skipped: "
+                             + ", ".join(outcome.skipped[:12])
+                             + (" …" if len(outcome.skipped) > 12 else ""))
+            if outcome.ignored:
+                reporter.log(f"  {len(outcome.ignored)} left out (map props, effects, NPCs "
+                             "— not weapon or player models): "
+                             + ", ".join(outcome.ignored[:12])
+                             + (" …" if len(outcome.ignored) > 12 else ""))
+            for line in outcome.failed:
+                reporter.log(f"  warn: {line}")
+            reporter.log(f"  imported {len(outcome.added)} model(s)")
+            return [a.name for a in outcome.added]
 
         self.jobs.start(title, work)
 

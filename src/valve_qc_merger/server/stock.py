@@ -40,6 +40,9 @@ GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
 }
 
 
+STOCK_MODELS = sum(len(paths) for _title, _why, paths in GROUPS.values())
+
+
 def existing(paths: tuple[str, ...] | list[str], game_dir: Path | None) -> list[str]:
     """``paths`` that are files under ``game_dir`` (all of them without one)."""
     if not game_dir or not Path(game_dir).is_dir():
@@ -47,4 +50,4 @@ def existing(paths: tuple[str, ...] | list[str], game_dir: Path | None) -> list[
     return [p for p in paths if (Path(game_dir) / p).is_file()]
 
 
-__all__ = ["GROUPS", "PLAYERS", "SHELLS", "SHIELD", "WEAPONS", "WORLD", "existing"]
+__all__ = ["GROUPS", "STOCK_MODELS", "PLAYERS", "SHELLS", "SHIELD", "WEAPONS", "WORLD", "existing"]

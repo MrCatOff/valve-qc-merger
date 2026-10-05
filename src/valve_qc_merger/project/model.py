@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import sys
 import time
 import tomllib
@@ -157,6 +158,7 @@ class Settings:
     # stock models unprecached (Metamod Unprecacher) and what replaces them
     unprecache: list[str] = field(default_factory=list)
     unprecache_replace: str = ""
+    count_stock: bool = True  # budget: count the stock CS models ReGameDLL precaches
 
 
 # where Deploy puts a build's models, under the game folder
@@ -175,6 +177,51 @@ def classify(name: str) -> str:
         if lowered.startswith(prefix):
             return kind
     return "player"
+
+
+_PLAYER_SEQUENCE = re.compile(r"(?i)^(?:ref_aim|crouch_aim|ref_shoot|crouch_shoot)")
+
+
+def model_role(path: Path) -> str:
+    """What a compiled ``.mdl`` is: ``weapon`` (a ``v_``/``p_``/``w_`` name),
+    ``player`` (``models/player/<x>/<x>.mdl``, or a model with the player
+    aim sequences) or ``other`` — a map prop, an effect, an NPC: nothing a
+    build of this project takes."""
+    path = Path(path)
+    if classify(path.stem) != "player":
+        return "weapon"
+    if path.parent.parent.name.lower() == "player" and path.parent.name.lower() == \
+            path.stem.lower():
+        return "player"
+    try:
+        data = path.read_bytes()
+        count, index = struct.unpack_from("<2i", data, 136 + 7 * 4)
+        labels = [data[index + i * 176:index + i * 176 + 32].split(b"\0", 1)[0]
+                  .decode("latin-1") for i in range(max(min(count, 2048), 0))]
+    except (OSError, struct.error):
+        return "other"
+    return "player" if any(_PLAYER_SEQUENCE.match(label) for label in labels) else "other"
+
+
+class _QuietProgress(Reporter):
+    """Logs and cancellation of ``outer``; progress stays the caller's."""
+
+    def __init__(self, outer: Reporter) -> None:
+        self.outer = outer
+
+    def log(self, message: str) -> None:
+        self.outer.log(message)
+
+    def cancelled(self) -> bool:
+        return self.outer.cancelled()
+
+
+@dataclass
+class ImportOutcome:
+    added: list[Asset] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)  # already in the project
+    ignored: list[str] = field(default_factory=list)  # props / effects / NPCs
+    failed: list[str] = field(default_factory=list)  # "<file>: why"
 
 
 def _qc_dir(directory: Path) -> Path | None:
@@ -294,7 +341,8 @@ class Project:
             extra_generic=int(settings.get("extra_generic", 0)),
             client_sounds=str(settings.get("client_sounds", "generic")),
             unprecache=[str(p) for p in settings.get("unprecache", [])],
-            unprecache_replace=str(settings.get("unprecache_replace", "")))
+            unprecache_replace=str(settings.get("unprecache_replace", "")),
+            count_stock=bool(settings.get("count_stock", True)))
         project.categories = list(meta.get("categories", []))
         for entry in data.get("assets", []):
             asset = Asset(**entry)
@@ -320,7 +368,8 @@ class Project:
                          "extra_generic": self.settings.extra_generic,
                          "client_sounds": self.settings.client_sounds,
                          "unprecache": self.settings.unprecache,
-                         "unprecache_replace": self.settings.unprecache_replace},
+                         "unprecache_replace": self.settings.unprecache_replace,
+                         "count_stock": self.settings.count_stock},
             "assets": [_asset_dict(a) for a in sorted(self.assets.values(),
                                                       key=lambda a: (a.kind, a.name))],
             "builds": [_build_dict(b) for b in self.builds.values()],
@@ -370,6 +419,44 @@ class Project:
                 self._move_to_kind_folder(asset)
         self.save()
         return added
+
+    def import_models(self, sources: list[Path], *, category: str | None = None,
+                      reporter: Reporter | None = None,
+                      only_known: bool = True) -> ImportOutcome:
+        """Import every ``.mdl`` of ``sources`` (files or folders) one by one:
+        names already in the project are skipped, a model that fails is
+        reported and the rest go on, and (``only_known``) models found in a
+        folder that are neither weapons nor players — map props, effects — are
+        left out (a file named on its own is always imported)."""
+        reporter = reporter or Reporter()
+        outcome = ImportOutcome()
+        models: list[Path] = []
+        chosen: set[Path] = set()
+        for source in sources:
+            if Path(source).is_file():
+                chosen.add(Path(source))
+            for model in find_models(Path(source)):
+                if model not in models:
+                    models.append(model)
+        taken: set[str] = set()
+        for done, model in enumerate(models):
+            reporter.check()
+            reporter.progress(done, len(models), model.name)
+            if model.stem in self.assets or model.stem.lower() in taken:
+                outcome.skipped.append(model.stem)
+                continue
+            if only_known and model not in chosen and model_role(model) == "other":
+                outcome.ignored.append(model.stem)
+                continue
+            try:
+                added = self.import_mdl(model, category=category,
+                                        reporter=_QuietProgress(reporter))
+            except (ProjectError, OSError, ValueError) as exc:
+                outcome.failed.append(f"{model.name}: {exc}")
+                continue
+            outcome.added += added
+            taken.update(a.name.lower() for a in added)
+        return outcome
 
     def import_mdl(self, source: Path, *, kind: str | None = None,
                    overwrite: bool = False, category: str | None = None,
@@ -861,19 +948,33 @@ class Project:
         (base / "last_run.json").write_text(json.dumps(record, indent=1), encoding="utf-8")
         return result
 
+    def hands_asset(self, source: str) -> Asset | None:
+        """The Retarget (swap hands) asset made from ``source``, if any."""
+        for asset in self.assets.values():
+            if asset.derived and asset.derived.get("mode") == "hands" \
+                    and asset.derived.get("from") == source:
+                return asset
+        return None
+
     def _retarget_for_build(self, assets: list[Asset], staged: Path, retargeted: Path,
                             build: Build, reporter: Reporter) -> list[str]:
-        """Bring every asset onto our hands for a shared-hands merge-v build:
-        assets made by Retarget (swap hands) and models already wearing our
-        hands are taken as they are (their tuned grip kept); the rest are
-        retargeted with the build's options. Returns notes for the report."""
+        """Bring every asset onto our hands for a shared-hands merge-v build.
+        Assets made by Retarget (swap hands) and models already wearing our
+        hands are taken as they are; for the rest the build reuses their
+        swap-hands asset (``<name>_hands``) when it was made with the build's
+        options, else it makes (or remakes) one — saved in the project like a
+        Retarget from the Explorer, so the next run does not redo it (and
+        takes it in place of its source, as for any swap-hands asset).
+        Returns notes for the report."""
         from valve_qc_merger.merge_view.handcheck import dir_wears_hands
         from valve_qc_merger.resources import resource_path
         from valve_qc_merger.retarget.config import DEFAULT_SHARED_HANDS_REFERENCE
         reference = resource_path(Path(DEFAULT_SHARED_HANDS_REFERENCE))
         retargeted.mkdir(parents=True, exist_ok=True)
+        wanted = {k: v for k, v in build.retarget_options.items() if k not in _DERIVE_FIXED}
         notes: list[str] = []
-        ready = converted = 0
+        ready = converted = reused = 0
+
         for done, asset in enumerate(assets):
             reporter.check()
             reporter.progress(done, len(assets), f"retarget {asset.name}")
@@ -884,21 +985,29 @@ class Project:
                 reporter.log(f"  retarget {asset.name}: already on our hands, taken as is")
                 ready += 1
                 continue
-            opts = options_from_dict(RetargetOptions, {
-                **build.retarget_options,
-                "weapon_dir": str(source),
-                "out": str(retargeted / asset.name),
-            })
-            outcome = run_retarget(opts, reporter)
-            if outcome.ok:
+            existing = self.hands_asset(asset.name)
+            if existing is not None and existing.derived.get("options", {}) == wanted:
+                shutil.copytree(self.asset_dir(existing.name), retargeted / existing.name)
+                reporter.log(f"  retarget {asset.name}: {existing.name} (made before with "
+                             "these settings) reused")
+                reused += 1
+                continue
+            try:
+                result, made = self.derive_asset(
+                    asset.name, "hands", wanted,
+                    name=existing.name if existing is not None else None, reporter=reporter)
+            except ProjectError as exc:  # e.g. <name>_hands is an imported asset
+                result, made = ServiceResult(exit_code=EXIT_FAIL, failures=[str(exc)]), None
+            if made is not None:
+                shutil.copytree(self.asset_dir(made.name), retargeted / made.name)
+                reporter.log(f"  retarget {asset.name}: saved as {made.name}")
                 converted += 1
                 continue
-            why = outcome.failures[-1] if outcome.failures else f"exit {outcome.exit_code}"
+            why = result.failures[-1] if result.failures else f"exit {result.exit_code}"
             notes.append(f"retarget {asset.name} failed ({why}); left out of the merge")
             reporter.log(f"  warn: {notes[-1]}")
-            shutil.rmtree(retargeted / asset.name, ignore_errors=True)
-        reporter.log(f"  retarget: {converted} converted, {ready} already on our hands, "
-                     f"{len(assets) - converted - ready} failed")
+        reporter.log(f"  retarget: {converted} converted, {reused} reused, {ready} already on "
+                     f"our hands, {len(assets) - converted - reused - ready} failed")
         return notes
 
     # -- deploy ---------------------------------------------------------------

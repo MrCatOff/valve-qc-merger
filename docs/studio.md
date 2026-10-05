@@ -213,6 +213,19 @@ offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
   `studio/icons/LICENSE`) tinted to the theme at run time (`icon(name)`;
   disabled state included). Add an icon by dropping its SVG from
   `lucide-static` into `studio/icons/`.
+- **Imports** go on past problems: importing a set of models again skips
+  the ones already in the project (only the rest are added), a model that
+  fails is reported and the others still come in, and a folder import leaves
+  out map props, effects and NPCs (a file picked on its own always comes in).
+- **Explorer** keeps its state when the project changes: collapsed branches
+  stay collapsed, the scroll position and the current row stay put.
+- **Retarget a whole category**: right-click a category (or its *View
+  models* group) ▸ *Retarget N view models…* — every imported view model
+  without a swap-hands asset yet, in one dialog.
+- **Builds that retarget** (merge-v with *retarget*) save what they convert
+  as swap-hands assets (`<name>_hands`, like Retarget from the Explorer) and
+  reuse them on the next run when their settings match — nothing is
+  retargeted twice.
 - **Toolbar**: Import · Retarget · Re-run | New build · Plan · **Run** ·
   Compile · Deploy, then Find and Settings. Actions that work on the
   selection are enabled only with an asset (Retarget) or a build (Run …)

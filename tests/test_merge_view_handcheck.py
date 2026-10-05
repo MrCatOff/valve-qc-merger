@@ -79,7 +79,7 @@ def test_build_retargets_only_what_needs_it(models: Path, tmp_path: Path) -> Non
     assert "retarget v_rt_moved: already on our hands" in log
     # v_raw is the same weapon as v_raw_hands: left out, not retargeted twice
     assert "v_raw: left out, v_raw_hands is the same weapon on our hands" in log
-    assert "retarget: 0 converted, 2 already on our hands, 0 failed" in log
+    assert "retarget: 0 converted, 0 reused, 2 already on our hands, 0 failed" in log
     record = json.loads((project.build_dir("pack") / "last_run.json").read_text())
     assert not any("the same weapon twice" in w for w in record["warnings"])
     assert result.gates and all(g.passed for g in result.gates)
@@ -105,3 +105,26 @@ def test_plan_build_predicts_without_merging(models: Path, tmp_path: Path) -> No
     assert "[v_rt_moved]\npev_body = 1" in ini  # one part: no model line
     with pytest.raises(KeyError):
         project.plan_build("nope")
+
+
+def test_build_saves_its_retargets_and_reuses_them(models: Path, tmp_path: Path) -> None:
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(models / "v_raw")
+    project.add_build(Build("listed", "merge-v", assets=["v_raw"], retarget=True))
+    reporter = CollectingReporter()
+    project.run_build("listed", reporter)
+    assert "retarget v_raw: saved as v_raw_hands" in "\n".join(reporter.lines)
+    made = project.assets["v_raw_hands"]
+    assert made.derived["from"] == "v_raw" and made.derived["mode"] == "hands"
+    assert project.hands_asset("v_raw") is made
+    again = CollectingReporter()
+    project.run_build("listed", again)
+    log = "\n".join(again.lines)
+    assert "v_raw_hands (made before with these settings) reused" in log
+    assert "retarget: 0 converted, 1 reused" in log
+    # a build over every asset takes the saved one in place of its source
+    project.add_build(Build("all", "merge-v", retarget=True))
+    third = CollectingReporter()
+    project.run_build("all", third)
+    assert "v_raw: left out, v_raw_hands is the same weapon on our hands" in \
+        "\n".join(third.lines)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, Qt, Signal
@@ -207,7 +208,55 @@ class Explorer(QTreeWidget):
         self._filter_text = ""
         self._filter_level = ""  # "" or a FILTERS key
 
+    @staticmethod
+    def _item_key(item: QTreeWidgetItem | None) -> tuple:
+        """A path that names ``item`` across rebuilds (kind + name, or the
+        label without its count, for every level)."""
+        parts = []
+        while item is not None:
+            name = item.data(0, ROLE_NAME)
+            if name is None:
+                name = re.split(r"  ·  | \(\d+\)$", item.text(0))[0]
+            parts.append((item.data(0, ROLE_KIND), str(name)))
+            item = item.parent()
+        return tuple(reversed(parts))
+
+    def _walk(self) -> list[QTreeWidgetItem]:
+        out: list[QTreeWidgetItem] = []
+        stack = [self.topLevelItem(i) for i in range(self.topLevelItemCount())]
+        while stack:
+            item = stack.pop()
+            out.append(item)
+            stack += [item.child(i) for i in range(item.childCount())]
+        return out
+
     def show_project(self, project: Project | None) -> None:
+        """(Re)build the tree; the branches the user collapsed, the scroll
+        position and the current row survive a rebuild of the same project."""
+        same = project is not None and project is self._project and self.topLevelItemCount()
+        collapsed = {self._item_key(i) for i in self._walk()
+                     if i.childCount() and not i.isExpanded()} if same else set()
+        current_key = self._item_key(self.currentItem()) if same else None
+        scroll = self.verticalScrollBar().value() if same else 0
+        self.blockSignals(True)
+        try:
+            self._show_project(project)
+            if same:
+                by_key = {self._item_key(i): i for i in self._walk()}
+                for key in collapsed:
+                    if key in by_key:
+                        by_key[key].setExpanded(False)
+                if current_key in by_key:
+                    self.setCurrentItem(by_key[current_key])
+        finally:
+            self.blockSignals(False)
+        if same:
+            self.executeDelayedItemsLayout()
+            self.verticalScrollBar().setValue(scroll)
+        if not same or self._item_key(self.currentItem()) != current_key:
+            self._on_current(self.currentItem(), None)
+
+    def _show_project(self, project: Project | None) -> None:
         from valve_qc_merger.project.status import project_status
         self._project = project
         self.statuses = project_status(project) if project is not None else {}
@@ -535,6 +584,28 @@ class Explorer(QTreeWidget):
                 return True
         return False
 
+    def assets_under(self, item: QTreeWidgetItem) -> list[str]:
+        """Every asset at or below ``item``."""
+        out: list[str] = []
+        stack = [item]
+        while stack:
+            node = stack.pop()
+            if node.data(0, ROLE_KIND) == "asset":
+                out.append(str(node.data(0, ROLE_NAME)))
+            stack += [node.child(i) for i in range(node.childCount())]
+        return sorted(set(out))
+
+    def retargetable(self, names: list[str]) -> list[str]:
+        """The view models of ``names`` that Retarget would put on our hands:
+        imported ones (not made by Retarget) without a swap-hands asset yet."""
+        project = self._project
+        if project is None:
+            return []
+        made = {a.derived["from"] for a in project.assets.values()
+                if a.derived and a.derived.get("mode") == "hands"}
+        return [n for n in names if n in project.assets and project.assets[n].kind == "v"
+                and not project.assets[n].derived and n not in made]
+
     def current_sound(self) -> str:
         item = self.currentItem()
         if item is not None and item.data(0, ROLE_KIND) == "sound":
@@ -580,8 +651,21 @@ class Explorer(QTreeWidget):
             menu.addAction("Import sounds…", self.sound_import_requested.emit)
             menu.exec(self.viewport().mapToGlobal(pos))
             return
+        if item is not None and item.data(0, ROLE_KIND) == "group":
+            names = self.retargetable(self.assets_under(item))
+            if names:
+                menu = QMenu(self)
+                menu.addAction(f"Retarget {len(names)} view model(s)…",
+                               lambda: self.derive_requested.emit(names))
+                menu.exec(self.viewport().mapToGlobal(pos))
+            return
         if item is not None and item.data(0, ROLE_KIND) in ("assets", "category"):
             menu = QMenu(self)
+            names = self.retargetable(self.assets_under(item))
+            if names:
+                menu.addAction(f"Retarget {len(names)} view model(s)…",
+                               lambda: self.derive_requested.emit(names))
+                menu.addSeparator()
             menu.addAction("New category…", self.category_new_requested.emit)
             category = item.data(0, ROLE_NAME) if item.data(0, ROLE_KIND) == "category" \
                 else None

@@ -109,11 +109,14 @@ class BudgetLine:
 
 def budget(map_resources: MapResources | None, load: ProjectLoad, *,
            extra: dict[str, int] | None = None,
-           client_sounds_as: str = "generic", unprecached: int = 0) -> dict[str, BudgetLine]:
+           client_sounds_as: str = "generic", unprecached: int = 0,
+           stock_models: int = 0) -> dict[str, BudgetLine]:
     """Slots per kind (models / sounds / generic) for one map ("no map": the
     project and the extras alone). ``client_sounds_as``: where the plugin
     precaches the view models' client sounds — ``generic`` (ReHLDS: 4096
-    slots, nothing else uses them) or ``sound``."""
+    slots, nothing else uses them) or ``sound``. ``stock_models``: the
+    stock CS models the game DLL precaches (weapons, shields, players,
+    shells — :data:`.stock.STOCK_MODELS`), counted for the user."""
     extra = extra or {}
     parts: dict[str, list[tuple[str, int]]] = {"models": [], "sounds": [], "generic": []}
     if map_resources is not None:
@@ -125,8 +128,12 @@ def budget(map_resources: MapResources | None, load: ProjectLoad, *,
     parts["generic"].append(("weapon HUD files", len(load.hud_files)))
     target = "sounds" if client_sounds_as == "sound" else "generic"
     parts[target].append(("view-model client sounds", len(load.client_sounds)))
+    if stock_models:
+        parts["models"].append(("stock CS weapons, shields, players, shells",
+                                int(stock_models)))
     for key in parts:
-        parts[key].append(("game DLL + plugins (your estimate)", int(extra.get(key, 0))))
+        parts[key].append(("other game DLL + plugins (your estimate)",
+                           int(extra.get(key, 0))))
     if unprecached:
         parts["models"].append(("unprecached stock models", -int(unprecached)))
     return {lim.key: BudgetLine(lim.key, lim.title, lim.limit, parts[lim.key])

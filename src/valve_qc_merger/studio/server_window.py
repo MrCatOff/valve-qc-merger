@@ -151,17 +151,38 @@ class ServerWindow(QDialog):
         row = kit.form()
         self.map_box = QComboBox()
         self.map_box.currentIndexChanged.connect(lambda _i: self._show_budget())
-        row.addRow("Map", self.map_box)
+        open_map = QPushButton(icon("folder-open"), "Open BSP…")
+        open_map.setAutoDefault(False)
+        open_map.setToolTip("Count a map that is not in the game folder's maps/")
+        open_map.clicked.connect(self._open_map)
+        map_row = QHBoxLayout()
+        map_row.addWidget(self.map_box, 1)
+        map_row.addWidget(open_map)
+        row.addRow("Map", map_row)
         layout.addLayout(row)
+        self.verdict = QLabel()
+        self.verdict.setStyleSheet("font-weight: 600;")
+        self.verdict.setWordWrap(True)
+        layout.addWidget(self.verdict)
         self.no_game_hint = kit.hint("Set the game folder in Project ▸ Settings to count "
                                      "each map's brush models, sprites and sounds.")
         layout.addWidget(self.no_game_hint)
 
         layout.addWidget(kit.section("Game DLL + plugins"))
+        from PySide6.QtWidgets import QCheckBox
+
+        from valve_qc_merger.server.stock import STOCK_MODELS
+        self.stock_box = QCheckBox(
+            f"Count the stock CS models ReGameDLL precaches ({STOCK_MODELS}: weapons, "
+            "shields, players, shells — minus what you unprecache)")
+        self.stock_box.setChecked(self.project.settings.count_stock)
+        self.stock_box.toggled.connect(lambda _on: self._estimates_changed())
+        layout.addWidget(self.stock_box)
         layout.addWidget(kit.hint(
-            "The studio sees the map and this project's builds, not what ReGameDLL and "
-            "your AMXX plugins precache — enter those counts (e.g. from a server with "
-            "every plugin loaded) for a true total."))
+            "The studio sees the map, this project's builds and the stock models — not "
+            "what else ReGameDLL (effect sprites, gibs, hostages) and your AMXX plugins "
+            "precache: enter those counts (rescount / reslist on a ReHLDS server with every "
+            "plugin loaded) for a true total."))
         estimates = QHBoxLayout()
         self.extra: dict[str, QSpinBox] = {}
         for key, title in (("models", "Models"), ("sounds", "Sounds"),
@@ -214,6 +235,7 @@ class ServerWindow(QDialog):
         for key, spin in self.extra.items():
             setattr(settings, f"extra_{key}", spin.value())
         settings.client_sounds = self.client_box.currentData()
+        settings.count_stock = self.stock_box.isChecked()
         self.project.save()
         self.settings_changed.emit()
         self._show_budget()
@@ -245,22 +267,63 @@ class ServerWindow(QDialog):
 
     def _lines(self, map_resources: MapResources | None) -> dict[str, BudgetLine]:
         extra = {key: spin.value() for key, spin in self.extra.items()}
+        from valve_qc_merger.server.stock import STOCK_MODELS
         return budget(map_resources, self.load, extra=extra,
                       client_sounds_as=self.client_box.currentData(),
-                      unprecached=self.freed_slots())
+                      unprecached=self.freed_slots() if self.stock_box.isChecked() else 0,
+                      stock_models=STOCK_MODELS if self.stock_box.isChecked() else 0)
+
+    def _open_map(self) -> None:
+        start = self.project.settings.game_dir or str(Path.home())
+        path, _ = QFileDialog.getOpenFileName(self, "Count a map", start, "Maps (*.bsp)")
+        if path:
+            self.add_map(Path(path))
+
+    def add_map(self, path: Path) -> None:
+        """Count ``path`` too (a map outside the game folder) and show it."""
+        try:
+            self._maps[path.stem] = read_map_resources(path)
+        except (BspError, OSError):
+            self._maps[path.stem] = None
+        if self.map_box.findText(path.stem) < 0:
+            self.map_box.addItem(path.stem)
+        self.map_box.setCurrentText(path.stem)
+        self._fill_maps_table()
 
     def _show_budget(self) -> None:
         name = self.map_box.currentText()
         lines = self._lines(self._maps.get(name) if name != NO_MAP else None)
         for key, bar in self.bars.items():
             bar.show_line(lines[key])
+        over = [(line.title, line.used - line.limit) for line in lines.values()
+                if line.used > line.limit]
+        free = lines["models"].limit - lines["models"].used
+        where = f"With {name}" if name != NO_MAP else "Without a map"
+        if name != NO_MAP and self._maps.get(name) is None:
+            self.verdict.setText(f"{name} cannot be read.")
+            theme.set_role(self.verdict, "danger")
+        elif over:
+            self.verdict.setText(f"{where}: over the limit — " + ", ".join(
+                f"{title.lower()} by {count}" for title, count in over)
+                + ". The server stops the map when it precaches past the limit.")
+            theme.set_role(self.verdict, "danger")
+        else:
+            self.verdict.setText(f"{where}: fits — {free} model slot(s) free."
+                                 + ("" if name != NO_MAP else
+                                    " Pick a map: brush models often take 100–300."))
+            theme.set_role(self.verdict, "warning" if free < lines["models"].limit // 10
+                           else "success")
         builds = [b for b in self.load.builds if b.outputs]
         if builds:
             detail = ", ".join(f"{b.name}: {b.inputs} → {len(b.outputs)}" for b in builds)
             self.saved_label.setText(f"Merging saved {self.load.saved} model slot(s) "
                                      f"({detail}).")
         else:
-            self.saved_label.setText("Run a build to see the model slots merging saves.")
+            count = len(self.project.assets)
+            self.saved_label.setText(
+                "Run a build to see the model slots merging saves."
+                + (f" The project's {count} imported model(s) count once a build merges "
+                   "them — as they are, each would take a slot of its own." if count else ""))
 
     def _fill_maps_table(self) -> None:
         self.maps_table.setRowCount(len(self._maps))
