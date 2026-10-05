@@ -83,6 +83,26 @@ def _checked(widget: QListWidget) -> list[str]:
             if widget.item(i).checkState() == Qt.CheckState.Checked]
 
 
+
+def _scrolled(label: QLabel, height: int = 150) -> QWidget:
+    """``label`` in a scroll area at most ``height`` px tall, hidden while
+    empty: a long list (60 rejected models) must not stretch the window."""
+    from PySide6.QtWidgets import QFrame, QScrollArea
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setMaximumHeight(height)
+    area.setWidget(label)
+    label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+    original = label.setText
+
+    def set_text(text: str) -> None:
+        original(text)
+        area.setVisible(bool(text))
+    label.setText = set_text  # type: ignore[method-assign]
+    area.setVisible(bool(label.text()))
+    return area
+
 class NewBuildDialog(QDialog):
     """Name + kind; assets and options are edited in the build panel."""
 
@@ -218,7 +238,7 @@ class BuildPanel(QTabWidget):
         layout.addWidget(self.budgets, 1)
         layout.addWidget(QLabel("Verification gates"))
         layout.addWidget(self.gates, 2)
-        layout.addWidget(self.failures)
+        layout.addWidget(_scrolled(self.failures))
         self.addTab(results, "Results")
         # -- plan
         plan = QWidget()
@@ -235,7 +255,7 @@ class BuildPanel(QTabWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse)
         plan_layout.addWidget(self.plan_summary)
         plan_layout.addWidget(self.plan_table, 1)
-        plan_layout.addWidget(self.plan_rejected)
+        plan_layout.addWidget(_scrolled(self.plan_rejected))
         self.plan_tab = self.addTab(plan, "Plan")
         # -- manifest
         self.manifest = QTableWidget()

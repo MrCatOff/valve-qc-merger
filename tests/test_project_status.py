@@ -140,3 +140,18 @@ def test_retarget_build_takes_a_weapon_once(project: Project) -> None:
     assert [a.name for a in project.build_assets(explicit)] == ["v_anaconda_hands"]
     own = Build("own", "merge-v")  # own hands: nothing is swapped, both stay
     assert len(project.build_assets(own)) == 2
+
+
+def test_long_plan_lists_do_not_stretch_the_panel() -> None:
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from valve_qc_merger.studio.build_panel import BuildPanel
+    panel = BuildPanel()
+    before = panel.minimumSizeHint().height()
+    long = "\n".join(f"✗ model 'v_{i}': multi-part weapon rejected" for i in range(80))
+    panel.plan_rejected.setText(long)
+    panel.failures.setText(long)
+    assert panel.plan_rejected.text() == long
+    assert panel.minimumSizeHint().height() <= before + 320  # two capped lists at most
