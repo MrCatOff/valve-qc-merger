@@ -169,7 +169,7 @@ def test_server_window_budget_and_doctor(tmp_path: Path) -> None:
     # 30 brush + 2 entity + 120 stock CS models + 350 estimated
     assert models.numbers.text().startswith("502 / 512")
     assert models.bar.property("level") == "warning"
-    assert window.verdict.text() == "With de_test: fits — 10 model slot(s) free."
+    assert window.verdict_text() == "With de_test, after merge: fits — 10 model slot(s) free"
     window.stock_box.setChecked(False)
     assert window.bars["models"].numbers.text().startswith("382 / 512")
     assert not Project.open(project.root).settings.count_stock
@@ -177,8 +177,9 @@ def test_server_window_budget_and_doctor(tmp_path: Path) -> None:
     window.extra["models"].setValue(500)  # saved to the project, budget redone
     assert Project.open(project.root).settings.extra_models == 500
     assert window.bars["models"].bar.property("level") == "error"
-    assert window.verdict.text().startswith("With de_test: over the limit — models by 140")
-    assert window.maps_table.item(0, 4).text() == "over a limit"
+    assert window.verdict_text().startswith(
+        "With de_test, after merge: over the limit — models by 140")
+    assert window.maps_table.item(0, 5).text() == "over a limit"
 
     window.scan()  # mini.mdl plays weapons/x.wav; the map's barrel and glow are missing
     assert any(i.category == "missing" for i in window.issues)

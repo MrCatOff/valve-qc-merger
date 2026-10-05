@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -66,6 +67,10 @@ class BudgetBar(QWidget):
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(8)
         self.parts = kit.hint("")
+        # a wrapped label in a scroll area gets squeezed to one line unless it
+        # asks for the height its width needs
+        self.parts.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                 QSizePolicy.Policy.MinimumExpanding)
         layout.addWidget(self.title, 0, 0)
         layout.addWidget(self.numbers, 0, 1)
         layout.addWidget(self.bar, 1, 0, 1, 2)
@@ -127,7 +132,7 @@ class ServerWindow(QDialog):
         from valve_qc_merger.studio.logs_panel import LogsPanel
         self.logs = LogsPanel(project, self.show_tab)
         self.tabs.addTab(self.logs, icon("square-terminal"), "Logs")
-        self.resize(1040, 760)
+        self.resize(1040, 820)
         self.refresh()
 
     def show_tab(self, key: str) -> None:
@@ -144,7 +149,12 @@ class ServerWindow(QDialog):
 
     # -- budget --------------------------------------------------------------
     def _budget_tab(self) -> QWidget:
+        from PySide6.QtWidgets import QFrame, QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         page = QWidget()
+        scroll.setWidget(page)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 12, 4, 4)
         layout.setSpacing(8)
@@ -161,6 +171,7 @@ class ServerWindow(QDialog):
         row.addRow("Map", map_row)
         layout.addLayout(row)
         self.verdict = QLabel()
+        self.verdict.setTextFormat(Qt.TextFormat.RichText)
         self.verdict.setStyleSheet("font-weight: 600;")
         self.verdict.setWordWrap(True)
         layout.addWidget(self.verdict)
@@ -217,18 +228,33 @@ class ServerWindow(QDialog):
         self.saved_label.setWordWrap(True)
         layout.addWidget(self.saved_label)
 
-        layout.addWidget(kit.section("Every map"))
-        self.maps_table = QTableWidget(0, 5)
-        self.maps_table.setHorizontalHeaderLabels(["Map", "Models", "Sounds", "Generic",
-                                                   "Status"])
+        self.budget_tabs = QTabWidget()
+        self.merge_table = QTableWidget(0, 5)
+        self.merge_table.setHorizontalHeaderLabels(["Models", "As imported", "After merge",
+                                                    "Saves", "State"])
+        self.merge_table.verticalHeader().setVisible(False)
+        merge_header = self.merge_table.horizontalHeader()
+        merge_header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        merge_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.merge_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.merge_table.setToolTip(
+            "As imported: every weapon a model slot of its own (a model and its swap-hands "
+            "copy are one weapon). After merge: each build's parts — from its last run, "
+            "else its plan — and the models no build takes, as they are.")
+        self.budget_tabs.addTab(self.merge_table, "As imported → after merge")
+        self.maps_table = QTableWidget(0, 6)
+        self.maps_table.setHorizontalHeaderLabels(["Map", "Models", "As imported", "Sounds",
+                                                   "Generic", "Status"])
         self.maps_table.verticalHeader().setVisible(False)
         self.maps_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch)
         self.maps_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.maps_table.cellDoubleClicked.connect(
             lambda row, _c: self.map_box.setCurrentText(self.maps_table.item(row, 0).text()))
-        layout.addWidget(self.maps_table, 1)
-        return page
+        self.budget_tabs.addTab(self.maps_table, "Every map")
+        self.budget_tabs.setMinimumHeight(260)
+        layout.addWidget(self.budget_tabs, 1)
+        return scroll
 
     def _estimates_changed(self) -> None:
         settings = self.project.settings
@@ -243,7 +269,9 @@ class ServerWindow(QDialog):
 
     def refresh(self) -> None:
         """Re-read the maps and the builds (after a build ran, settings changed)."""
+        from valve_qc_merger.server.budget import merge_comparison
         self.load = project_load(self.project)
+        self.comparison = merge_comparison(self.project, self.load)
         game = Path(self.project.settings.game_dir) if self.project.settings.game_dir else None
         self._maps = {}
         for path in map_files(game):
@@ -265,13 +293,19 @@ class ServerWindow(QDialog):
         self._show_budget()
         self._fill_maps_table()
 
-    def _lines(self, map_resources: MapResources | None) -> dict[str, BudgetLine]:
+    def _lines(self, map_resources: MapResources | None,
+               as_imported: bool = False) -> dict[str, BudgetLine]:
         extra = {key: spin.value() for key, spin in self.extra.items()}
         from valve_qc_merger.server.stock import STOCK_MODELS
         return budget(map_resources, self.load, extra=extra,
                       client_sounds_as=self.client_box.currentData(),
                       unprecached=self.freed_slots() if self.stock_box.isChecked() else 0,
-                      stock_models=STOCK_MODELS if self.stock_box.isChecked() else 0)
+                      stock_models=STOCK_MODELS if self.stock_box.isChecked() else 0,
+                      unmerged=self.comparison.unmerged,
+                      left_out=self.comparison.left_out,
+                      as_imported=self.comparison.imported if as_imported else None,
+                      client_sounds=(self.comparison.sounds_imported if as_imported
+                                     else self.comparison.sounds_merged))
 
     def _open_map(self) -> None:
         start = self.project.settings.game_dir or str(Path.home())
@@ -295,43 +329,115 @@ class ServerWindow(QDialog):
         lines = self._lines(self._maps.get(name) if name != NO_MAP else None)
         for key, bar in self.bars.items():
             bar.show_line(lines[key])
-        over = [(line.title, line.used - line.limit) for line in lines.values()
-                if line.used > line.limit]
-        free = lines["models"].limit - lines["models"].used
         where = f"With {name}" if name != NO_MAP else "Without a map"
         if name != NO_MAP and self._maps.get(name) is None:
-            self.verdict.setText(f"{name} cannot be read.")
-            theme.set_role(self.verdict, "danger")
-        elif over:
-            self.verdict.setText(f"{where}: over the limit — " + ", ".join(
-                f"{title.lower()} by {count}" for title, count in over)
-                + ". The server stops the map when it precaches past the limit.")
-            theme.set_role(self.verdict, "danger")
+            self.verdict.setText(self._coloured(f"{name} cannot be read.", "danger"))
         else:
-            self.verdict.setText(f"{where}: fits — {free} model slot(s) free."
-                                 + ("" if name != NO_MAP else
-                                    " Pick a map: brush models often take 100–300."))
-            theme.set_role(self.verdict, "warning" if free < lines["models"].limit // 10
-                           else "success")
-        builds = [b for b in self.load.builds if b.outputs]
-        if builds:
-            detail = ", ".join(f"{b.name}: {b.inputs} → {len(b.outputs)}" for b in builds)
-            self.saved_label.setText(f"Merging saved {self.load.saved} model slot(s) "
-                                     f"({detail}).")
-        else:
-            count = len(self.project.assets)
-            self.saved_label.setText(
-                "Run a build to see the model slots merging saves."
-                + (f" The project's {count} imported model(s) count once a build merges "
-                   "them — as they are, each would take a slot of its own." if count else ""))
+            before = self._lines(self._maps.get(name) if name != NO_MAP else None, True)
+            after_text, after_level = self._verdict(lines)
+            text = self._coloured(f"{where}, after merge: {after_text}", after_level)
+            comparison = self.comparison
+            if comparison.imported != comparison.merged:
+                before_text, before_level = self._verdict(before)
+                text += "<br>" + self._coloured(f"As imported (no merge): {before_text}",
+                                                before_level)
+            if name == NO_MAP:
+                text += "<br>" + self._coloured(
+                    "Pick a map: brush models often take 100–300.", "muted")
+            self.verdict.setText(text)
+        self._fill_merge_table()
+
+    @staticmethod
+    def _coloured(text: str, token: str) -> str:
+        from html import escape
+        return f'<span style="color:{theme.TOKENS[token]}">{escape(text)}</span>'
+
+    def verdict_text(self) -> str:
+        """The verdict as plain text (one line per scenario)."""
+        from PySide6.QtGui import QTextDocument
+        document = QTextDocument()
+        document.setHtml(self.verdict.text())
+        return document.toPlainText()
+
+    @staticmethod
+    def _verdict(lines: dict[str, BudgetLine]) -> tuple[str, str]:
+        over = [(line.title, line.used - line.limit) for line in lines.values()
+                if line.used > line.limit]
+        models = lines["models"]
+        free = models.limit - models.used
+        if over:
+            return ("over the limit — " + ", ".join(f"{title.lower()} by {count}"
+                                                    for title, count in over), "danger")
+        return (f"fits — {free} model slot(s) free",
+                "warning" if free < models.limit // 10 else "success")
+
+    def _fill_merge_table(self) -> None:
+        comparison = self.comparison
+        rows = comparison.rows
+        self.merge_table.setRowCount(len(rows) + 1 if rows else 0)
+        state_tip = {"run": "parts of its last run", "planned": "parts of its plan",
+                     "not run": "not run or planned yet: counted as imported",
+                     "no build": "in no build: they stay as they are"}
+        for row, entry in enumerate(rows):
+            self.merge_table.setItem(row, 0, _item(entry.title))
+            self.merge_table.setItem(row, 1, _item(entry.imported))
+            self.merge_table.setItem(row, 2, _item(entry.merged))
+            saves = _item(entry.saved or "")
+            saves.setForeground(theme.color("success"))
+            self.merge_table.setItem(row, 3, saves)
+            text, tip = entry.state, state_tip[entry.state]
+            if entry.left_out:
+                text += f" · {len(entry.left_out)} left out"
+                tip += (f"\nThe merge left out {len(entry.left_out)} model(s) — counted as "
+                        "they are (a slot each) if they stay on the server:\n"
+                        + ", ".join(entry.left_out[:40])
+                        + (" …" if len(entry.left_out) > 40 else ""))
+            state = _item(text, tip)
+            state.setForeground(theme.color("muted" if entry.state in ("run", "planned")
+                                            and not entry.left_out else "warning"))
+            self.merge_table.setItem(row, 4, state)
+        if rows:
+            last = len(rows)
+            for column, value in enumerate(("Total", comparison.imported, comparison.merged,
+                                            comparison.imported - comparison.merged or "",
+                                            "")):
+                cell = _item(value)
+                font = cell.font()
+                font.setBold(True)
+                cell.setFont(font)
+                self.merge_table.setItem(last, column, cell)
+        saved = comparison.imported - comparison.merged
+        parts = []
+        if saved > 0:
+            parts.append(f"Merging saves {saved} model slot(s): {comparison.imported} as "
+                         f"imported → {comparison.merged}.")
+        elif comparison.imported:
+            parts.append(f"The project's {comparison.imported} model(s) take a slot each — "
+                         "no build merges them yet.")
+        left_out = sum(len(r.left_out) for r in comparison.rows)
+        if left_out:
+            parts.append(f"{left_out} model(s) the merges left out count as they are "
+                         "(see State).")
+        if comparison.pending:
+            parts.append("Not run or planned yet (counted as imported): "
+                         + ", ".join(comparison.pending) + " — Plan shows the parts.")
+        if comparison.sounds_imported:
+            parts.append(f"Sounds the models play: {comparison.sounds_imported} as imported, "
+                         f"{comparison.sounds_merged} after merge (merging does not drop "
+                         "sounds; client sounds go to generic on ReHLDS).")
+        self.saved_label.setText("  ".join(parts))
 
     def _fill_maps_table(self) -> None:
         self.maps_table.setRowCount(len(self._maps))
         for row, (name, res) in enumerate(self._maps.items()):
             lines = self._lines(res)
             self.maps_table.setItem(row, 0, _item(name))
+            before = self._lines(res, True)["models"]
+            cell = _item(f"{before.used} / {before.limit}")
+            cell.setForeground(theme.color(LEVEL_TOKEN[before.level]))
+            self.maps_table.setItem(row, 2, cell)
             worst = "ok"
-            for column, key in enumerate(("models", "sounds", "generic"), 1):
+            for column, key in zip((1, 3, 4), ("models", "sounds", "generic"), strict=True):
                 line = lines[key]
                 cell = _item(f"{line.used} / {line.limit}")
                 cell.setForeground(theme.color(LEVEL_TOKEN[line.level]))
@@ -343,7 +449,7 @@ class ServerWindow(QDialog):
             cell = _item(status)
             cell.setForeground(theme.color(LEVEL_TOKEN[worst] if res is not None
                                            else "muted"))
-            self.maps_table.setItem(row, 4, cell)
+            self.maps_table.setItem(row, 5, cell)
 
     # -- unprecache ----------------------------------------------------------
     def _unprecache_tab(self) -> QWidget:

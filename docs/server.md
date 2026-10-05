@@ -30,8 +30,19 @@ players, shells; minus what you unprecache). A line above the bars says
 whether it fits and how many model slots are free. What else ReGameDLL
 (effect sprites, gibs, hostages) and the AMXX plugins precache the studio
 cannot see: enter those counts once (saved in the project; `rescount` /
-`reslist` on a ReHLDS server tell them). Imported models count once a build
-merges them. Choose
+`reslist` on a ReHLDS server tell them).
+
+The bars count the project **after merge**: each build's parts, the models
+no build takes and the models a merge left out (both stay as they are). Above the bars a second line
+tells the same map **as imported** — every weapon a slot of its own — so you
+see whether the server fits only thanks to merging. The tab *As imported →
+after merge* lists every build (as imported, after merge, slots saved, and
+whether the numbers come from its last run, its plan or — not run yet — as
+imported) and, per category, the models no build takes; a model and its
+swap-hands copy are one weapon. Models a merge left out (multi-part, no
+hands found…) are named in its *State* and counted as they are. *Every map*
+shows both counts for each map. Sounds are client sounds (event 5004) in
+both columns — merging does not drop them. Choose
 where your weapon plugin puts the view models' client sounds — on ReHLDS
 `precache_generic` (4096 slots) keeps them off the 512 sounds. Bars turn
 amber past 90 % and red over the limit; *Every map* lists them all. The line

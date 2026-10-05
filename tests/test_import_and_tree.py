@@ -122,10 +122,10 @@ def test_budget_counts_a_map_from_anywhere(tmp_path: Path) -> None:
     project = Project.create(tmp_path / "pack")
     window = ServerWindow(project)
     try:
-        assert window.verdict.text().startswith("Without a map: fits")
+        assert window.verdict_text().startswith("Without a map, after merge: fits")
         window.add_map(bsp)
         assert window.map_box.currentText() == "zm_far"
         assert window.bars["models"].numbers.text().startswith("322 / 512")  # 200+2+120
-        assert window.verdict.text() == "With zm_far: fits — 190 model slot(s) free."
+        assert window.verdict_text() == "With zm_far, after merge: fits — 190 model slot(s) free"
     finally:
         window.close()
