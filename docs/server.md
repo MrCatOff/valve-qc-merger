@@ -114,6 +114,29 @@ Build ▸ **Export server package…** (Ctrl+Shift+E) writes
   sounds the models play that nothing provides, builds left out (not run or
   not compiled).
 
+### Updates: new names for what changed
+
+A client downloads a file only when it has none of that name: update
+`models/v_ak47.mdl` in place and everyone who has the old one keeps it —
+and a consistency check (ReChecker, `mp_consistency`) kicks them. So each
+export remembers itself (`vqm_package.json`) and the next one, into the same
+folder, compares:
+
+- a changed model gets a new name — `_v2`, `_v3`… — together with its
+  `T.mdl` and `NN.mdl` files (the sequence-group paths inside the model are
+  rewritten), and so does a changed effect sprite; the include, the `.res`,
+  the ReChecker rules and the packed manifests name the new files;
+- `update/cstrike/` holds only the new and changed files (what to upload to
+  the server and FastDL) and `update/removed.txt` what the last export had
+  and this one no longer has (delete it);
+- what cannot be renamed — a weapon HUD file (`weapon_*.txt` is named after
+  the weapon), its sheets, a sound a compiled model plays — is listed as
+  *changed in place* in the report: rename it in the project to reach every
+  player.
+
+The `cstrike/` tree is rebuilt on every export. Deploy and the package now
+also copy a model's `NN.mdl` sequence-group files.
+
 ## Sprites and weapon HUDs
 
 The project's **sprite library** (`<project>/sprites/`, mirroring the game's

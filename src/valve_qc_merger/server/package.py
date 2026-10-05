@@ -14,7 +14,10 @@
   ``maps/<map>.res`` to make a map send them);
 - ``rechecker/resources.ini`` — ReChecker rules: every packed model and
   sprite with its hash accepted, any modified copy kicked;
-- ``package_report.txt`` — files, sizes and what a new player downloads.
+- ``package_report.txt`` — files, sizes and what a new player downloads;
+- ``update/`` — from the second export on: only the new and changed files
+  (changed models and sprites get new names, see :mod:`.versions`) and
+  ``removed.txt``; ``vqm_package.json`` remembers the export.
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ class PackageResult:
     hud_files: list[str] = field(default_factory=list)  # HUD txt + sheets (generic)
     missing_sounds: list[str] = field(default_factory=list)
     skipped_builds: list[str] = field(default_factory=list)  # not run / not compiled
+    versions: object = None  # a versions.VersionReport
 
     @property
     def total(self) -> int:
@@ -69,9 +73,13 @@ def _manifest(path: Path) -> dict[str, dict[str, object]]:
 def export_package(project: Project, out: Path, builds: list[str] | None = None) -> PackageResult:
     from valve_qc_merger.project import sounds as library
     from valve_qc_merger.project.model import MANIFEST_SUFFIXES, ProjectError
+    from valve_qc_merger.server import versions
     from valve_qc_merger.server.budget import _CLIENT_SOUND
     out = Path(out)
     mod = out / MOD_FOLDER
+    previous = versions.load_state(out)
+    if previous is not None and mod.is_dir():
+        shutil.rmtree(mod)  # our own tree from the last export: rebuilt from scratch
     result = PackageResult(out)
     names = builds if builds is not None else sorted(project.builds)
     for name in names:
@@ -85,7 +93,8 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
             shutil.copy2(source, destination)
             relative = destination.relative_to(mod).as_posix()
             result.files[relative] = destination.stat().st_size
-            if relative.lower().endswith(".mdl") and not relative.lower().endswith("t.mdl"):
+            if relative.lower().endswith(".mdl") and not re.search(
+                    r"(?i)(t|\d\d)\.mdl$", relative):
                 result.models.append(relative)
             elif source.suffix.lower() in MANIFEST_SUFFIXES:
                 for weapon, entry in _manifest(source).items():
@@ -119,6 +128,11 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
             result.hud_files.append(game_path)
         elif name.lower().endswith(".spr"):
             result.sprites.append(game_path)
+    published, result.versions, state = versions.apply_versions(
+        mod, result.files, previous, set(result.models) | set(result.sprites))
+    _publish(result, mod, published, MANIFEST_SUFFIXES)
+    versions.write_update(out, mod, result.versions)
+    (out / versions.STATE_FILE).write_text(json.dumps(state, indent=1), encoding="utf-8")
     (out / "amxx").mkdir(parents=True, exist_ok=True)
     (out / "amxx" / "vqm_resources.inc").write_text(
         amxx_include(result, project.settings.client_sounds, project.name), encoding="utf-8")
@@ -129,6 +143,29 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
         rules({path: mod / path for path in result.files}), encoding="utf-8")
     (out / "package_report.txt").write_text(report(result), encoding="utf-8")
     return result
+
+
+def _publish(result: PackageResult, mod: Path, published: dict[str, str],
+             manifest_suffixes: tuple[str, ...] | frozenset[str]) -> None:
+    """Point the result at the published (versioned) names; rewrite the
+    model names inside the packed build manifests."""
+    result.files = {published.get(p, p): (mod / published.get(p, p)).stat().st_size
+                    for p in result.files}
+    result.models = sorted((published.get(m, m) for m in result.models), key=str.lower)
+    result.sprites = [published.get(s, s) for s in result.sprites]
+    result.hud_files = [published.get(h, h) for h in result.hud_files]
+    renamed = {Path(a).name: Path(b).name for a, b in published.items() if a != b}
+    for entry in result.weapons.values():
+        model = str(entry.get("model", ""))
+        entry["model"] = published.get(model, model)
+    if not renamed:
+        return
+    for path in result.files:
+        if Path(path).suffix.lower() in manifest_suffixes:
+            text = (mod / path).read_text(encoding="utf-8")
+            for old, new in renamed.items():
+                text = re.sub(rf"(?<![\w.]){re.escape(old)}(?![\w])", new, text)
+            (mod / path).write_text(text, encoding="utf-8")
 
 
 def _ident(text: str) -> str:
@@ -232,6 +269,9 @@ def report(result: PackageResult) -> str:
     if result.skipped_builds:
         lines += ["", "Builds left out (not run or not compiled): "
                   + ", ".join(result.skipped_builds)]
+    if result.versions is not None:
+        from valve_qc_merger.server.versions import report_lines
+        lines += ["", *report_lines(result.versions)]
     lines += ["", f"Upload {MOD_FOLDER}/ to the server and to the sv_downloadurl host "
               "(FastDL) as is; add amxx/vqm_resources.inc to your weapon plugin; append "
               "rechecker/resources.ini to ReChecker's resources.ini to kick modified copies."]

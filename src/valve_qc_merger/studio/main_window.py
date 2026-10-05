@@ -721,6 +721,10 @@ class MainWindow(QMainWindow):
                 self.log.append_line(line if not line.startswith("  sound/")
                                      else f"warn: missing {line.strip()}")
         detail = f"{len(result.files)} files, {result.total / 1048576:.1f} MB → {out}"
+        versions = result.versions
+        if versions is not None and not versions.first:
+            detail += (f"; update/ holds {len(versions.upload)} new or changed file(s)"
+                       if versions.upload else "; nothing changed since the last export")
         if result.missing_sounds or result.skipped_builds:
             self.toast.show_message("warning", "Server package exported with gaps",
                                     f"{detail}; see the log for what is missing")

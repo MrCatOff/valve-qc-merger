@@ -18,6 +18,7 @@ copies because the services sanitise file names in place.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -903,7 +904,8 @@ class Project:
     # -- deploy ---------------------------------------------------------------
     def deploy_files(self, name: str, root: Path | None = None) -> list[tuple[Path, Path]]:
         """``(source, destination)`` of everything Deploy copies for a build:
-        each compiled model (+ its ``T.mdl`` texture file) and the manifest,
+        each compiled model (+ its ``T.mdl`` texture file and ``NN.mdl``
+        sequence groups) and the manifest,
         renamed ``<output name>_models.<ext>`` so builds don't overwrite each
         other's. Player models go to ``<dir>/<model>/<model>.mdl``."""
         from valve_qc_merger.services.compile import compiled_model_path
@@ -924,7 +926,8 @@ class Project:
             if not mdl.exists():
                 missing.append(mdl.name)
                 continue
-            for path in (mdl, mdl.with_name(f"{mdl.stem}T.mdl")):
+            groups = sorted(mdl.parent.glob(f"{glob.escape(mdl.stem)}[0-9][0-9].mdl"))
+            for path in (mdl, mdl.with_name(f"{mdl.stem}T.mdl"), *groups):
                 if path.exists():
                     folder = target / mdl.stem if players else target
                     pairs.append((path, folder / path.name))
