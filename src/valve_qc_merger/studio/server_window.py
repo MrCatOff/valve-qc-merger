@@ -118,6 +118,9 @@ class ServerWindow(QDialog):
         from valve_qc_merger.studio.maps_panel import MapsPanel
         self.maps_panel = MapsPanel(project)
         self.tabs.addTab(self.maps_panel, icon("layers"), "Maps")
+        from valve_qc_merger.studio.download_panel import DownloadPanel
+        self.download = DownloadPanel(project)
+        self.tabs.addTab(self.download, icon("file-down"), "Download")
         from valve_qc_merger.studio.fastdl_panel import FastDlPanel
         self.fastdl = FastDlPanel(project)
         self.tabs.addTab(self.fastdl, icon("rocket"), "FastDL")

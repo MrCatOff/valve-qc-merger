@@ -43,6 +43,7 @@ class MapCheck:
     res_state: str = "none"  # none | ok | outdated
     res_extra: list[str] = field(default_factory=list)  # .res lines naming no file
     res_listed: list[str] = field(default_factory=list)  # the .res as it is
+    download: int = 0  # bytes a player without the map downloads (BSP + its files)
 
     @property
     def to_write(self) -> list[str]:
@@ -126,6 +127,13 @@ def check_map(path: Path, inventory: FolderInventory,
             result.missing.append(wanted)
         elif all(f.root.name.lower() == "valve" for f in holders):
             result.stock.append(wanted)
+    sizes = {}
+    for folder in [inventory, *(f for f in fallback if f.root.name.lower() != "valve")]:
+        for wanted in needs.res + needs.precached:
+            actual = folder.actual(wanted)
+            if actual is not None and wanted.lower() not in sizes:
+                sizes[wanted.lower()] = folder.files[actual]
+    result.download = Path(path).stat().st_size + sum(sizes.values())
     res_file = Path(path).with_suffix(".res")
     if res_file.is_file():
         listed = parse_res(res_file.read_text(encoding="latin-1"))

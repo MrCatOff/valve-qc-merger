@@ -30,7 +30,8 @@ from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.icons import icon
 
 RES_TEXT = {"none": "none", "ok": "up to date", "outdated": "outdated"}
-COLUMNS = ["Map", "Cycle", "Model slots", "Entities", "Needs", "Missing", ".res"]
+COLUMNS = ["Map", "Cycle", "Model slots", "Entities", "Needs", "Missing", ".res",
+           "Download"]
 
 
 def _cell(text: object, tip: str = "", token: str | None = None) -> QTableWidgetItem:
@@ -195,6 +196,10 @@ class MapsPanel(QWidget):
                 state = RES_TEXT[check.res_state]
                 token = "success" if check.res_state == "ok" else "warning"
             self.table.setItem(row, 6, _cell(state, "", token))
+            from valve_qc_merger.server.download import FASTDL_BPS, duration, human
+            self.table.setItem(row, 7, _cell(
+                human(check.download), f"the BSP and its files; about "
+                f"{duration(check.download, FASTDL_BPS)} over FastDL"))
         self._show_details()
 
     def current(self) -> str | None:

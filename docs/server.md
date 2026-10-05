@@ -2,7 +2,8 @@
 
 The studio targets servers on **ReHLDS + ReGameDLL + ReAPI**. Project ▸
 **Server tools…** (Ctrl+Shift+S, toolbar *Server*) opens one window with the
-tabs Budget, Doctor, Unprecache, Config, Entities, Maps and FastDL (each below).
+tabs Budget, Doctor, Unprecache, Config, Entities, Maps, Download and FastDL
+(each below).
 
 ## Limits
 
@@ -295,7 +296,8 @@ its sky, its detail textures or its overview. Those belong in
 textures and a black sky. The **Maps** tab lists every map of the game
 folder and of `mapcycle.txt` with its model slots (brush models + entity
 models), entities, what it needs and what no folder has, and the state of
-its `.res` (none, outdated, up to date, not needed). The details below show
+its `.res` (none, outdated, up to date, not needed) and what a player
+without the map downloads (the BSP and its files). The details below show
 each file: in the `.res`, not in it yet, missing, or a base-game file every
 client has (`valve/`: left out of the `.res`). A map the mapcycle names but
 `maps/` lacks is flagged.
@@ -305,6 +307,19 @@ Needs are read from the BSP: worldspawn `wad` (WADs at the mod's top),
 (its `gfx/<name>.tga` detail textures) and `overviews/<map>.txt` with its
 image. **Write .res for selected** writes the files (an old one is kept as
 `.bak`). `valve_qc_merger.server.maps` does it without Qt.
+
+## Download size
+
+The **Download** tab counts what a new player downloads from the package
+(compiled builds with their companions and manifests, the client sounds
+their models play, the sprite library — maps add their own, see Maps), by
+kind, with rough times (FastDL ~2 MB/s; the engine's own download ~30 KB/s,
+`sv_rehlds_force_dlmax 1` helps). *Ways to save* lists, biggest saving
+first: textures no skin of a model uses (studiomdl packs every texture of
+the QC), textures over 512 px (the renderer resamples them down anyway),
+44.1 kHz or stereo sounds (22.05 kHz mono is what the engine mixes; Sounds ▸
+Fix converts) and identical files under two names. *Largest files* shows
+where the bytes go. `valve_qc_merger.server.download` is Qt-free.
 
 ## FastDL check
 
