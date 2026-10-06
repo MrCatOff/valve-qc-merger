@@ -162,6 +162,9 @@ class Settings:
     # per client sound (path under sound/, lower case): "sound" | "generic"
     # overriding the automatic choice (attack sequences -> sound)
     sound_precache: dict[str, str] = field(default_factory=dict)
+    # sound (lower case) -> the sound to play instead (Find similar sounds):
+    # applied to the sound events of every model a build stages
+    sound_aliases: dict[str, str] = field(default_factory=dict)
 
 
 # where Deploy puts a build's models, under the game folder
@@ -349,7 +352,9 @@ class Project:
             unprecache_replace=str(settings.get("unprecache_replace", "")),
             count_stock=bool(settings.get("count_stock", True)),
             sound_precache={str(k): str(v) for k, v in
-                            dict(settings.get("sound_precache", {})).items()})
+                            dict(settings.get("sound_precache", {})).items()},
+            sound_aliases={str(k): str(v) for k, v in
+                           dict(settings.get("sound_aliases", {})).items()})
         project.categories = list(meta.get("categories", []))
         for entry in data.get("assets", []):
             asset = Asset(**entry)
@@ -378,7 +383,9 @@ class Project:
                          "unprecache_replace": self.settings.unprecache_replace,
                          "count_stock": self.settings.count_stock,
                          "sound_precache": dict(sorted(
-                             self.settings.sound_precache.items()))},
+                             self.settings.sound_precache.items())),
+                         "sound_aliases": dict(sorted(
+                             self.settings.sound_aliases.items()))},
             "assets": [_asset_dict(a) for a in sorted(self.assets.values(),
                                                       key=lambda a: (a.kind, a.name))],
             "builds": [_build_dict(b) for b in self.builds.values()],
@@ -864,6 +871,8 @@ class Project:
         staged.mkdir(parents=True)
         for asset in assets:
             shutil.copytree(self.asset_dir(asset.name), staged / asset.name)
+        if self.settings.sound_aliases:
+            self._alias_staged_sounds(staged, reporter)
         reporter.log(f"build {name}: {build.kind} over {len(assets)} asset(s)")
         options = dict(build.options)
         models_dir = staged
@@ -882,6 +891,21 @@ class Project:
             models_dir = work / "retarget"
             options["shared_hands"] = True
         return assets, models_dir, options, notes
+
+    def _alias_staged_sounds(self, staged: Path, reporter: Reporter) -> None:
+        """Point the staged models' sound events at the sounds they share
+        (Find similar sounds); the assets themselves stay as imported."""
+        from valve_qc_merger.project.sounds import apply_aliases
+        changed = 0
+        for qc in staged.glob("*/*.qc"):
+            text = qc.read_text(encoding="latin-1")
+            new = apply_aliases(text, self.settings.sound_aliases)
+            if new != text:
+                qc.write_text(new, encoding="latin-1")
+                changed += 1
+        if changed:
+            reporter.log(f"  shared sounds: {len(self.settings.sound_aliases)} alias(es) "
+                         f"applied to {changed} model(s)")
 
     @staticmethod
     def _fold_notes(result: ServiceResult, notes: list[str]) -> None:

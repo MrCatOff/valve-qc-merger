@@ -114,6 +114,30 @@ speaker button in the viewport's bar turns event sounds off.
 `valve_qc_merger.sound.wav` (read/check/fix, Qt-free) and
 `valve_qc_merger.project.sounds` (the library) do the work.
 
+### Find similar sounds
+
+**Project ▸ Find similar sounds…** groups the library's sounds that could be
+one file, on three levels:
+
+- **identical file** — the same bytes under two names;
+- **same sound, saved another way** — another rate, stereo/mono, bit depth,
+  gain or silence at the ends (decoded to mono 11025 Hz, ends trimmed, peak
+  normalised, cross-correlated >= 0.97);
+- **similar** — a close recording (what plays when, the loudness shape and the
+  spectrum; >= 0.9, and never two sounds whose names give them different jobs:
+  a clip going in and a knife hit). Listen first (double-click plays).
+
+A stock sound the game folder has and ReGameDLL precaches anyway is the best
+one to keep — nothing to download, no slot. Identical and same-sound groups
+are ticked; *Share the ticked groups* makes every other member play the kept
+one. No file changes: the project remembers the aliases and every build
+points its staged models' sound events at the kept sound (the Budget, the
+package and the include follow; *Shared* lists them and gives a sound its own
+file back). Only sounds a model plays can be shared this way — a sound your
+plugin names is shown ("your plugin names it") so you can point the plugin at
+the kept one. Sounds the game DLL precaches (stock) are never counted for the
+models: they cost nothing.
+
 ## Server package
 
 Build ▸ **Export server package…** (Ctrl+Shift+E) writes

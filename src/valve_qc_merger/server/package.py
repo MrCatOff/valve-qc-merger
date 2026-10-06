@@ -83,7 +83,7 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
     if previous is not None and mod.is_dir():
         shutil.rmtree(mod)  # our own tree from the last export: rebuilt from scratch
     result = PackageResult(out)
-    from valve_qc_merger.project.sounds import precache_kinds
+    from valve_qc_merger.project.sounds import project_sound_kinds
     names = builds if builds is not None else sorted(project.builds)
     texts: list[str] = []
     for name in names:
@@ -111,9 +111,10 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
             texts.append(text)
             for sound in _CLIENT_SOUND.findall(text):
                 result.client_sounds.append(sound.replace("\\", "/"))
-    result.client_sounds = sorted(set(result.client_sounds), key=str.lower)
-    kinds = precache_kinds(texts, project.settings.client_sounds,
-                           project.settings.sound_precache)
+    kinds = project_sound_kinds(project, texts)
+    # stock sounds (the game precaches them) and sounds aliased away are not ours
+    by_key = {s.lower(): s for s in result.client_sounds}
+    result.client_sounds = sorted({by_key.get(k, k) for k in kinds}, key=str.lower)
     result.server_sounds = [s for s in result.client_sounds
                             if kinds.get(s.lower()) == "sound"]
     for sound in result.client_sounds:

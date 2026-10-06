@@ -142,17 +142,64 @@ def client_sound_events(qc_text: str) -> list[tuple[str, str]]:
     return out
 
 
+def resolve_alias(aliases: dict[str, str], sound: str) -> str:
+    """The sound ``sound`` is played as (following a chain of aliases)."""
+    key, seen = sound_key(sound), set()
+    while key in aliases and key not in seen:
+        seen.add(key)
+        key = sound_key(aliases[key])
+    return key
+
+
+_EVENT_PATH = re.compile(r'(\bevent\s+(?:5004|1004|1008)\s+-?\d+\s+")([^"]+)(")',
+                         re.IGNORECASE)
+
+
+def apply_aliases(qc_text: str, aliases: dict[str, str]) -> str:
+    """``qc_text`` with every sound event path replaced by its alias."""
+    if not aliases:
+        return qc_text
+    keys = {sound_key(k): v for k, v in aliases.items()}
+
+    def swap(match: re.Match[str]) -> str:
+        key = sound_key(match.group(2))
+        if key not in keys:
+            return match.group(0)
+        target = resolve_alias(keys, key)
+        return f"{match.group(1)}{target}{match.group(3)}"
+    return _EVENT_PATH.sub(swap, qc_text)
+
+
+def stock_sounds() -> set[str]:
+    """Sounds the game DLL precaches on every map (ReGameDLL, measured)."""
+    from valve_qc_merger.server.stock import PRECACHED
+    return {sound_key(s) for s in PRECACHED["sounds"]}
+
+
+def project_sound_kinds(project: Project, qc_texts: list[str]) -> dict[str, str]:
+    """:func:`precache_kinds` with the project's mode, choices and aliases;
+    sounds the game precaches anyway (stock) left out — they cost nothing."""
+    settings = project.settings
+    kinds = precache_kinds(qc_texts, settings.client_sounds, settings.sound_precache,
+                           aliases=settings.sound_aliases)
+    stock = stock_sounds()
+    return {k: v for k, v in kinds.items() if k not in stock}
+
+
 def precache_kinds(qc_texts: list[str], default: str = "generic",
-                   overrides: dict[str, str] | None = None) -> dict[str, str]:
+                   overrides: dict[str, str] | None = None,
+                   aliases: dict[str, str] | None = None) -> dict[str, str]:
     """``{sound: "sound" | "generic"}`` for every client sound of ``qc_texts``.
     ``default`` "sound": every one through precache_sound. "generic"
     (ReHLDS): only what the shooter hears — sounds of attack sequences
     (shots, swings: the plugin plays them for the others too) still go
     through precache_sound. ``overrides`` (per sound) win."""
     overrides = {sound_key(k): v for k, v in (overrides or {}).items() if v != "auto"}
+    aliases = {sound_key(k): v for k, v in (aliases or {}).items()}
     attack: dict[str, bool] = {}
     for text in qc_texts:
         for sequence, sound in client_sound_events(text):
+            sound = resolve_alias(aliases, sound)
             attack[sound] = attack.get(sound, False) or bool(ATTACK_SEQUENCE.search(sequence))
     out = {}
     for sound, in_attack in attack.items():
@@ -199,6 +246,56 @@ def asset_sounds(project: Project) -> dict[str, set[str]]:
         if sounds:
             out[name] = sounds
     return out
+
+
+def stock_sound_files(project: Project) -> dict[str, Path]:
+    """The stock sounds (precached by the game DLL) found in the game folder
+    or the base game next to it — what a similar custom sound can become."""
+    if not project.settings.game_dir:
+        return {}
+    game = Path(project.settings.game_dir)
+    roots = [r for r in (game / "sound", game.with_name("valve") / "sound") if r.is_dir()]
+    out: dict[str, Path] = {}
+    for name in sorted(stock_sounds()):
+        for root in roots:
+            path = root / name
+            if path.is_file():
+                out[name] = path
+                break
+    return out
+
+
+def find_similar(project: Project, *, similar: bool = True,
+                 progress=None) -> list:  # noqa: ANN001 - list[SoundGroup], callback
+    """Groups of library sounds that could be one file (see
+    :mod:`valve_qc_merger.sound.similar`), with the stock sounds they match."""
+    from valve_qc_merger.sound.similar import analyse
+    shared = {sound_key(k) for k in project.settings.sound_aliases}
+    library = {name: sound_path(project, name) for name in list_sounds(project)
+               if sound_key(name) not in shared}  # already playing another one
+    users = {k: len(v) for k, v in sound_users(project).items()}
+    threshold = None if similar else 2.0  # 2.0: no pair is ever that similar
+    groups = analyse(library, stock_sound_files(project), users=users, progress=progress,
+                     **({} if threshold is None else {"similar_threshold": threshold}))
+    return groups
+
+
+def share_sounds(project: Project, members: list[str], keeper: str) -> list[str]:
+    """Make every one of ``members`` play ``keeper`` (aliases applied when a
+    build stages its models). Returns the sounds aliased."""
+    done = []
+    for name in members:
+        if sound_key(name) != sound_key(keeper):
+            project.settings.sound_aliases[sound_key(name)] = keeper
+            done.append(name)
+    project.save()
+    return done
+
+
+def unshare_sounds(project: Project, names: list[str]) -> None:
+    for name in names:
+        project.settings.sound_aliases.pop(sound_key(name), None)
+    project.save()
 
 
 def sound_users(project: Project) -> dict[str, list[str]]:

@@ -89,9 +89,8 @@ def project_load(project: Project) -> ProjectLoad:
                 load.client_sounds.add(sound.replace("\\", "/").lower())
             load.client_texts.append(text)
         load.builds.append(BuildLoad(name, inputs, paths))
-    from valve_qc_merger.project.sounds import precache_kinds
-    load.client_kinds = precache_kinds(load.client_texts, project.settings.client_sounds,
-                                       project.settings.sound_precache)
+    from valve_qc_merger.project.sounds import project_sound_kinds
+    load.client_kinds = project_sound_kinds(project, load.client_texts)
     from valve_qc_merger.project import sprites as library
     load.sprites = library.effect_sprites(project)
     load.hud_files = sorted(library.hud_files(project))
@@ -224,20 +223,17 @@ def merge_comparison(project: Project, load: ProjectLoad | None = None) -> Merge
         count = len(loose[category])
         out.rows.append(MergeRow(category or "Uncategorized", count, count, "no build",
                                  category))
-    from valve_qc_merger.project.sounds import precache_kinds
+    from valve_qc_merger.project.sounds import project_sound_kinds
     texts: dict[str, str] = {}  # asset -> its QC
     for name in project.assets:
         try:
             texts[name] = qc_file(project.asset_dir(name)).read_text(encoding="latin-1")
         except (OSError, ValueError):
             continue
-    settings = project.settings
-    imported = precache_kinds(list(texts.values()), settings.client_sounds,
-                              settings.sound_precache)
+    imported = project_sound_kinds(project, list(texts.values()))
     stays = {key(n) for r in out.rows for n in r.left_out + r.added}
     loose_names = [n for n in texts if key(n) not in covered or key(n) in stays]
-    merged = precache_kinds(load.client_texts + [texts[n] for n in loose_names],
-                            settings.client_sounds, settings.sound_precache)
+    merged = project_sound_kinds(project, load.client_texts + [texts[n] for n in loose_names])
     out.sounds_imported, out.sounds_merged = len(imported), len(merged)
     out.server_imported = sum(1 for k in imported.values() if k == "sound")
     out.server_merged = sum(1 for k in merged.values() if k == "sound")

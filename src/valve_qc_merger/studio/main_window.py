@@ -273,6 +273,8 @@ class MainWindow(QMainWindow):
                                                         self.import_sound_files)
         self.act_import_sound_dir = project_menu.addAction("Import sound folder…",
                                                            self.import_sound_folder)
+        self.act_similar_sounds = project_menu.addAction("Find similar sounds…",
+                                                         self.find_similar_sounds)
         project_menu.addSeparator()
         self.act_previews = project_menu.addAction("Weapon previews…", self.make_previews)
         self.act_server = project_menu.addAction("Server tools…", self.show_server,
@@ -507,6 +509,17 @@ class MainWindow(QMainWindow):
             self.explorer.select("sound", names[0])
             self.toast.show_message("success", f"{len(names)} sound(s) imported",
                                     "named by their path after sound/")
+
+    def find_similar_sounds(self) -> None:
+        """Project ▸ Find similar sounds: share one file between sounds that
+        are the same (or close), stock ones first."""
+        from valve_qc_merger.studio.similar_sounds import SimilarSoundsDialog
+        if self.project is None:
+            return
+        SimilarSoundsDialog(self.project, self).exec()
+        window = getattr(self, "server_window", None)
+        if window is not None and window.isVisible():
+            window.recount_sounds()
 
     def _select_sound(self, name: str) -> None:
         from valve_qc_merger.project import sounds
@@ -810,6 +823,7 @@ class MainWindow(QMainWindow):
                        self.act_new_category, self.act_new_build, self.act_server,
                        self.act_previews,
                        self.act_import_sounds, self.act_import_sound_dir,
+                       self.act_similar_sounds,
                        self.act_export_package, self.act_import_sprites,
                        self.act_new_sprite, self.act_new_hud, self.act_import_server):
             action.setEnabled(has and idle)
