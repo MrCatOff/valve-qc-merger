@@ -103,3 +103,23 @@ def test_budget_shows_both(tmp_path: Path) -> None:
         assert window.maps_table.item(row, 2).text() == "276 / 512"
     finally:
         window.close()
+
+
+def test_models_added_after_the_run_are_not_left_out(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    project.add_build(Build("pistols", "merge-v", category="pistols", retarget=True))
+    output = project.build_dir("pistols") / "output"
+    output.mkdir(parents=True)
+    (project.build_dir("pistols") / "last_run.json").write_text(json.dumps(
+        {"outputs": ["builds/pistols/output/v_pistols.qc"]}), encoding="utf-8")
+    (output / "models.ini").write_text("[v_anaconda_hands]\npev_body = 0\n", encoding="utf-8")
+    # the run saw only v_anaconda_hands: v_deagle came into the category later
+    (output / "inventory.json").write_text(json.dumps(
+        {"models": [{"name": "v_anaconda_hands"}], "failures": []}), encoding="utf-8")
+    row = {r.title: r for r in merge_comparison(project).rows}["pistols (merge-v)"]
+    assert row.added == ["v_deagle"] and not row.left_out and row.merged == 2
+    (output / "inventory.json").write_text(json.dumps(
+        {"models": [{"name": "v_anaconda_hands"}],
+         "failures": ["model 'v_deagle': multi-part weapon rejected"]}), encoding="utf-8")
+    row = {r.title: r for r in merge_comparison(project).rows}["pistols (merge-v)"]
+    assert row.left_out == ["v_deagle"] and not row.added

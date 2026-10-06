@@ -391,6 +391,12 @@ class ServerWindow(QDialog):
             saves.setForeground(theme.color("success"))
             self.merge_table.setItem(row, 3, saves)
             text, tip = entry.state, state_tip[entry.state]
+            if entry.added:
+                text += f" · {len(entry.added)} added since"
+                tip += (f"\n{len(entry.added)} model(s) came into the build after its last "
+                        "run — run it again to merge them (counted as they are until "
+                        "then):\n" + ", ".join(entry.added[:40])
+                        + (" …" if len(entry.added) > 40 else ""))
             if entry.left_out:
                 text += f" · {len(entry.left_out)} left out"
                 tip += (f"\nThe merge left out {len(entry.left_out)} model(s) — counted as "
@@ -399,7 +405,8 @@ class ServerWindow(QDialog):
                         + (" …" if len(entry.left_out) > 40 else ""))
             state = _item(text, tip)
             state.setForeground(theme.color("muted" if entry.state in ("run", "planned")
-                                            and not entry.left_out else "warning"))
+                                            and not entry.left_out and not entry.added
+                                            else "warning"))
             self.merge_table.setItem(row, 4, state)
         if rows:
             last = len(rows)

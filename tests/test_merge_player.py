@@ -140,7 +140,8 @@ def _rewrite_smds(directory: Path, edit) -> None:  # noqa: ANN001 - callable(Smd
 
 def test_oversize_model_is_left_out(tmp_path: Path) -> None:
     """A weapon whose one submodel exceeds stock studiomdl's 2048 vertices
-    would fail the whole part: it is left out (a failure), the rest merges."""
+    would fail the whole part: it stays out of the part (with --no-standalone:
+    a failure; by default: a model of its own)."""
     import dataclasses
 
     from valve_qc_merger.models.geometry import Vector3
@@ -167,10 +168,18 @@ def test_oversize_model_is_left_out(tmp_path: Path) -> None:
     for qc in (models_dir / "p_huge").glob("*.qc"):
         qc.rename(qc.with_name("p_huge.qc"))
     out = tmp_path / "out"
-    assert main(["merge-p", str(models_dir), "--out", str(out), "--name", "p_t"]) != 0
+    assert main(["merge-p", str(models_dir), "--out", str(out), "--name", "p_t",
+                 "--no-standalone"]) != 0
     qc = (out / "p_t.qc").read_text(encoding="latin-1")
     assert qc.count("studio ") == 1 and "p_huge" not in qc
     assert "p_anaconda" in (out / "models.ini").read_text()
+    # by default it is not lost: a model of its own next to the part
+    shipped = tmp_path / "shipped"
+    assert main(["merge-p", str(models_dir), "--out", str(shipped), "--name", "p_t"]) == 0
+    assert "p_huge" not in (shipped / "p_t.qc").read_text(encoding="latin-1")
+    assert (shipped / "standalone" / "p_huge" / "p_huge.qc").is_file()
+    manifest = (shipped / "models.ini").read_text()
+    assert "[p_huge]\nmodel = p_huge.mdl" in manifest and "standalone = 1" in manifest
 
 
 def test_shared_bone_under_another_parent_passes_the_gate(tmp_path: Path) -> None:

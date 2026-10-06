@@ -103,6 +103,7 @@ class MergeRow:
     category: str = ""
     left_out: list[str] = field(default_factory=list)  # weapons the merge rejected
     parts: int = 0  # the merged parts alone (``merged`` minus what was left out)
+    added: list[str] = field(default_factory=list)  # in the build, not in its last run
 
     @property
     def saved(self) -> int:
@@ -130,8 +131,9 @@ class MergeComparison:
 
     @property
     def left_out(self) -> int:
-        """Slots of the models the merges left out (in ``merged`` as they are)."""
-        return sum(r.merged - r.parts for r in self.rows if r.left_out)
+        """Slots of the models the merges left out or never saw (in ``merged``
+        as they are)."""
+        return sum(r.merged - r.parts for r in self.rows if r.left_out or r.added)
 
     @property
     def pending(self) -> list[str]:
@@ -185,14 +187,25 @@ def merge_comparison(project: Project, load: ProjectLoad | None = None) -> Merge
                 merged, state = len(weapons), "not run"
         parts_only = merged
         left_out: list[str] = []
+        added: list[str] = []
         if inside is not None:
             # a manifest names what the merge took — maybe a swap-hands copy
             taken = {key(n) for n in inside if n in project.assets}
-            left_out = sorted({n for n, w in members.items() if w not in taken},
-                              key=str.lower)
-            merged += len({members[n] for n in left_out})  # they stay as they are
+            seen = _last_run_names(project.build_dir(name) / "output") if state == "run" \
+                else None
+            for n, w in members.items():
+                if w in taken:
+                    continue
+                if seen is not None and n.lower() not in seen:
+                    added.append(n)  # imported after the run: not rejected by it
+                else:
+                    left_out.append(n)
+            left_out.sort(key=str.lower)
+            added.sort(key=str.lower)
+            # both stay as they are until the next run
+            merged += len({members[n] for n in left_out + added})
         out.rows.append(MergeRow(f"{name} ({build.kind})", len(weapons), merged, state,
-                                 build.category or "", left_out, parts_only))
+                                 build.category or "", left_out, parts_only, added))
     loose: dict[str, set[tuple[str, str]]] = {}
     for name, asset in project.assets.items():
         weapon = key(name)
@@ -215,6 +228,23 @@ def merge_comparison(project: Project, load: ProjectLoad | None = None) -> Merge
     out.sounds_merged = len(load.client_sounds | {s.lower() for n in loose_names
                                                   for s in played.get(n, ())})
     return out
+
+
+def _last_run_names(output: Path) -> set[str] | None:
+    """Lower-case names of every model the last run saw (loaded, or named in
+    a failure); None without an ``inventory.json``."""
+    import json
+    path = Path(output) / "inventory.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    names = {str(m.get("name", "")).lower() for m in data.get("models", [])
+             if isinstance(m, dict)}
+    for failure in data.get("failures", []):
+        names.update(n.lower() for n in re.findall(r"'([^']+)'", str(failure)))
+        names.update(n.lower() for n in re.findall(r"^([\w.-]+):", str(failure)))
+    return names
 
 
 def _manifest_names(output: Path) -> set[str] | None:

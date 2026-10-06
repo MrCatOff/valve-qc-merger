@@ -37,6 +37,9 @@ from valve_qc_merger.services.base import (
     Reporter,
     ServiceResult,
 )
+from valve_qc_merger.services.standalone import Rejects
+from valve_qc_merger.services.standalone import entry as standalone_entry
+from valve_qc_merger.services.standalone import ship as ship_standalone
 
 
 @dataclass
@@ -52,6 +55,8 @@ class MergeWorldOptions:
     no_pack_texture: list[str] = field(default_factory=list)
     no_verify: bool = False
     dry_run: bool = False
+    # a model the merge cannot take ships as a model of its own (standalone/)
+    standalone_rejects: bool = True
 
 
 def run_merge_world(opts: MergeWorldOptions,
@@ -70,6 +75,7 @@ def run_merge_world(opts: MergeWorldOptions,
     failures = result.failures
     loaded: list[ModelInput] = []
     skin_textures: dict[str, set[str]] = {}
+    rejects = Rejects(opts.standalone_rejects, {d.name: d for d in model_dirs})
     for done, model_dir in enumerate(model_dirs):
         reporter.check()
         reporter.progress(done, len(model_dirs), model_dir.name)
@@ -78,8 +84,8 @@ def run_merge_world(opts: MergeWorldOptions,
             model = load_player_model(model_dir)
             plan = bake_rendered_pose(model)
         except (MergeViewError, ValueError) as exc:
-            failures.append(str(exc))
-            reporter.log(f"  {model_dir.name:<20} FAIL  {exc}")
+            rejects.reject(result, reporter, model_dir.name, str(exc), "FAIL",
+                           f"not merged: {exc}")
             continue
         loaded.append(model)
         skin_textures[model.name] = skin_texture_files(model.qc_text)
@@ -107,6 +113,9 @@ def run_merge_world(opts: MergeWorldOptions,
     )
     result.data["inventory"] = inventory
     if opts.dry_run or not loaded:
+        if not opts.dry_run:
+            ship_standalone(rejects, opts.out, opts.manifest_format, result, reporter,
+                            make_entry=_entry)
         result.exit_code = EXIT_FAIL if failures else EXIT_OK
         return result
 
@@ -119,6 +128,7 @@ def run_merge_world(opts: MergeWorldOptions,
         pairs, PlayerBudget(textures=opts.texture_budget), skin_textures=skin_textures,
     )
     multi = len(parts) > 1
+    result.data["parts"] = len(parts)
     if multi:
         reporter.log(f"  split: {len(parts)} parts "
                      f"(studiomdl caps one model at 32 submodels)")
@@ -172,8 +182,15 @@ def run_merge_world(opts: MergeWorldOptions,
     if multi:
         write_manifest_data(opts.out, aggregate, opts.manifest_format)
     result.manifest = aggregate
+    ship_standalone(rejects, opts.out, opts.manifest_format, result, reporter,
+                    make_entry=_entry)
     result.exit_code = EXIT_FAIL if failures else EXIT_OK
     return result
+
+
+def _entry(directory: Path, name: str, reason: str) -> dict[str, object]:
+    # a dropped weapon plays no sequence the plugin picks: model + pev_body only
+    return standalone_entry(directory, name, reason, sequences=False)
 
 
 __all__ = ["MergeWorldOptions", "run_merge_world"]

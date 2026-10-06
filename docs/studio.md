@@ -222,11 +222,13 @@ offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
 - **Retarget a whole category**: right-click a category (or its *View
   models* group) ▸ *Retarget N view models…* — every imported view model
   without a swap-hands asset yet, in one dialog.
-- **Nothing is left out**: a merge-v build ships every model it cannot merge
-  (multi-part, other hands, unmatched rig, failed retarget) as a model of its
-  own — compiled and deployed with the parts, in the manifest with
-  `standalone = 1`, the reason and whose hands it wears. Plan shows them as
-  "on its own"; *Ship rejected models on their own* (on by default) turns it off.
+- **Nothing is left out**: merge-v, merge-p and merge-w builds ship every model
+  they cannot merge as a model of its own — compiled and deployed with the
+  parts, in the manifest with `standalone = 1` and the reason (merge-v: a
+  multi-part weapon, other hands, an unmatched rig, a failed retarget — plus
+  whose hands it wears; merge-p: a submodel too big for stock studiomdl;
+  merge-w: a pose it cannot bake). Plan shows them as "on its own"; *Ship
+  rejected models on their own* (on by default) turns it off.
 - **Builds that retarget** (merge-v with *retarget*) save what they convert
   as swap-hands assets (`<name>_hands`, like Retarget from the Explorer) and
   reuse them on the next run when their settings match — nothing is

@@ -53,6 +53,10 @@ class MergeWorldCommand(Command):
         parser.add_argument("--config", type=Path, metavar="TOML",
                             help="TOML file supplying defaults for any flag "
                                  "(explicit CLI values win)")
+        parser.add_argument("--no-standalone", dest="standalone_rejects",
+                            action="store_false",
+                            help="leave out the models the merge cannot take instead of "
+                                 "shipping each as a model of its own (standalone/<name>/)")
         parser.add_argument("--no-verify", action="store_true",
                             help="skip the post-merge verification gate")
         parser.add_argument("--dry-run", action="store_true",
@@ -73,6 +77,7 @@ _CONFIG_DEFAULTS: dict[str, object] = {
     "pack_textures": False,
     "no_pack_texture": [],
     "no_verify": False,
+    "standalone_rejects": True,
 }
 
 

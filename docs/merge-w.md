@@ -73,5 +73,8 @@ Any failed check fails the run (exit 2). `--no-verify` skips the gate.
 Same surface as `merge-p` (see `docs/merge-p.md`): `--out`,
 `--name` (default `w_merged`), `--exclude`, `--manifest-format`,
 `--texture-budget`, `--max-texture-size`, `--pack-textures`,
-`--no-pack-texture`, `--config`, `--no-verify`, `--dry-run`.
+`--no-pack-texture`, `--config`, `--no-standalone`, `--no-verify`, `--dry-run`.
+A model that cannot be read or baked ships as a model of its own
+(`standalone/<model>/`, `standalone = 1` and the `reason` in the manifest)
+unless `--no-standalone` is given.
 `configs/example_merge_world.toml` lists every config key.

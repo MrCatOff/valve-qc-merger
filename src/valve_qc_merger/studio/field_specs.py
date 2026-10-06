@@ -61,6 +61,10 @@ SPECS: dict[str, FieldSpec] = {
     "merge-v.skin_variants": FieldSpec(
         "Skins as weapon entries", "Every extra $texturegroup skin becomes a weapon entry of "
         "its own (the server can set pev->body, not the skin). Off: keep only the first skin."),
+    "standalone_rejects": FieldSpec(
+        "Ship rejected models on their own", "A model the merge cannot take becomes a "
+        "model of its own next to the parts — in the manifest with standalone = 1 and why "
+        "— instead of being left out. Each takes a model slot."),
     "merge-v.standalone_rejects": FieldSpec(
         "Ship rejected models on their own", "A model the merge cannot take (multi-part, "
         "other hands, unmatched rig, failed retarget) becomes a model of its own next to "

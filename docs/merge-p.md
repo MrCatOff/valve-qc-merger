@@ -76,9 +76,13 @@ idle animation.
 
 Each weapon becomes ONE submodel (all its meshes concatenated). A weapon
 whose submodel would exceed stock studiomdl's 2048 vertices or normals —
-normals count once per texture, as studiomdl keeps them — is left out with
-a failure line naming the counts; the rest of the pack still merges and
-compiles.
+normals count once per texture, as studiomdl keeps them — stays out of the
+part; so does a model that cannot be read or analysed. By default each is
+shipped as a model of its own: copied as it is into `standalone/<model>/`
+(`$modelname "<model>.mdl"`, compiled and deployed with the parts) and listed
+in the manifest with `model = <model>.mdl`, `pev_body = 0`, `standalone = 1`
+and the `reason`. `--no-standalone` leaves them out with a failure line
+instead.
 
 ## The verification gate
 
@@ -105,6 +109,7 @@ Any failed check fails the run (exit 2). `--no-verify` skips the gate.
 | `--pack-textures` | pack eligible textures into 512×512 atlases (skin-family textures stay standalone) |
 | `--no-pack-texture GLOB` | keep matching textures out of atlases (repeatable) |
 | `--config TOML` | supply defaults for any flag (explicit CLI values win) |
+| `--no-standalone` | leave out the models the merge cannot take instead of shipping each on its own |
 | `--no-verify` | skip the verification gate |
 | `--dry-run` | discover, sanitise and analyse only; print the inventory |
 
