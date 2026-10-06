@@ -117,3 +117,33 @@ def test_previews_from_the_studio(tmp_path: Path) -> None:
         assert "1 preview(s)" in window.log.toPlainText()
     finally:
         window.close()
+
+
+def _rifle(angle_deg: float) -> np.ndarray:
+    """Triangles of a side-on 'rifle' in the SMD frame (muzzle at -Y, up +Z):
+    a long thin barrel in front, a tall magazine and stock behind, tilted."""
+    def box(y0, y1, z0, z1):
+        corners = np.array([[x, y, z] for x in (-0.5, 0.5) for y in (y0, y1)
+                            for z in (z0, z1)])
+        faces = [(0, 1, 3), (0, 3, 2), (4, 5, 7), (4, 7, 6), (0, 1, 5), (0, 5, 4),
+                 (2, 3, 7), (2, 7, 6), (0, 2, 6), (0, 6, 4), (1, 3, 7), (1, 7, 5)]
+        return corners[np.array(faces)]
+    parts = [box(-30, 0, 0, 1.5),      # barrel, muzzle at y = -30
+             box(0, 12, -2, 3),        # receiver
+             box(2, 5, -9, -2),        # magazine hanging below
+             box(12, 22, -4, 3)]       # stock
+    tris = np.concatenate(parts)
+    a = np.radians(angle_deg)  # pitch the muzzle up: rotate in the Y-Z plane
+    rot = np.array([[1, 0, 0], [0, np.cos(a), np.sin(a)], [0, -np.sin(a), np.cos(a)]])
+    return tris @ rot.T, rot @ np.array([0.0, -1.0, 0.0])  # + the barrel's axis
+
+
+@pytest.mark.parametrize("pitch", [-15.0, 0.0, 12.0, 20.0])
+def test_side_view_levels_the_barrel(pitch: float) -> None:
+    from valve_qc_merger.preview.render import surface_samples
+    tris, direction = _rifle(pitch)
+    right, up, _view = side_view(tris.reshape(-1, 3), tris)
+    level = np.degrees(np.arctan2(direction @ up, direction @ right))
+    assert abs(level) < 1.5  # the barrel lies flat whatever the idle's pitch
+    assert direction @ right > 0  # muzzle to the right
+    assert len(surface_samples(tris[:1])) == 45  # a 9 x 9 barycentric triangle

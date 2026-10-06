@@ -226,10 +226,23 @@ def _rotate(right: np.ndarray, up: np.ndarray, angle: float) -> tuple[np.ndarray
     return right * c + up * s, up * c - right * s
 
 
-def side_view(points: np.ndarray) -> np.ndarray:
+def surface_samples(triangles: np.ndarray, per_edge: int = 8) -> np.ndarray:
+    """Points spread over (T,3,3) ``triangles`` (a barycentric grid): a long
+    barrel is two triangles, its middle has no vertex to measure."""
+    steps = np.arange(per_edge + 1) / per_edge
+    u, v = np.meshgrid(steps, steps)
+    keep = (u + v) <= 1.0 + 1e-9
+    u, v = u[keep], v[keep]
+    w = 1.0 - u - v
+    a, b, c = triangles[:, 0], triangles[:, 1], triangles[:, 2]
+    return (a[:, None] * w[None, :, None] + b[:, None] * u[None, :, None]
+            + c[:, None] * v[None, :, None]).reshape(-1, 3)
+
+
+def side_view(points: np.ndarray, triangles: np.ndarray | None = None) -> np.ndarray:
     """Camera basis rows (right, up, view) showing the weapon's right side:
     view along its thinnest axis, the muzzle to the right, up towards +Z,
-    turned a little so the outline is as flat as it gets. Points are in the
+    turned so the barrel (the top edge of the front) is level. Points are in the
     decompiled SMD frame, where a view model looks down -Y (studiomdl turns
     it by 90 degrees into the engine's +X)."""
     centered = points - points.mean(axis=0)
@@ -259,15 +272,56 @@ def side_view(points: np.ndarray) -> np.ndarray:
     tilt = np.arctan2(long_axis[1], long_axis[0])  # 0..180 degrees
     if spread[1] > 2.0 * spread[0] and np.radians(45) < tilt < np.radians(135):
         right, up = _rotate(right, up, tilt)
-    best = None
-    for angle in np.radians(np.arange(-15, 15.5, 1.0)):
-        r, u = _rotate(right, up, angle)
-        x, y = centered @ r, centered @ u
-        area = (np.ptp(x) * np.ptp(y), abs(angle))
-        if best is None or area < best[0]:
-            best = (area, r, u)
-    assert best is not None
-    return np.stack([best[1], best[2], view])
+    surface = (surface_samples(triangles) - points.mean(axis=0)) if triangles is not None \
+        and len(triangles) else centered
+    turned = 0.0
+    for _pass in range(3):  # the front moves as it turns: settle in a few steps
+        angle = barrel_tilt(surface @ right, surface @ up)
+        angle = float(np.clip(turned + angle, -np.radians(35), np.radians(35))) - turned
+        if abs(angle) < np.radians(0.5):
+            break
+        right, up = _rotate(right, up, angle)
+        turned += angle
+    return np.stack([right, up, view])
+
+
+def barrel_tilt(x: np.ndarray, y: np.ndarray, front: float = 0.5,
+                limit: float = 35.0) -> float:
+    """The angle (radians) that levels the barrel: the centre line of the
+    thinnest columns of the front ``front`` of an elongated outline (a
+    magazine, a grip or a sight makes its columns thick and is left out), as
+    the median of the pairwise slopes — robust to the odd part. 0 for a
+    round outline (a grenade) or a front too sparse to tell; never more than
+    ``limit`` degrees."""
+    if len(x) < 8:
+        return 0.0
+    spread = np.linalg.eigvalsh(np.cov(np.stack([x, y])))
+    if spread[0] <= 0 or spread[1] < 2.0 * spread[0]:
+        return 0.0
+    span = float(np.ptp(x))
+    start = float(x.max()) - front * span
+    mask = x >= start
+    count = 32
+    bins = np.floor((x[mask] - start) / (front * span) * count).clip(0, count - 1)
+    bins = bins.astype(int)
+    columns, middles, thickness = [], [], []
+    for b in range(count):
+        hit = bins == b
+        if hit.any():
+            column = y[mask][hit]
+            columns.append(start + (b + 0.5) * front * span / count)
+            middles.append(float(column.max() + column.min()) / 2)
+            thickness.append(float(np.ptp(column)))
+    if len(columns) < 6:
+        return 0.0
+    thin = np.array(thickness) <= np.percentile(thickness, 50)
+    cx, cy = np.array(columns)[thin], np.array(middles)[thin]
+    if len(cx) < 4:
+        return 0.0
+    i, j = np.triu_indices(len(cx), k=1)
+    slopes = (cy[j] - cy[i]) / (cx[j] - cx[i])
+    angle = float(np.arctan(np.median(slopes)))
+    return float(np.clip(angle, -np.radians(limit), np.radians(limit)))
 
 
 # --------------------------------------------------------------------------- #
@@ -428,7 +482,10 @@ def render_scene(scene: ModelScene, options: Options | None = None) -> Preview:
         return Preview(scene.name, np.zeros((height, width, 4), np.uint8), hands, 0,
                        warnings + ["nothing to draw"])
     world = np.concatenate(positions)
-    basis = side_view(aim_points if len(aim_points) >= 3 else world.reshape(-1, 3))
+    if len(aim_points) >= 3:  # corners come in threes: the aim cluster's triangles
+        basis = side_view(aim_points, aim_points.reshape(-1, 3, 3))
+    else:
+        basis = side_view(world.reshape(-1, 3), world)
     camera = world @ basis.T  # (T,3,3): right, up, depth
     factor = max(int(options.supersample), 1)
     big_w, big_h = width * factor, height * factor
@@ -503,5 +560,5 @@ def decode_png(data: bytes) -> np.ndarray:
     return rows[:, 1:].reshape(height, width, 4).copy()
 
 
-__all__ = ["Options", "Preview", "decode_png", "encode_png", "render_model", "render_scene",
-           "side_view", "weapon_triangles"]
+__all__ = ["Options", "Preview", "barrel_tilt", "decode_png", "encode_png", "render_model",
+           "render_scene", "side_view", "weapon_triangles"]

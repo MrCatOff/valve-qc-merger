@@ -250,7 +250,9 @@ by texture name (`hand`, `glove`, `sleeve`…), by the stock CSO hand meshes
 (their triangle counts give them away even in a decompile that lost every
 name), else by bone (hand/finger/arm bones and their chains) — then the
 weapon is posed on the first frame of its idle and turned to show its right
-side: barrel horizontal and pointing right (or left, an option), a knife
+side: barrel level — the centre line of the thinnest columns of its front
+half (the barrel, not the magazine, grip or sight under it), whatever angle
+the idle holds it at — and pointing right (or left, an option), a knife
 held upright laid down, pieces the idle parks away from the weapon (a speed
 loader under the camera, CSO's giant hidden planes) left out, a pair of
 pistols aimed by one of them. Additive parts (an ice blade, glows) are added
