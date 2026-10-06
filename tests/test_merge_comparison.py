@@ -132,14 +132,16 @@ def test_sounds_bar_says_where_client_sounds_went(tmp_path: Path) -> None:
     project = _project(tmp_path)
     window = ServerWindow(project)
     try:
-        played = window.comparison.sounds_merged
-        assert played > 0
+        comparison = window.comparison
+        played, heard = comparison.sounds_merged, comparison.server_merged
+        assert played > heard > 0  # the shots are heard by everyone, the rest by the shooter
         window.stock_box.setChecked(False)
         sounds = window.bars["sounds"]
-        assert sounds.numbers.text().startswith("0 / 512")
-        assert f"the models' {played} client sound(s) are counted in Generic" in \
-            sounds.parts.text()
-        window.client_box.setCurrentIndex(1)  # precache_sound: they count here
+        assert sounds.numbers.text().startswith(f"{heard} / 512")
+        assert "view-model sounds others hear too (shots, swings)" in sounds.parts.text()
+        assert (f"the models' {played - heard} sound(s) only the shooter hears are counted "
+                "in Generic") in sounds.parts.text()
+        window.client_box.setCurrentIndex(1)  # precache_sound: every one counts here
         assert sounds.numbers.text().startswith(f"{played} / 512")
         assert "counted in Generic" not in sounds.parts.text()
     finally:

@@ -46,8 +46,15 @@ swap-hands copy are one weapon. Models a merge left out (multi-part, no
 hands found…) are named in its *State* and counted as they are. *Every map*
 shows both counts for each map. Sounds are client sounds (event 5004) in
 both columns — merging does not drop them. Choose
-where your weapon plugin puts the view models' client sounds — on ReHLDS
-`precache_generic` (4096 slots) keeps them off the 512 sounds. Bars turn
+where your weapon plugin puts the view models' sounds. A view model's sound
+(event 5004) plays only for the shooter — the client plays it by file name,
+so on ReHLDS `precache_generic` (4096 slots) is enough and keeps it off the
+512 sounds. A shot or a swing the plugin also plays from the server
+(`emit_sound`, so the others hear it) needs `precache_sound`: in the generic
+mode the sounds of attack sequences (shoot, fire, attack, slash, stab,
+swing…) go to the Sounds bar, the rest to Generic. A sound's own choice
+(the sound panel's *Precache*: auto, precache_sound, precache_generic)
+overrides that. Bars turn
 amber past 90 % and red over the limit; *Every map* lists them all. The line
 under the bars tells how many model slots merging saved (inputs → parts per
 build).
@@ -117,10 +124,11 @@ Build ▸ **Export server package…** (Ctrl+Shift+E) writes
   models' events play, taken from the library or the game folder, under
   `sound/`. The same tree is what FastDL (`sv_downloadurl`) serves: upload it
   to the server and to the HTTP host as is.
-- `amxx/vqm_resources.inc` — for a ReAPI weapon plugin: `VQM_MODELS` and
-  `VQM_CLIENT_SOUNDS`, a `vqm_precache()` to call from `plugin_precache()`
-  (client sounds through `precache_generic` — ReHLDS's 4096 slots — or
-  `precache_sound`, following the Server window's choice), and per merged
+- `amxx/vqm_resources.inc` — for a ReAPI weapon plugin: `VQM_MODELS`,
+  `VQM_CLIENT_SOUNDS` (sounds only the shooter hears: `precache_generic`,
+  `sound/…` paths) and `VQM_SERVER_SOUNDS` (shots and swings the others hear
+  too: `precache_sound`), a `vqm_precache()` to call from `plugin_precache()`
+  — the split follows the Server window's mode and each sound's choice, and per merged
   weapon `VQM_<WEAPON>_MODEL`, `_BODY` (its `pev_body`), `_SKIN` and
   `_ANIM_<SEQUENCE>` numbers from the manifest.
 - `vqm_resources.res` — the same files as a `.res` list (copy as

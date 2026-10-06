@@ -155,6 +155,7 @@ class SoundPanel(QWidget):
     remove_requested = Signal(str)
     reveal_requested = Signal(str)
     asset_requested = Signal(str)
+    precache_changed = Signal(str, str)  # sound, "auto" | "sound" | "generic"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -216,6 +217,21 @@ class SoundPanel(QWidget):
         self.verdict = QLabel()
         self.verdict.setWordWrap(True)
         layout.addWidget(self.verdict)
+        self.precache_section = kit.section("Precache")
+        layout.addWidget(self.precache_section)
+        self.precache_box = QComboBox()
+        self.precache_box.addItem("Auto", "auto")
+        self.precache_box.addItem("precache_sound — others hear it too", "sound")
+        self.precache_box.addItem("precache_generic — only the shooter hears it", "generic")
+        self.precache_box.currentIndexChanged.connect(self._precache_chosen)
+        self.precache_hint = kit.hint(
+            "A view model's sound plays only for the shooter (precache_generic is enough on "
+            "ReHLDS). A shot or a swing the weapon plugin also plays from the server "
+            "(emit_sound) must be a precache_sound — or the others hear nothing. Auto: "
+            "sounds of attack sequences (shoot, fire, slash, stab…) go through "
+            "precache_sound.")
+        layout.addWidget(self.precache_box, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.precache_hint)
         layout.addWidget(kit.section("Played by"))
         self.users_box = QVBoxLayout()
         self.users_box.setSpacing(2)
@@ -223,8 +239,19 @@ class SoundPanel(QWidget):
         layout.addStretch(1)
 
     def show_sound(self, name: str, path: Path | None, users: list[str],
-                   can_undo: bool) -> None:
+                   can_undo: bool, precache: tuple[str, str] | None = None) -> None:
+        """``precache``: (the sound's choice, what Auto picks) for a sound a
+        model plays as a client sound; None hides the choice."""
         self.name, self.path = name, path
+        shown = precache is not None
+        for widget in (self.precache_section, self.precache_box, self.precache_hint):
+            widget.setVisible(shown)
+        if precache is not None:
+            choice, automatic = precache
+            self.precache_box.blockSignals(True)
+            self.precache_box.setItemText(0, f"Auto — precache_{automatic}")
+            self.precache_box.setCurrentIndex(max(self.precache_box.findData(choice), 0))
+            self.precache_box.blockSignals(False)
         self.title.setText(Path(name).name if name else "—")
         self.where.setText(f"sound/{name}" if name else "")
         self.undo_button.setVisible(can_undo)
@@ -264,6 +291,10 @@ class SoundPanel(QWidget):
             link.setCursor(Qt.CursorShape.PointingHandCursor)
             link.clicked.connect(lambda _=False, a=asset: self.asset_requested.emit(a))
             self.users_box.addWidget(link, 0, Qt.AlignmentFlag.AlignLeft)
+
+    def _precache_chosen(self, _index: int) -> None:
+        if self.name:
+            self.precache_changed.emit(self.name, self.precache_box.currentData())
 
     def _verdict(self, found: list[str]) -> None:
         if not found:

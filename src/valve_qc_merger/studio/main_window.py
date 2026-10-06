@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
         self.sound_panel.remove_requested.connect(self.remove_sound)
         self.sound_panel.reveal_requested.connect(self._reveal_sound)
         self.sound_panel.asset_requested.connect(self._reveal_asset)
+        self.sound_panel.precache_changed.connect(self._set_sound_precache)
         self.explorer.sprite_selected.connect(self._select_sprite)
         self.explorer.compare_requested.connect(self.compare_assets)
         self.explorer.sprite_import_requested.connect(self.import_sprites)
@@ -514,8 +515,22 @@ class MainWindow(QMainWindow):
         self.right.setCurrentWidget(self.sound_panel)
         path = sounds.sound_path(self.project, name)
         users = sounds.sound_users(self.project).get(name.lower(), [])
+        automatic = sounds.auto_precache(self.project, name)
+        precache = None if automatic is None else (
+            self.project.settings.sound_precache.get(sounds.sound_key(name), "auto"),
+            automatic)
         self.sound_panel.show_sound(name, path if path.is_file() else None, users,
-                                    sounds.can_undo_fix(self.project, name))
+                                    sounds.can_undo_fix(self.project, name), precache)
+
+    def _set_sound_precache(self, name: str, choice: str) -> None:
+        from valve_qc_merger.project import sounds
+        if self.project is None:
+            return
+        sounds.set_precache(self.project, name, choice)
+        self.log.append_line(f"sound/{name}: precache {choice}")
+        window = getattr(self, "server_window", None)
+        if window is not None and window.isVisible():
+            window.recount_sounds()
 
     def fix_sounds(self, names: list[str]) -> None:
         from valve_qc_merger.project import sounds

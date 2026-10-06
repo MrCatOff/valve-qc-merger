@@ -41,6 +41,9 @@ class ProjectLoad:
     client_sounds: set[str] = field(default_factory=set)  # relative to sound/
     sprites: list[str] = field(default_factory=list)  # effect sprites: model slots
     hud_files: list[str] = field(default_factory=list)  # weapon HUD txt + sheets: generic
+    # client sound -> "sound" | "generic" (sounds.precache_kinds); {} = by client_sounds_as
+    client_kinds: dict[str, str] = field(default_factory=dict)
+    client_texts: list[str] = field(default_factory=list)  # the run builds' QCs
 
     @property
     def models(self) -> list[str]:
@@ -84,7 +87,11 @@ def project_load(project: Project) -> ProjectLoad:
                 continue
             for sound in _CLIENT_SOUND.findall(text):
                 load.client_sounds.add(sound.replace("\\", "/").lower())
+            load.client_texts.append(text)
         load.builds.append(BuildLoad(name, inputs, paths))
+    from valve_qc_merger.project.sounds import precache_kinds
+    load.client_kinds = precache_kinds(load.client_texts, project.settings.client_sounds,
+                                       project.settings.sound_precache)
     from valve_qc_merger.project import sprites as library
     load.sprites = library.effect_sprites(project)
     load.hud_files = sorted(library.hud_files(project))
@@ -115,6 +122,8 @@ class MergeComparison:
     rows: list[MergeRow] = field(default_factory=list)
     sounds_imported: int = 0  # sounds the imported models play
     sounds_merged: int = 0  # ... the merged models and the models left as they are
+    server_imported: int = 0  # of those, the ones that go through precache_sound
+    server_merged: int = 0
 
     @property
     def imported(self) -> int:
@@ -215,18 +224,23 @@ def merge_comparison(project: Project, load: ProjectLoad | None = None) -> Merge
         count = len(loose[category])
         out.rows.append(MergeRow(category or "Uncategorized", count, count, "no build",
                                  category))
-    played: dict[str, set[str]] = {}  # view-model client sounds (event 5004)
+    from valve_qc_merger.project.sounds import precache_kinds
+    texts: dict[str, str] = {}  # asset -> its QC
     for name in project.assets:
         try:
-            text = qc_file(project.asset_dir(name)).read_text(encoding="latin-1")
+            texts[name] = qc_file(project.asset_dir(name)).read_text(encoding="latin-1")
         except (OSError, ValueError):
             continue
-        played[name] = {s.replace("\\", "/").lower() for s in _CLIENT_SOUND.findall(text)}
-    out.sounds_imported = len({s.lower() for sounds in played.values() for s in sounds})
-    rejected = {key(n) for r in out.rows for n in r.left_out}
-    loose_names = {n for n in project.assets if key(n) not in covered or key(n) in rejected}
-    out.sounds_merged = len(load.client_sounds | {s.lower() for n in loose_names
-                                                  for s in played.get(n, ())})
+    settings = project.settings
+    imported = precache_kinds(list(texts.values()), settings.client_sounds,
+                              settings.sound_precache)
+    stays = {key(n) for r in out.rows for n in r.left_out + r.added}
+    loose_names = [n for n in texts if key(n) not in covered or key(n) in stays]
+    merged = precache_kinds(load.client_texts + [texts[n] for n in loose_names],
+                            settings.client_sounds, settings.sound_precache)
+    out.sounds_imported, out.sounds_merged = len(imported), len(merged)
+    out.server_imported = sum(1 for k in imported.values() if k == "sound")
+    out.server_merged = sum(1 for k in merged.values() if k == "sound")
     return out
 
 
@@ -302,7 +316,8 @@ def budget(map_resources: MapResources | None, load: ProjectLoad, *,
            stock_models: int = 0, stock_sounds: int = 0, unmerged: int = 0,
            left_out: int = 0,
            as_imported: int | None = None,
-           client_sounds: int | None = None) -> dict[str, BudgetLine]:
+           client_sounds: int | None = None,
+           server_sounds: int | None = None) -> dict[str, BudgetLine]:
     """Slots per kind (models / sounds / generic) for one map ("no map": the
     project and the extras alone). ``client_sounds_as``: where the plugin
     precaches the view models' client sounds — ``generic`` (ReHLDS: 4096
@@ -314,7 +329,9 @@ def budget(map_resources: MapResources | None, load: ProjectLoad, *,
     ``left_out``: models a build's merge rejected (they stay as they are);
     ``as_imported``: count the project's models as imported instead (no
     merge: every weapon a slot) — the before of before/after.
-    ``client_sounds``: the client sound count to use (default: the builds')."""
+    ``client_sounds`` / ``server_sounds``: the view-model sounds that go
+    through precache_generic / precache_sound (default: the builds', split
+    by ``load.client_kinds`` — or all by ``client_sounds_as`` without it)."""
     extra = extra or {}
     parts: dict[str, list[tuple[str, int]]] = {"models": [], "sounds": [], "generic": []}
     if map_resources is not None:
@@ -331,10 +348,19 @@ def budget(map_resources: MapResources | None, load: ProjectLoad, *,
         parts["models"].append(("project models as imported", as_imported))
     parts["models"].append(("project sprites", len(load.sprites)))
     parts["generic"].append(("weapon HUD files", len(load.hud_files)))
-    target = "sounds" if client_sounds_as == "sound" else "generic"
-    parts[target].append(("view-model client sounds",
-                          len(load.client_sounds) if client_sounds is None
-                          else int(client_sounds)))
+    if client_sounds is not None:
+        generic, sound = int(client_sounds), int(server_sounds or 0)
+    elif load.client_kinds:
+        sound = sum(1 for k in load.client_kinds.values() if k == "sound")
+        generic = len(load.client_kinds) - sound
+    elif client_sounds_as == "sound":
+        generic, sound = 0, len(load.client_sounds)
+    else:
+        generic, sound = len(load.client_sounds), 0
+    if generic or client_sounds_as != "sound":
+        parts["generic"].append(("view-model sounds only the shooter hears", generic))
+    if sound or client_sounds_as == "sound":
+        parts["sounds"].append(("view-model sounds others hear too (shots, swings)", sound))
     if stock_models:
         parts["models"].append(("ReGameDLL: weapons, players, items, effect sprites",
                                 int(stock_models)))

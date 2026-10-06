@@ -264,9 +264,12 @@ class ServerWindow(QDialog):
         settings = self.project.settings
         for key, spin in self.extra.items():
             setattr(settings, f"extra_{key}", spin.value())
+        mode_changed = settings.client_sounds != self.client_box.currentData()
         settings.client_sounds = self.client_box.currentData()
         settings.count_stock = self.stock_box.isChecked()
         self.project.save()
+        if mode_changed:  # which sounds go where follows the mode
+            self.recount_sounds()
         self.settings_changed.emit()
         self._show_budget()
         self._fill_maps_table()
@@ -297,6 +300,14 @@ class ServerWindow(QDialog):
         self._show_budget()
         self._fill_maps_table()
 
+    def recount_sounds(self) -> None:
+        """Re-split the client sounds (the mode or a sound's choice changed)."""
+        from valve_qc_merger.server.budget import merge_comparison
+        self.load = project_load(self.project)
+        self.comparison = merge_comparison(self.project, self.load)
+        self._show_budget()
+        self._fill_maps_table()
+
     def _lines(self, map_resources: MapResources | None,
                as_imported: bool = False) -> dict[str, BudgetLine]:
         extra = {key: spin.value() for key, spin in self.extra.items()}
@@ -309,8 +320,12 @@ class ServerWindow(QDialog):
                       unmerged=self.comparison.unmerged,
                       left_out=self.comparison.left_out,
                       as_imported=self.comparison.imported if as_imported else None,
-                      client_sounds=(self.comparison.sounds_imported if as_imported
-                                     else self.comparison.sounds_merged))
+                      client_sounds=(
+                          self.comparison.sounds_imported - self.comparison.server_imported
+                          if as_imported else
+                          self.comparison.sounds_merged - self.comparison.server_merged),
+                      server_sounds=(self.comparison.server_imported if as_imported
+                                     else self.comparison.server_merged))
 
     def _open_map(self) -> None:
         start = self.project.settings.game_dir or str(Path.home())
@@ -334,11 +349,11 @@ class ServerWindow(QDialog):
         lines = self._lines(self._maps.get(name) if name != NO_MAP else None)
         for key, bar in self.bars.items():
             bar.show_line(lines[key])
-        played = self.comparison.sounds_merged
+        played = self.comparison.sounds_merged - self.comparison.server_merged
         if played and self.client_box.currentData() != "sound":
-            # the models' sounds are not missing: they precache as generic
-            note = (f"the models' {played} client sound(s) are counted in Generic "
-                    "(precache_generic, ReHLDS)")
+            # the models' other sounds are not missing: they precache as generic
+            note = (f"the models' {played} sound(s) only the shooter hears are counted in "
+                    "Generic (precache_generic, ReHLDS)")
             parts = self.bars["sounds"].parts
             parts.setText(f"{parts.text()}  ·  {note}" if parts.text() else note)
         where = f"With {name}" if name != NO_MAP else "Without a map"

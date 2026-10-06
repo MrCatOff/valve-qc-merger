@@ -124,3 +124,60 @@ def test_sound_events_mark_the_timeline_and_play(window, project: Project, tmp_p
     panel._play_events(10.0, 20.0, False)
     assert played == []
     shutil.rmtree(sounds.sounds_dir(project))
+
+
+def test_attack_sounds_go_through_precache_sound(tmp_path: Path) -> None:
+    """A shot or a swing in a view model is usually also played from the
+    server for the others: precache_sound. The rest only the shooter hears."""
+    import json
+
+    from valve_qc_merger.project import Build
+    from valve_qc_merger.project.sounds import precache_kinds
+    from valve_qc_merger.server.package import export_package
+    qc = ('$modelname "v_x.mdl"\n'
+          '$sequence "draw" "a" {\n { event 5004 1 "weapons/x_draw.wav" }\n}\n'
+          '$sequence "shoot1" "b" {\n { event 5004 0 "weapons/x-1.wav" }\n}\n'
+          '$sequence "slash2" "c" {\n { event 5004 0 "weapons/x_slash.wav" }\n}\n')
+    assert precache_kinds([qc]) == {"weapons/x_draw.wav": "generic",
+                                    "weapons/x-1.wav": "sound",
+                                    "weapons/x_slash.wav": "sound"}
+    assert set(precache_kinds([qc], "sound").values()) == {"sound"}
+    assert precache_kinds([qc], overrides={"Weapons\\X-1.wav": "generic",
+                                           "weapons/x_draw.wav": "auto"})[
+        "weapons/x-1.wav"] == "generic"
+    project = Project.create(tmp_path / "pack")
+    project.add_build(Build("view", "merge-v", options={"name": "v_x"}))
+    output = project.build_dir("view") / "output"
+    output.mkdir(parents=True)
+    (output / "v_x.qc").write_text(qc, encoding="latin-1")
+    (output / "v_x.mdl").write_bytes(b"IDST" + b"\0" * 300)
+    (project.build_dir("view") / "last_run.json").write_text(json.dumps(
+        {"outputs": ["builds/view/output/v_x.qc"]}), encoding="utf-8")
+    project.settings.sound_precache = {"weapons/x_slash.wav": "generic"}
+    result = export_package(project, tmp_path / "out")
+    assert result.server_sounds == ["weapons/x-1.wav"]
+    inc = (tmp_path / "out" / "amxx" / "vqm_resources.inc").read_text(encoding="utf-8")
+    assert '\t"sound/weapons/x_draw.wav",' in inc and '\t"sound/weapons/x_slash.wav",' in inc
+    assert '\t"weapons/x-1.wav",' in inc and "VQM_SERVER_SOUND_COUNT = 1;" in inc
+
+
+def test_precache_choice_in_the_sound_panel(window, project: Project, tmp_path: Path) -> None:
+    for n in (1, 2):
+        _stereo_48k(sounds.sounds_dir(project) / "weapons" / f"ana_foley{n}.wav")
+    window.set_project(project)
+    panel = window.sound_panel
+    assert window.explorer.select("sound", "weapons/ana_foley1.wav")  # in shoot1: heard
+    assert panel.precache_box.isVisibleTo(panel)
+    assert panel.precache_box.itemText(0) == "Auto — precache_sound"
+    assert window.explorer.select("sound", "weapons/ana_foley2.wav")  # reload: shooter only
+    assert panel.precache_box.itemText(0) == "Auto — precache_generic"
+    panel.precache_box.setCurrentIndex(panel.precache_box.findData("sound"))
+    assert project.settings.sound_precache == {"weapons/ana_foley2.wav": "sound"}
+    assert Project.open(project.root).settings.sound_precache == {
+        "weapons/ana_foley2.wav": "sound"}
+    panel.precache_box.setCurrentIndex(0)  # back to auto: the choice is forgotten
+    assert project.settings.sound_precache == {}
+    loose = sounds.import_sounds(project, [_stereo_48k(tmp_path / "x" / "zombie.wav")])
+    window.explorer.show_project(project)
+    assert window.explorer.select("sound", loose[0])  # no model plays it
+    assert not panel.precache_box.isVisibleTo(panel)

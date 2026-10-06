@@ -159,6 +159,9 @@ class Settings:
     unprecache: list[str] = field(default_factory=list)
     unprecache_replace: str = ""
     count_stock: bool = True  # budget: count the stock CS models ReGameDLL precaches
+    # per client sound (path under sound/, lower case): "sound" | "generic"
+    # overriding the automatic choice (attack sequences -> sound)
+    sound_precache: dict[str, str] = field(default_factory=dict)
 
 
 # where Deploy puts a build's models, under the game folder
@@ -344,7 +347,9 @@ class Project:
             unprecache=[re.sub(r"^models/([vp])_shield_", r"models/shield/\1_shield_",
                                str(p)) for p in settings.get("unprecache", [])],
             unprecache_replace=str(settings.get("unprecache_replace", "")),
-            count_stock=bool(settings.get("count_stock", True)))
+            count_stock=bool(settings.get("count_stock", True)),
+            sound_precache={str(k): str(v) for k, v in
+                            dict(settings.get("sound_precache", {})).items()})
         project.categories = list(meta.get("categories", []))
         for entry in data.get("assets", []):
             asset = Asset(**entry)
@@ -371,7 +376,9 @@ class Project:
                          "client_sounds": self.settings.client_sounds,
                          "unprecache": self.settings.unprecache,
                          "unprecache_replace": self.settings.unprecache_replace,
-                         "count_stock": self.settings.count_stock},
+                         "count_stock": self.settings.count_stock,
+                         "sound_precache": dict(sorted(
+                             self.settings.sound_precache.items()))},
             "assets": [_asset_dict(a) for a in sorted(self.assets.values(),
                                                       key=lambda a: (a.kind, a.name))],
             "builds": [_build_dict(b) for b in self.builds.values()],

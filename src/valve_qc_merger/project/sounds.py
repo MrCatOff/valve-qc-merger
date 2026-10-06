@@ -122,6 +122,70 @@ def sequence_sounds(qc_text: str) -> dict[str, list[tuple[int, str]]]:
     return out
 
 
+# a view model's sound in one of these sequences is a shot or a swing: the
+# weapon plugin usually plays it from the server too (emit_sound), so other
+# players hear it — that needs precache_sound, not precache_generic
+ATTACK_SEQUENCE = re.compile(r"(?i)shoot|fire|attack|slash|stab|shot|swing|burst")
+PRECACHE_CHOICES = ("auto", "sound", "generic")
+_CLIENT_EVENT = re.compile(r'\bevent\s+5004\s+-?\d+\s+"([^"]+)"', re.IGNORECASE)
+
+
+def sound_key(path: str) -> str:
+    return path.replace("\\", "/").strip().lower()
+
+
+def client_sound_events(qc_text: str) -> list[tuple[str, str]]:
+    """``(sequence, sound)`` of every client sound event (5004) of a QC."""
+    out = []
+    for name, body in _SEQUENCE.findall(qc_text):
+        out += [(name, sound_key(sound)) for sound in _CLIENT_EVENT.findall(body)]
+    return out
+
+
+def precache_kinds(qc_texts: list[str], default: str = "generic",
+                   overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """``{sound: "sound" | "generic"}`` for every client sound of ``qc_texts``.
+    ``default`` "sound": every one through precache_sound. "generic"
+    (ReHLDS): only what the shooter hears — sounds of attack sequences
+    (shots, swings: the plugin plays them for the others too) still go
+    through precache_sound. ``overrides`` (per sound) win."""
+    overrides = {sound_key(k): v for k, v in (overrides or {}).items() if v != "auto"}
+    attack: dict[str, bool] = {}
+    for text in qc_texts:
+        for sequence, sound in client_sound_events(text):
+            attack[sound] = attack.get(sound, False) or bool(ATTACK_SEQUENCE.search(sequence))
+    out = {}
+    for sound, in_attack in attack.items():
+        kind = "sound" if default == "sound" or in_attack else "generic"
+        out[sound] = overrides.get(sound, kind)
+    return out
+
+
+def auto_precache(project: Project, name: str) -> str | None:
+    """How ``name`` would be precached without a choice of its own ("sound"
+    or "generic"), or None when no model plays it as a client sound."""
+    from valve_qc_merger.project.qc_edit import qc_file
+    texts = []
+    for asset in project.assets:
+        try:
+            texts.append(qc_file(project.asset_dir(asset)).read_text(encoding="latin-1"))
+        except (OSError, ValueError):
+            continue
+    return precache_kinds(texts, project.settings.client_sounds).get(sound_key(name))
+
+
+def set_precache(project: Project, name: str, choice: str) -> None:
+    """Remember ``choice`` ("auto" | "sound" | "generic") for sound ``name``."""
+    if choice not in PRECACHE_CHOICES:
+        raise ValueError(f"unknown precache choice {choice!r}")
+    key = sound_key(name)
+    if choice == "auto":
+        project.settings.sound_precache.pop(key, None)
+    else:
+        project.settings.sound_precache[key] = choice
+    project.save()
+
+
 def asset_sounds(project: Project) -> dict[str, set[str]]:
     """``{asset: the sounds its sequences play}``."""
     from valve_qc_merger.project.qc_edit import qc_file

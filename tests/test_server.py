@@ -238,8 +238,10 @@ def test_export_package_writes_tree_include_res_and_report(tmp_path: Path) -> No
     project.settings.client_sounds = "sound"
     inc = export_package(project, tmp_path / "out2")
     text = (tmp_path / "out2" / "amxx" / "vqm_resources.inc").read_text()
-    assert 'precache_sound(VQM_CLIENT_SOUNDS[i]);' in text
-    assert '"weapons/pack_clipin.wav",' in text
+    assert 'precache_sound(VQM_SERVER_SOUNDS[i]);' in text
+    assert "stock const VQM_SERVER_SOUND_COUNT = 2;" in text
+    assert "stock const VQM_CLIENT_SOUND_COUNT = 0;" in text
+    assert '"weapons/pack_clipin.wav",' in text  # no sound/ prefix for precache_sound
 
 
 # -- unprecache ----------------------------------------------------------------
