@@ -52,6 +52,11 @@ is rebound to `weapon`.
 
 - `$texturegroup` skin rows merge column-wise into one `skinfamilies` block
   (only one weapon renders at a time); `models.ini` records `skins = N` plus one `skin_<i> = <texture>` line per row, so a plugin can identify each variant and select it with `pev_skin = i`.
+  Each extra skin row of a weapon also gets an entry of its own under the
+  name merge-v gives that variant — `[<model>_skin<k>]` with the same
+  `pev_body`, `skin = k` and `skin_of = <model>` — so a variant is one name in
+  the v_, p_ and w_ manifests (and `VQM_<MODEL>_SKIN<k>_BODY` / `_SKIN` in
+  the AMXX include). No submodel is added: the skin is still `pev_skin`.
 - `$texrendermode` entries are carried per staged texture.
 - Original per-model `$hbox` lines are **not** carried: their bones no longer
   exist. The auto-generated box on `weapon` is the union of the part's

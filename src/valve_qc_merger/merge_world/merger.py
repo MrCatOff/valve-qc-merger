@@ -237,6 +237,13 @@ def merge_world_models(
                     column[min(row, len(column) - 1)] for column in own_columns
                 )
         report.manifest[model.name] = entry
+        # each of the weapon's own extra skins under the name merge-v gives
+        # it (``<model>_skin<k>``), so a variant is one name in the v_, p_
+        # and w_ manifests: same pev_body, pev_skin = k
+        own_rows = max((len(column) for column in own_columns or []), default=1)
+        for row in range(1, own_rows):
+            report.manifest[f"{model.name}_skin{row}"] = {
+                "pev_body": position + 1, "skin": row, "skin_of": model.name}
     if write_manifest:
         write_manifest_data(
             out_dir,

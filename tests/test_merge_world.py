@@ -56,6 +56,9 @@ def test_full_merge_single_part(tmp_path: Path) -> None:
     # Luger's skin rows are spelled out so a plugin can switch them by index.
     assert "skins = 3" in manifest
     assert "skin_0 = " in manifest and "skin_2 = " in manifest
+    luger = next(name for name in fixtures if "luger" in name)
+    assert f"[{luger}_skin1]" in manifest and f"[{luger}_skin2]" in manifest
+    assert "skin = 2" in manifest and f"skin_of = {luger}" in manifest
 
     # Two bones total, identity transforms, every vertex on 'weapon'.
     for fixture in fixtures:

@@ -106,6 +106,17 @@ def test_full_merge_single_part(tmp_path: Path) -> None:
     assert "skin_0 = #256256Luger_P_08_Old_p.bmp" in manifest
     assert "skin_1 = #256256Luger_p_6.bmp" in manifest
     assert "skin_2 = #256256Luger_p_8.bmp" in manifest
+    # each extra skin also under merge-v's name: one name for a variant in
+    # the v_, p_ and w_ manifests (same pev_body, pev_skin = k)
+    import configparser
+    ini = configparser.ConfigParser()
+    ini.read(out / "models.ini")
+    luger = next(name for name in fixtures if "luger" in name)
+    for k in (1, 2):
+        alias = ini[f"{luger}_skin{k}"]
+        assert alias["pev_body"] == ini[luger]["pev_body"] and alias["skin"] == str(k)
+        assert alias["skin_of"] == luger
+    assert f"{luger}_skin3" not in ini
 
     # All emitted SMDs share one table; weapon bones are model-named.
     idle = parse_smd_file(out / "animations" / "idle.smd")

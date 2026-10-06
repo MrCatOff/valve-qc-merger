@@ -341,3 +341,18 @@ def test_old_shield_paths_are_migrated(tmp_path: Path) -> None:
     project.save()
     assert Project.open(project.root).settings.unprecache == [
         "models/shield/v_shield_usp.mdl", "models/v_ak47.mdl"]
+
+
+def test_include_defines_skin_aliases() -> None:
+    from valve_qc_merger.server.package import PackageResult, amxx_include
+    result = PackageResult(Path("."))
+    result.weapons = {
+        "p_luger": {"model": "models/p_pack.mdl", "pev_body": 3, "skins": 2},
+        "p_luger_skin1": {"model": "models/p_pack.mdl", "pev_body": 3, "skin": 1,
+                          "skin_of": "p_luger"},
+    }
+    inc = amxx_include(result)
+    assert '#define VQM_P_LUGER_SKIN1_MODEL "models/p_pack.mdl"' in inc
+    assert "#define VQM_P_LUGER_SKIN1_BODY 3" in inc
+    assert "#define VQM_P_LUGER_SKIN1_SKIN 1" in inc
+    assert "#define VQM_P_LUGER_SKIN " not in inc  # the base entry: skin 0

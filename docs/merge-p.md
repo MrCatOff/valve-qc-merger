@@ -65,6 +65,11 @@ idle animation.
   merged column-wise into one `skinfamilies` block; models with fewer rows
   repeat their last row. Only one weapon is visible at a time, so a global
   skin row is safe. `models.ini` records `skins = N` plus one `skin_<i> = <texture>` line per row for those weapons, so a plugin can identify each variant and select it with `pev_skin = i`.
+  Each extra skin row of a weapon also gets an entry of its own under the
+  name merge-v gives that variant — `[<model>_skin<k>]` with the same
+  `pev_body`, `skin = k` and `skin_of = <model>` — so a variant is one name in
+  the v_, p_ and w_ manifests (and `VQM_<MODEL>_SKIN<k>_BODY` / `_SKIN` in
+  the AMXX include). No submodel is added: the skin is still `pev_skin`.
 - `$texrendermode` entries are carried per staged texture, as in merge-v.
 - Per-weapon `$attachment` entries are **dropped** (with a warning): GoldSrc
   caps a model at 4 attachments, so 30 per-weapon muzzle-flash points cannot

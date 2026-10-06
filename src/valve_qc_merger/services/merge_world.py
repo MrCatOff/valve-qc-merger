@@ -165,6 +165,9 @@ def run_merge_world(opts: MergeWorldOptions,
                 "model": f"{part_name}.mdl",
                 **report.manifest[model.name],
             }
+        for key, value in report.manifest.items():
+            if value.get("skin_of") in aggregate:  # a skin alias of this part
+                aggregate[key] = {"model": f"{part_name}.mdl", **value}
         if report.atlas:
             aggregate[f"textures_{part_name}"] = dict(report.atlas)
         if not opts.no_verify:
