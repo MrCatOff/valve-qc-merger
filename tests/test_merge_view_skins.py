@@ -89,7 +89,8 @@ def test_scaled_model_is_rejected(models: Path, tmp_path: Path) -> None:
     qc.write_text(qc.read_text(encoding="latin-1").replace("$scale 1.0", "$scale 1.3"),
                   encoding="latin-1")
     out = tmp_path / "out"
-    result = run_merge_view(MergeViewOptions(models_dir=models, out=out),
+    result = run_merge_view(MergeViewOptions(models_dir=models, out=out,
+                                             standalone_rejects=False),
                             CollectingReporter())
     assert any("v_big" in f and "$scale 1.3" in f for f in result.failures)
     assert "v_big" not in _ini(out).sections()
@@ -114,8 +115,8 @@ def test_activities_carried_blends_rejected_options_warned(models: Path,
              '"v_anaconda_anims\\shoot1" "v_anaconda_anims\\shoot2"\n\tblend XR -45 45')
     out = tmp_path / "out"
     reporter = CollectingReporter()
-    result = run_merge_view(MergeViewOptions(models_dir=models, out=out,
-                                             skin_variants=False), reporter)
+    result = run_merge_view(MergeViewOptions(models_dir=models, out=out, skin_variants=False,
+                                             standalone_rejects=False), reporter)
     assert any("v_blend" in f and "blends 2 animations" in f for f in result.failures)
     assert any("option 'origin' not carried (idle1)" in line for line in reporter.lines)
     qc = (out / "v_merged.qc").read_text(encoding="latin-1")

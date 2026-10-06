@@ -44,7 +44,20 @@ out/
     hands/              (--shared-hands only) the one shared hands_female.smd +
                         hands_male.smd used by every weapon
     *.bmp               staged textures (sanitised names) and atlases
+  standalone/<model>/   a model the merge could not take (multi-part under
+                        --shared-hands, other hands, an unmatched rig, a
+                        pose that would not survive, a header it rejects),
+                        copied as it is with $modelname "<model>.mdl" — in
+                        models.ini with model = <model>.mdl, pev_body = 0,
+                        standalone = 1, reason, hands = ours | own (its own
+                        hands: retarget failed or never ran), hand_stride
+                        when it has male/female hands, and its own anim_*
 ```
+
+Nothing is dropped by default: every weapon given to the build is shipped,
+merged or on its own (each standalone model takes a model slot). Models that
+are only hands (zombie claws) are still rejected — they are not weapons.
+`--no-standalone` restores the old behaviour (rejected models left out).
 
 Compile each part from inside its directory (`studiomdl v_<name>_pN.qc`). QC
 studio paths use forward slashes, so the native macOS compiler (see
@@ -201,6 +214,7 @@ are reported as "not carried" warnings.
 | `--no-pack-texture GLOB` | keep matching textures out of atlases (repeatable) |
 | `--sound-path TEMPLATE` | rewrite sound event paths for every weapon; `${fileBasename}` is the original file name (e.g. `csforce/pistols/${fileBasename}`) |
 | `--config TOML` | supply defaults for any flag (explicit CLI values win) |
+| `--no-standalone` | leave out the models the merge cannot take instead of shipping each on its own (`standalone/<model>/`) |
 | `--no-verify` | skip the verification gate |
 | `--dry-run` | discover, sanitise and load only; print the inventory |
 

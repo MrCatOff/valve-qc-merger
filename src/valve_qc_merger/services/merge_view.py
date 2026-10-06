@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -91,6 +93,10 @@ class MergeViewOptions:
     # stop once the parts are known: result.data["plan"], nothing written but
     # inventory.json (the studio's Plan button)
     plan_only: bool = False
+    # a model the merge cannot take (multi-part, foreign hands, unmatched
+    # rig…) is shipped as a model of its own (standalone/<name>/, in the
+    # manifest with standalone = 1 and the reason) instead of being dropped
+    standalone_rejects: bool = True
 
 
 def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> ServiceResult:
@@ -124,6 +130,19 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
     hand_renames: dict[str, dict[str, str]] = {}
     original_anims: dict[str, dict[str, str]] = {}
     original_meshes: dict[str, list[str]] = {}
+    dirs: dict[str, Path] = {d.name: d for d in model_dirs}
+    standalone: dict[str, str] = {}  # model -> why the merge left it out
+
+    def reject(name: str, message: str, tag: str, reason: str) -> None:
+        """A model the merge cannot take: shipped on its own when allowed."""
+        if opts.standalone_rejects and name in dirs:
+            standalone[name] = reason
+            result.warnings.append(f"{message} — shipped on its own")
+            reporter.log(f"  {name:<20} {tag}  {message} — shipped on its own")
+        else:
+            failures.append(message)
+            reporter.log(f"  {name:<20} {tag}  {message}")
+
     for done, model_dir in enumerate(model_dirs):
         reporter.check()
         reporter.progress(done, len(model_dirs), model_dir.name)
@@ -141,8 +160,7 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
         if header.rejects:
             message = (f"model {model.name!r}: {'; '.join(header.rejects)} — "
                        "merge it on its own")
-            failures.append(message)
-            reporter.log(f"  {model.name:<20} HEADER  {message}")
+            reject(model.name, message, "HEADER", "; ".join(header.rejects))
             continue
         for warning in header.warnings:
             model.warnings.append(warning)
@@ -157,8 +175,8 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
                     f"rename collisions: {'; '.join(conflicts)}"
                 )
         except CorrespondenceError as exc:
-            failures.append(f"model {model.name!r}: {exc}")
-            reporter.log(f"  {model.name:<20} UNMATCHED  {exc}")
+            reject(model.name, f"model {model.name!r}: {exc}", "UNMATCHED",
+                   f"hands not matched: {exc}")
             continue
         already = sum(1 for old, new in match.renames.items() if old == new)
         canonical: dict[str, object] = {}
@@ -170,8 +188,7 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
             if canon.max_pose_deviation > 1e-4:
                 message = (f"model {model.name!r}: pose NOT preserved "
                            f"(deviation {canon.max_pose_deviation:.6f}u)")
-                failures.append(message)
-                reporter.log(f"  {model.name:<20} POSE-FAIL  {message}")
+                reject(model.name, message, "POSE-FAIL", "pose not preserved")
                 continue
             if not opts.plan_only:
                 out_model = opts.out / "canonical" / model.name
@@ -199,14 +216,9 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
                 # A multi-part weapon needs an extra weapon bodygroup, which
                 # multiplies pev_body past the 255 WRITE_BYTE ceiling once
                 # merged. Reject it — it must be shipped on its own.
-                reporter.log(f"  [Warning] Зброя {model.name} була відхилена по "
-                             "причині того що складається з декількох частин, "
-                             "можливість вийти за межі ліміту, використовуйте "
-                             "індивідуально")
-                failures.append(
-                    f"model {model.name!r}: multi-part weapon rejected "
-                    "(--shared-hands)"
-                )
+                reject(model.name, f"model {model.name!r}: multi-part weapon rejected "
+                       "(--shared-hands)", "MULTI-PART",
+                       "multi-part weapon (shared-hands pev_body)")
                 continue
             merged_pairs.append((model, parts))
             hand_renames[model.name] = dict(match.renames)
@@ -248,7 +260,14 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
                      f"sequences={entry['sequences']}{san}{warn}")
     reporter.progress(len(model_dirs), len(model_dirs), "loaded")
     if opts.shared_hands and len(merged_pairs) > 1:
-        merged_pairs = _drop_foreign_hands(merged_pairs, failures, reporter, result)
+        kept = _drop_foreign_hands(merged_pairs, [], reporter, result)
+        names = {model.name for model, _parts in kept}
+        for model, _parts in merged_pairs:
+            if model.name not in names:
+                reject(model.name, f"model {model.name!r}: wears other hands than the "
+                       f"{len(names)} other model(s) (not retargeted?) — rejected under "
+                       "--shared-hands", "HANDS-MISMATCH", "wears other hands")
+        merged_pairs = kept
     if opts.skin_variants and not opts.dry_run:
         expanded: list[tuple[ModelInput, ModelParts]] = []
         for model, parts in merged_pairs:
@@ -276,11 +295,121 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
         code = _merge_parts(opts, reporter, result, merged_pairs, reference_path,
                             sequence_budget, hand_renames, original_anims,
                             original_meshes)
-        if code is not None:
+        if code is not None and not (opts.plan_only and code != EXIT_DISCOVERY):
             result.exit_code = code
             return result
+    if standalone and not opts.dry_run:
+        _ship_standalone(opts, reporter, result, {n: dirs[n] for n in standalone},
+                         standalone, reference_path)
     result.exit_code = EXIT_FAIL if failures else EXIT_OK
     return result
+
+
+_GROUP_RE = re.compile(r'^\s*\$bodygroup\s+"?([^"\s{]+)"?\s*\{(.*?)\}',
+                       re.IGNORECASE | re.MULTILINE | re.DOTALL)
+
+
+def _body_layout(qc_text: str) -> list[tuple[str, int, bool]]:
+    """``$body`` / ``$bodygroup`` in QC order: (name, entries incl. blank,
+    is a hands group) — pev_body strides follow this order."""
+    groups: list[tuple[int, str, int, bool]] = []
+    for match in re.finditer(r'^\s*\$body\s+"?([^"\s]+)"?', qc_text,
+                             re.IGNORECASE | re.MULTILINE):
+        groups.append((match.start(), match.group(1), 1, False))
+    for match in _GROUP_RE.finditer(qc_text):
+        entries = len(re.findall(r"\b(?:studio|blank)\b", match.group(2), re.IGNORECASE))
+        groups.append((match.start(), match.group(1), max(entries, 1),
+                       "hand" in match.group(1).lower()))
+    return [(name, size, hands) for _pos, name, size, hands in sorted(groups)]
+
+
+def _standalone_entry(model_dir: Path, name: str, reason: str,
+                      hands: str) -> dict[str, object]:
+    """The manifest entry of a model shipped on its own: its own sequence
+    numbers, pev_body 0 (first entry of every group), and the stride of its
+    hands group when it has male/female variants."""
+    qc = next(model_dir.glob("*.qc"))
+    text = qc.read_text(encoding="latin-1")
+    entry: dict[str, object] = {"model": f"{name}.mdl", "pev_body": 0, "standalone": 1,
+                                "reason": reason.replace('"', "'"), "hands": hands}
+    stride = 1
+    for _group, size, is_hands in _body_layout(text):
+        if is_hands and size > 1:
+            entry["hand_stride"] = stride
+            break
+        stride *= size
+    names = re.findall(r'^\s*\$sequence\s+"?([^"\s]+)"?', text,
+                       re.IGNORECASE | re.MULTILINE)
+    for index, sequence in enumerate(names):
+        entry.setdefault(f"anim_{sequence}", index)
+    return entry
+
+
+def _ship_standalone(opts: MergeViewOptions, reporter: Reporter, result: ServiceResult,
+                     dirs: dict[str, Path], reasons: dict[str, str],
+                     reference_path: Path) -> None:
+    """Copy every rejected model as it is into ``standalone/<name>/`` (its
+    ``$modelname`` set to ``<name>.mdl``), add its QC to the outputs and its
+    entry to the manifest — the build ships every weapon it was given."""
+    from valve_qc_merger.merge_view.handcheck import dir_wears_hands
+    entries: dict[str, dict[str, object]] = {}
+    plan_rows: list[dict[str, object]] = []
+    for name in sorted(dirs, key=str.lower):
+        reporter.check()
+        source = dirs[name]
+        try:
+            hands = "ours" if dir_wears_hands(source, reference_path) else "own"
+        except Exception:  # noqa: BLE001 - a rig the check cannot read: its own hands
+            hands = "own"
+        entry = _standalone_entry(source, name, reasons[name], hands)
+        entries[name] = entry
+        plan_rows.append({"part": name, "models": [name], "pev_body": {name: 0},
+                          "folded": [], "pool": "standalone", "bones": None,
+                          "standalone": reasons[name], "hands": hands})
+        if opts.plan_only:
+            continue
+        target = opts.out / "standalone" / name
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(source, target)
+        qc = next(target.glob("*.qc"))
+        text = qc.read_text(encoding="latin-1")
+        line = f'$modelname "{name}.mdl"'
+        if re.search(r"^\s*\$modelname\b", text, re.IGNORECASE | re.MULTILINE):
+            text = re.sub(r"^\s*\$modelname\b.*$", line, text, count=1,
+                          flags=re.IGNORECASE | re.MULTILINE)
+        else:
+            text = line + "\n" + text
+        final = qc.with_name(f"{name}.qc")
+        qc.unlink()
+        final.write_text(text, encoding="latin-1")
+        result.outputs.append(final)
+    if opts.plan_only:
+        result.data.setdefault("plan", []).extend(plan_rows)
+    else:
+        manifest = _merged_manifest(opts, result)
+        manifest.update(entries)
+        write_manifest_data(opts.out, manifest, opts.manifest_format)
+        result.manifest = manifest
+    reporter.log(f"  standalone: {len(entries)} model(s) shipped on their own "
+                 f"({sum(1 for e in entries.values() if e['hands'] == 'own')} with their "
+                 "own hands)")
+
+
+def _merged_manifest(opts: MergeViewOptions, result: ServiceResult
+                     ) -> dict[str, dict[str, object]]:
+    """The manifest the merge wrote (one part: no ``model`` keys, the atlas as
+    ``textures``), to which the standalone entries are added."""
+    data = {key: dict(value) for key, value in (result.manifest or {}).items()}
+    if result.data.get("parts", 0) > 1:
+        return data
+    single: dict[str, dict[str, object]] = {}
+    for key, value in data.items():
+        if key.startswith("textures_"):
+            single["textures"] = value
+        else:
+            single[key] = {k: v for k, v in value.items() if k != "model"}
+    return single
 
 
 def _drop_foreign_hands(
@@ -420,6 +549,7 @@ def _merge_parts(
         resolved.append((part_pairs, found[0], found[1]))
 
     multi = len(resolved) > 1
+    result.data["parts"] = len(resolved)
     if multi:
         reporter.log(f"  split: {len(resolved)} parts "
                      f"(studiomdl caps one model at 32 submodels)")

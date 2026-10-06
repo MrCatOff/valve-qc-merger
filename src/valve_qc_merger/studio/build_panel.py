@@ -491,15 +491,21 @@ class BuildPanel(QTabWidget):
         parts = record.get("parts", [])
         models = sum(len(p["models"]) for p in parts)
         failures = record.get("failures", [])
+        alone = sum(1 for p in parts if p.get("standalone"))
         self.plan_summary.setText(
-            f"<b>{len(parts)} part(s)</b> · {models} model(s) · "
-            f"{len(failures)} rejected · planned in {record.get('seconds', '?')} s")
+            f"<b>{len(parts) - alone} part(s)</b>"
+            + (f" + {alone} on their own" if alone else "")
+            + f" · {models} model(s) · {len(failures)} rejected · planned in "
+            f"{record.get('seconds', '?')} s")
         rows: list[list[object]] = []
         for part in parts:
             bodies = part.get("pev_body", {})
             folded = set(part.get("folded", []))
             for model in part["models"]:
                 note = "parts folded into one submodel" if model in folded else ""
+                if part.get("standalone"):
+                    note = (f"on its own ({part['standalone']})"
+                            + ("; its own hands" if part.get("hands") == "own" else ""))
                 rows.append([part["part"], bodies.get(model, "after run"), model, note])
         _fill(self.plan_table, rows)
         warnings = [w for w in record.get("warnings", []) if w not in failures]

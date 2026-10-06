@@ -1008,7 +1008,13 @@ class Project:
                 converted += 1
                 continue
             why = result.failures[-1] if result.failures else f"exit {result.exit_code}"
-            notes.append(f"retarget {asset.name} failed ({why}); left out of the merge")
+            if build.options.get("standalone_rejects", True):
+                # the merge ships it on its own, with the hands it came with
+                shutil.copytree(source, retargeted / asset.name)
+                notes.append(f"{asset.name}: retarget failed ({why}); shipped on its own "
+                             "with its own hands")
+            else:
+                notes.append(f"retarget {asset.name} failed ({why}); left out of the merge")
             reporter.log(f"  warn: {notes[-1]}")
         reporter.log(f"  retarget: {converted} converted, {reused} reused, {ready} already on "
                      f"our hands, {len(assets) - converted - reused - ready} failed")

@@ -56,13 +56,35 @@ def test_retargets_agree_bone_locally_raw_hands_do_not(models: Path) -> None:
 
 def test_shared_hands_merge_rejects_foreign_hands(models: Path, tmp_path: Path) -> None:
     out = tmp_path / "out"
-    result = run_merge_view(MergeViewOptions(models_dir=models, out=out, shared_hands=True),
+    result = run_merge_view(MergeViewOptions(models_dir=models, out=out, shared_hands=True,
+                                             standalone_rejects=False),
                             CollectingReporter())
     assert any("v_raw" in f and "other hands" in f for f in result.failures)
     (gate,) = [g for g in result.gates if g.check == "shared_hands"]
     assert gate.passed and "2 model(s)" in gate.detail and "1 rejected" in gate.detail
     assert [p.name for p in (out / "hands").iterdir()] == ["hands.smd"]  # ours, not raw's
     assert "v_raw" not in (out / "models.ini").read_text()
+
+
+def test_rejected_models_ship_on_their_own(models: Path, tmp_path: Path) -> None:
+    """By default a model the merge cannot take is a model of its own: in the
+    outputs (compile, deploy) and the manifest, with why and whose hands."""
+    import configparser
+    out = tmp_path / "out"
+    result = run_merge_view(MergeViewOptions(models_dir=models, out=out, shared_hands=True),
+                            CollectingReporter())
+    assert not any("v_raw" in f for f in result.failures) and result.ok
+    assert any("v_raw" in w and "shipped on its own" in w for w in result.warnings)
+    qc = out / "standalone" / "v_raw" / "v_raw.qc"
+    assert qc in result.outputs and '$modelname "v_raw.mdl"' in qc.read_text(encoding="latin-1")
+    ini = configparser.ConfigParser()
+    ini.read(out / "models.ini")
+    raw = ini["v_raw"]
+    assert raw["model"] == "v_raw.mdl" and raw["standalone"] == "1"
+    assert raw["hands"] == "own" and raw["reason"] == "wears other hands"
+    assert raw["pev_body"] == "0" and any(k.startswith("anim_") for k in raw)
+    assert "model" not in ini["v_rt"]  # the one merged part keeps its layout
+    assert [p.name for p in (out / "hands").iterdir()] == ["hands.smd"]
 
 
 def test_build_retargets_only_what_needs_it(models: Path, tmp_path: Path) -> None:
@@ -93,10 +115,12 @@ def test_plan_build_predicts_without_merging(models: Path, tmp_path: Path) -> No
                                                          "name": "v_pack"}))
     result = project.plan_build("shared", CollectingReporter())
     record = json.loads((project.build_dir("shared") / "plan.json").read_text())
-    (part,) = record["parts"]
+    part, alone = record["parts"]
     assert part["part"] == "v_pack" and part["models"] == ["v_rt", "v_rt_moved"]
     assert part["pev_body"] == {"v_rt": 0, "v_rt_moved": 1}  # one hand variant
-    assert any("v_raw" in f for f in record["failures"]) and not result.ok
+    # v_raw (other hands) ships on its own
+    assert alone["models"] == ["v_raw"] and alone["standalone"] == "wears other hands"
+    assert not record["failures"] and result.ok
     assert not (project.build_dir("shared") / "output").exists()  # nothing merged
     assert not (project.build_dir("shared") / "plan").exists()  # staging cleaned
     # the run agrees with the plan
