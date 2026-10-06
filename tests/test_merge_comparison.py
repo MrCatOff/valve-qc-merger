@@ -123,3 +123,24 @@ def test_models_added_after_the_run_are_not_left_out(tmp_path: Path) -> None:
          "failures": ["model 'v_deagle': multi-part weapon rejected"]}), encoding="utf-8")
     row = {r.title: r for r in merge_comparison(project).rows}["pistols (merge-v)"]
     assert row.left_out == ["v_deagle"] and not row.added
+
+
+def test_sounds_bar_says_where_client_sounds_went(tmp_path: Path) -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from valve_qc_merger.studio.server_window import ServerWindow
+    project = _project(tmp_path)
+    window = ServerWindow(project)
+    try:
+        played = window.comparison.sounds_merged
+        assert played > 0
+        window.stock_box.setChecked(False)
+        sounds = window.bars["sounds"]
+        assert sounds.numbers.text().startswith("0 / 512")
+        assert f"the models' {played} client sound(s) are counted in Generic" in \
+            sounds.parts.text()
+        window.client_box.setCurrentIndex(1)  # precache_sound: they count here
+        assert sounds.numbers.text().startswith(f"{played} / 512")
+        assert "counted in Generic" not in sounds.parts.text()
+    finally:
+        window.close()

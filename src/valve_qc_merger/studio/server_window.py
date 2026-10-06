@@ -334,6 +334,13 @@ class ServerWindow(QDialog):
         lines = self._lines(self._maps.get(name) if name != NO_MAP else None)
         for key, bar in self.bars.items():
             bar.show_line(lines[key])
+        played = self.comparison.sounds_merged
+        if played and self.client_box.currentData() != "sound":
+            # the models' sounds are not missing: they precache as generic
+            note = (f"the models' {played} client sound(s) are counted in Generic "
+                    "(precache_generic, ReHLDS)")
+            parts = self.bars["sounds"].parts
+            parts.setText(f"{parts.text()}  ·  {note}" if parts.text() else note)
         where = f"With {name}" if name != NO_MAP else "Without a map"
         if name != NO_MAP and self._maps.get(name) is None:
             self.verdict.setText(self._coloured(f"{name} cannot be read.", "danger"))
