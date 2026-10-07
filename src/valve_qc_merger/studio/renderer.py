@@ -30,6 +30,8 @@ GL_FLOAT = 0x1406
 GL_TRIANGLES, GL_LINES, GL_POINTS = 0x0004, 0x0001, 0x0000
 GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE = 0x0B71, 0x0BE2, 0x0B44
 GL_SCISSOR_TEST, GL_LESS = 0x0C11, 0x0201
+GL_STENCIL_TEST, GL_STENCIL_BUFFER_BIT, GL_TEXTURE0 = 0x0B90, 0x0400, 0x84C0
+GL_ARRAY_BUFFER, GL_SAMPLE_ALPHA_TO_COVERAGE = 0x8892, 0x809E
 GL_PROGRAM_POINT_SIZE = 0x8642
 GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT = 0x4000, 0x0100
 GL_ONE, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA = 1, 0x0302, 0x0303
@@ -71,11 +73,9 @@ _LINE_VS = """#version 330 core
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_col;
 uniform mat4 u_mvp;
-uniform float u_point;
 out vec3 v_col;
 void main() {
     gl_Position = u_mvp * vec4(a_pos, 1.0);
-    gl_PointSize = u_point;
     v_col = a_col;
 }
 """
@@ -269,6 +269,9 @@ class Renderer:
         self.warnings: list[str] = []  # texture problems of the last upload
         self.gl_info = ""  # vendor / renderer / version, for the log
         self._white: QOpenGLTexture | None = None
+        # graphics report: glGetError after every pass of the next frame
+        self.check_errors = False
+        self.errors: list[tuple[str, int]] = []
 
     # -- setup -------------------------------------------------------------
     def initialize(self) -> None:
@@ -377,19 +380,31 @@ class Renderer:
         # Qt composites widgets in this same context and may leave state
         # behind (a disabled depth mask makes glClear skip the depth buffer:
         # every later frame then depth-tests against garbage). Set it all.
+        # QPainter (the axes gizmo of the last frame) uses the stencil buffer
+        # and its own buffers: a stencil test left on hides whatever follows
+        # on some drivers (Windows/NVIDIA: the grid, or before that the model)
+        self.errors = []
+        self._check("before render (left by Qt)")
         gl.glDepthMask(True)
         gl.glDepthFunc(GL_LESS)
         gl.glEnable(GL_DEPTH_TEST)
         gl.glDisable(GL_BLEND)
         gl.glDisable(GL_SCISSOR_TEST)
+        gl.glDisable(GL_STENCIL_TEST)
+        gl.glDisable(GL_CULL_FACE)
+        gl.glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE)
         gl.glColorMask(True, True, True, True)
+        gl.glActiveTexture(GL_TEXTURE0)
         gl.glViewport(0, 0, width, height)
         gl.glClearColor(*state.background_bottom, 1.0)
         gl.glClearDepthf(1.0)
-        gl.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        gl.glClearStencil(0)
+        gl.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)
+        self._check("clear")
         if not self._ready:
             return
         self._draw_background(state)
+        self._check("background")
         scene = self.scene
         if scene is None:
             return
@@ -438,6 +453,7 @@ class Renderer:
         if state.wireframe and self._polygon_mode is not None:
             self._polygon_mode(GL_FRONT_AND_BACK, GL_FILL)
         program.release()
+        self._check("model")
 
         # The floor grid comes AFTER the model, depth-tested (the model hides
         # it) without depth writes — the same path as the bone/attachment
@@ -451,10 +467,10 @@ class Renderer:
             line = self.line_program
             line.bind()
             line.setUniformValue("u_mvp", mvp)
-            line.setUniformValue("u_point", 1.0)
             self._draw(line, self._lines, self._grid[1], GL_LINES, (3, 3))
             line.release()
             gl.glDepthMask(True)
+            self._check("grid")
 
         # Markers are 3D crosses made of lines: GL_POINTS with a shader point
         # size draws nothing on some core-profile drivers (macOS).
@@ -495,11 +511,25 @@ class Renderer:
             line = self.line_program
             line.bind()
             line.setUniformValue("u_mvp", mvp)
-            line.setUniformValue("u_point", 1.0)
             self._draw(line, self._lines, np.concatenate(overlay).astype(np.float32),
                        GL_LINES, (3, 3))
             line.release()
             gl.glEnable(GL_DEPTH_TEST)
+            self._check("overlay")
+        # leave nothing bound for the QPainter that draws next
+        gl.glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+    def _check(self, stage: str) -> None:
+        """Record glGetError after ``stage`` (graphics report frames only)."""
+        if not self.check_errors:
+            return
+        while True:
+            code = self.gl.glGetError()
+            if not code:
+                break
+            self.errors.append((stage, int(code)))
+            if len(self.errors) > 40:
+                break
 
     def _set_int(self, program: QOpenGLShaderProgram, name: str, value: int) -> None:
         """An int/sampler uniform, always through glUniform1i. PySide may

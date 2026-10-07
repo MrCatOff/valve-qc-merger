@@ -164,3 +164,15 @@ def test_offscreen_render_is_textured(tmp_path: Path) -> None:
     green = sum(1 for x in range(0, 160, 2) for y in range(0, 120, 2)
                 if (c := image.pixelColor(x, y)).green() > c.red() + 60)
     assert green > 30, f"untextured render ({green} green samples)"
+
+
+def test_frame_background_repeats_the_left_pixel_of_each_row() -> None:
+    from valve_qc_merger.studio.viewport import frame_background
+    image = np.zeros((2, 3, 4), dtype=np.uint8)
+    image[0] = (10, 20, 30, 255)
+    image[1] = (40, 50, 60, 255)
+    image[1, 2] = (200, 0, 0, 255)  # a "model" pixel
+    background = frame_background(image)
+    assert (background[0] == (10, 20, 30, 255)).all()
+    assert (background[1] == (40, 50, 60, 255)).all()
+    assert int((image != background).any(axis=-1).sum()) == 1

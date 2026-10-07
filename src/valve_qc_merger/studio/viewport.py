@@ -7,6 +7,7 @@ import time
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QFontDatabase,
+    QImage,
     QKeySequence,
     QMouseEvent,
     QPainter,
@@ -37,6 +38,14 @@ from valve_qc_merger.studio.renderer import Renderer, ViewState, gl_format
 from valve_qc_merger.studio.scene import ModelScene
 
 SPEEDS = [0.1, 0.25, 0.5, 1.0, 2.0]
+
+
+def frame_background(image):  # noqa: ANN001, ANN201 - numpy in, numpy out
+    """The image with every row filled by its leftmost pixel (the gradient
+    background: a model never touches the left edge after framing)."""
+    import numpy as np
+    rows = image.reshape(image.shape[0], -1, 4)
+    return np.repeat(rows[:, :1, :], rows.shape[1], axis=1).reshape(image.shape)
 
 
 class Viewport(QOpenGLWidget):
@@ -91,18 +100,84 @@ class Viewport(QOpenGLWidget):
             painter.end()
             return
         ratio = self.devicePixelRatioF()
-        self.renderer.render(int(self.width() * ratio), int(self.height() * ratio), self.state)
-        # QPainter draws on top in this same context: no depth test from the 3D pass
-        functions = self.context().functions()
-        functions.glDisable(0x0B71)  # GL_DEPTH_TEST
-        functions.glDepthMask(True)
+        # Qt: native GL in a paintGL that also uses QPainter must sit between
+        # beginNativePainting() and endNativePainting() — QPainter then hands
+        # over (and takes back) a clean state. Without it, what QPainter left
+        # (stencil, buffers, programs) broke the next frame's draws on
+        # Windows/NVIDIA while macOS forgave it.
         painter = QPainter(self)
+        painter.beginNativePainting()
+        try:
+            self.renderer.render(int(self.width() * ratio), int(self.height() * ratio),
+                                 self.state)
+        finally:
+            painter.endNativePainting()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if self.scene is None:
             self._paint_empty(painter)
         else:
             self._paint_axes(painter)
         painter.end()
+
+    def graphics_report(self) -> str:
+        """Render test frames and say what this GL stack does: the context,
+        GL errors per pass, and whether the grid / bones / model really reach
+        the screen (pixels that differ between frames with and without)."""
+        import platform
+
+        import numpy as np
+        from PySide6 import __version__ as pyside_version
+        from PySide6.QtCore import qVersion
+        lines = [f"OS: {platform.platform()}",
+                 f"Qt {qVersion()} · PySide6 {pyside_version}"]
+        context = self.context()
+        if context is None or not self.isValid():
+            return "\n".join(lines + ["OpenGL: no context (the viewport was never shown)"])
+        fmt = context.format()
+        lines += [f"OpenGL: {self.renderer.gl_info or '?'}",
+                  f"context: {fmt.majorVersion()}.{fmt.minorVersion()} "
+                  f"{fmt.profile().name}, samples {fmt.samples()}, depth "
+                  f"{fmt.depthBufferSize()}, stencil {fmt.stencilBufferSize()}, alpha "
+                  f"{fmt.alphaBufferSize()}, device pixel ratio {self.devicePixelRatioF()}"]
+        if self.gl_error:
+            return "\n".join(lines + [f"viewport error: {self.gl_error}"])
+        if self.scene is None:
+            return "\n".join(lines + ["no model shown: select an asset for the draw checks"])
+
+        saved = (self.state.show_grid, self.state.show_bones, self.state.textured)
+
+        def frame(**changes: bool) -> np.ndarray:
+            for key, value in changes.items():
+                setattr(self.state, key, value)
+            self.renderer.check_errors = True
+            image = self.grabFramebuffer().convertToFormat(QImage.Format.Format_RGBA8888)
+            self.renderer.check_errors = False
+            self._report_errors += list(self.renderer.errors)
+            data = np.frombuffer(image.constBits(), np.uint8, image.sizeInBytes())
+            return data.reshape(image.height(), -1)[:, :image.width() * 4].copy()
+
+        self._report_errors: list[tuple[str, int]] = []
+        try:
+            base = frame(show_grid=False, show_bones=False, textured=True)
+            grid = frame(show_grid=True)
+            bones = frame(show_grid=False, show_bones=True)
+            plain = frame(show_bones=False, textured=False)
+        finally:
+            self.state.show_grid, self.state.show_bones, self.state.textured = saved
+            self.update()
+
+        def changed(a: np.ndarray, b: np.ndarray) -> int:
+            return int(np.count_nonzero(np.any(a.reshape(-1, 4) != b.reshape(-1, 4), axis=1)))
+
+        model = changed(base, frame_background(base))
+        lines += [f"model pixels (not background): {model}",
+                  f"grid pixels: {changed(base, grid)}",
+                  f"bone pixels: {changed(base, bones)}",
+                  f"texture pixels (textured vs grey): {changed(base, plain)}"]
+        errors = self._report_errors
+        lines.append("GL errors: none" if not errors else "GL errors: " + ", ".join(
+            f"{stage} 0x{code:04X}" for stage, code in errors))
+        return "\n".join(lines)
 
     def _paint_empty(self, painter: QPainter) -> None:
         """What to do when nothing is loaded (an asset not chosen yet)."""

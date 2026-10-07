@@ -400,6 +400,7 @@ class MainWindow(QMainWindow):
         self.act_docs = help_menu.addAction(
             icon("circle-help"), "Documentation",
             lambda: QDesktopServices.openUrl(QUrl(help_dialogs.DOCS_URL)))
+        self.act_graphics = help_menu.addAction("Graphics report…", self.graphics_report)
         help_menu.addSeparator()
         self.act_about = help_menu.addAction("About valve-qc-merger Studio", self.show_about)
 
@@ -1666,6 +1667,34 @@ class MainWindow(QMainWindow):
         if self._log_buffer:
             lines, self._log_buffer[:] = list(self._log_buffer), []
             self.log.append_lines(lines)
+
+    def graphics_report(self) -> str:
+        """Help ▸ Graphics report: what the viewport's OpenGL does, to copy
+        into a bug report (the grid / bones really reaching the screen)."""
+        from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QPlainTextEdit
+
+        from valve_qc_merger.studio import dialog_kit as kit
+        self.center.setCurrentWidget(self.viewport)
+        text = self.viewport.viewport.graphics_report()
+        self.log.append_line("graphics report:\n" + text)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Graphics report")
+        layout = kit.dialog_layout(dialog)
+        layout.addWidget(kit.header("Graphics report", "Copy this into a bug report: it "
+                                    "says which OpenGL the viewport got and what reached "
+                                    "the screen (0 grid pixels: the grid is not drawn)."))
+        view = QPlainTextEdit(text)
+        view.setReadOnly(True)
+        layout.addWidget(view, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        copy = buttons.addButton("Copy", QDialogButtonBox.ButtonRole.ActionRole)
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(text))
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.resize(640, 360)
+        self._graphics_dialog = dialog
+        dialog.show()
+        return text
 
     def _job_done(self, title: str, ok: bool, payload: object) -> None:
         self._flush_log()
