@@ -84,7 +84,7 @@ def test_import_server_folder_from_the_studio(tmp_path: Path) -> None:
         finally:
             dialogs.ImportServerDialog.exec = original
         assert window.jobs.wait(120_000)
-        assert "v_mini" in project.assets
+        assert "v_mini" in window.project.assets  # re-read after the job's process
         assert "imported 1 model(s), 1 sound(s), 2 sprite file(s)" in window.log.toPlainText()
     finally:
         window.close()

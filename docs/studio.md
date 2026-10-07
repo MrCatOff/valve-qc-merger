@@ -213,6 +213,14 @@ offscreen smoke tests (`tests/test_studio.py`, skipped without PySide6).
   `studio/icons/LICENSE`) tinted to the theme at run time (`icon(name)`;
   disabled state included). Add an icon by dropping its SVG from
   `lucide-static` into `studio/icons/`.
+- **Heavy jobs run in a process of their own** — builds (run, plan, compile,
+  deploy), Retarget and imports. A thread shares Python's interpreter lock with
+  the window, and a merge holding it made every repaint wait (measured on a
+  60-model plan: stalls up to ~0.9 s); in a process the window keeps painting
+  (~26 ms worst). The log and progress stream back as before (the log is added
+  in batches every 100 ms), Cancel still stops the job (a job stuck in one long
+  step is ended after 15 s), and the window re-reads the project when the job
+  ends. Light jobs (previews, bone tools) stay on a thread.
 - **Imports** go on past problems: importing a set of models again skips
   the ones already in the project (only the rest are added), a model that
   fails is reported and the others still come in, and a folder import leaves

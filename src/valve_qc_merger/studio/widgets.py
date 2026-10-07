@@ -48,14 +48,8 @@ from valve_qc_merger.project import ASSET_KINDS, Project
 from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.icons import icon, pixmap
 from valve_qc_merger.studio.model_info import ModelInfo, texture_rgba
+from valve_qc_merger.studio.tasks import KIND_TITLES  # noqa: E402 - Qt-free, shared
 
-KIND_TITLES = {
-    "v": "View models (v_)",
-    "p": "Player-held (p_)",
-    "w": "World (w_)",
-    "player": "Player bodies",
-    "zhands": "Zombie hands",
-}
 ROLE_KIND = Qt.ItemDataRole.UserRole
 ROLE_NAME = Qt.ItemDataRole.UserRole + 1
 ROLE_CATEGORY = Qt.ItemDataRole.UserRole + 2  # the category a row sits in
@@ -233,7 +227,8 @@ class Explorer(QTreeWidget):
     def show_project(self, project: Project | None) -> None:
         """(Re)build the tree; the branches the user collapsed, the scroll
         position and the current row survive a rebuild of the same project."""
-        same = project is not None and project is self._project and self.topLevelItemCount()
+        same = (project is not None and self._project is not None
+                and project.root == self._project.root and self.topLevelItemCount())
         collapsed = {self._item_key(i) for i in self._walk()
                      if i.childCount() and not i.isExpanded()} if same else set()
         current_key = self._item_key(self.currentItem()) if same else None

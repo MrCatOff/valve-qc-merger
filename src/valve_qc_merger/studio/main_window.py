@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QUrl
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -29,7 +29,7 @@ from valve_qc_merger.project import Project, ProjectError
 from valve_qc_merger.services.base import Reporter
 from valve_qc_merger.studio import help_dialogs, theme
 from valve_qc_merger.studio.build_panel import BuildPanel, NewBuildDialog
-from valve_qc_merger.studio.build_report import load_record, record_part_stats
+from valve_qc_merger.studio.build_report import load_record
 from valve_qc_merger.studio.dialogs import NewProjectDialog, SettingsDialog
 from valve_qc_merger.studio.icons import ICON_SIZE, icon
 from valve_qc_merger.studio.jobs import JobRunner
@@ -39,7 +39,6 @@ from valve_qc_merger.studio.scene import ModelScene, build_scene
 from valve_qc_merger.studio.viewport import ViewportPanel
 from valve_qc_merger.studio.welcome import WelcomePage
 from valve_qc_merger.studio.widgets import (
-    KIND_TITLES,
     Explorer,
     ExplorerPanel,
     Inspector,
@@ -220,7 +219,14 @@ class MainWindow(QMainWindow):
         self.inspector.skins_page.skin_selected.connect(self.viewport.set_skin)
         self.viewport.skin_changed.connect(self._skin_shown)
         self.jobs.started.connect(self._job_started)
-        self.jobs.log.connect(self.log.append_line)
+        # a job's log arrives line by line (a merge: thousands): batched into
+        # the panel every 100 ms instead of one repaint per line
+        self._log_buffer: list[str] = []
+        self._log_timer = QTimer(self)
+        self._log_timer.setInterval(100)
+        self._log_timer.timeout.connect(self._flush_log)
+        self._log_timer.start()
+        self.jobs.log.connect(self._log_buffer.append)
         self.jobs.progress.connect(self._job_progress)
         self.jobs.done.connect(self._job_done)
         self.log_dock.visibilityChanged.connect(self.log_button.setChecked)
@@ -400,7 +406,6 @@ class MainWindow(QMainWindow):
     def import_server_folder(self) -> None:
         """Project ▸ Import server folder: models + the sounds they play + the
         weapon HUDs of a mod folder, as one background job."""
-        from valve_qc_merger.project.workflow import import_server_folder
         from valve_qc_merger.studio.dialogs import ImportServerDialog
         project = self.project
         if project is None or self.jobs.busy:
@@ -418,24 +423,8 @@ class MainWindow(QMainWindow):
                    "sprites": dialog.sprites_box.isChecked(),
                    "category": dialog.category_box.currentData()}
 
-        def work(reporter: Reporter) -> str:
-            result = import_server_folder(project, root, reporter=reporter, **options)
-            for line in result.failed:
-                reporter.log(f"  warn: {line}")
-            summary = (f"{len(result.models)} model(s), {len(result.sounds)} sound(s), "
-                       f"{len(result.sprites)} sprite file(s)"
-                       + (f"; {len(result.skipped)} already here" if result.skipped else ""))
-            reporter.log(f"  imported {summary}")
-            if result.ignored:
-                reporter.log(f"  {len(result.ignored)} model(s) left out — map props, "
-                             "effects, NPCs (not weapon or player models): "
-                             + ", ".join(result.ignored[:12])
-                             + (" …" if len(result.ignored) > 12 else ""))
-            if result.game_dir_set:
-                reporter.log(f"  game folder set to {root} (budgets, maps, doctor)")
-            return summary
-
-        self.jobs.start(f"Import {root.name}", work)
+        self._start_task(f"Import {root.name}", "import_server", folder=str(root),
+                         options=options)
 
     def make_previews(self) -> None:
         """Project ▸ Weapon previews: a PNG per view model without the hands,
@@ -978,45 +967,8 @@ class MainWindow(QMainWindow):
         if category is None:
             return
 
-        def work(reporter: Reporter) -> list[str]:
-            from valve_qc_merger.project.model import ImportOutcome
-            if mdl:
-                outcome = project.import_models(sources, category=category or None,
-                                                reporter=reporter)
-            else:
-                outcome = ImportOutcome()
-                for done, source in enumerate(sources):
-                    reporter.check()
-                    reporter.progress(done, len(sources), source.name)
-                    folders = [source] if any(source.glob("*.qc")) else sorted(
-                        d for d in source.iterdir() if d.is_dir() and any(d.glob("*.qc")))
-                    for folder in folders:
-                        if folder.name in project.assets:
-                            outcome.skipped.append(folder.name)
-                            continue
-                        try:
-                            outcome.added += project.import_decompiled(
-                                folder, category=category or None)
-                        except (ProjectError, OSError, ValueError) as exc:
-                            outcome.failed.append(f"{folder.name}: {exc}")
-            for asset in outcome.added:
-                where = f"  [{asset.category}]" if asset.category else ""
-                reporter.log(f"  + {asset.name:<28} {KIND_TITLES[asset.kind]}{where}")
-            if outcome.skipped:
-                reporter.log(f"  {len(outcome.skipped)} already in the project, skipped: "
-                             + ", ".join(outcome.skipped[:12])
-                             + (" …" if len(outcome.skipped) > 12 else ""))
-            if outcome.ignored:
-                reporter.log(f"  {len(outcome.ignored)} left out (map props, effects, NPCs "
-                             "— not weapon or player models): "
-                             + ", ".join(outcome.ignored[:12])
-                             + (" …" if len(outcome.ignored) > 12 else ""))
-            for line in outcome.failed:
-                reporter.log(f"  warn: {line}")
-            reporter.log(f"  imported {len(outcome.added)} model(s)")
-            return [a.name for a in outcome.added]
-
-        self.jobs.start(title, work)
+        self._start_task(title, "import_models", sources=[str(s) for s in sources],
+                         category=category or None, mdl=mdl)
 
     def remove_asset(self, name: str) -> None:
         if self.project is None or self.jobs.busy:
@@ -1364,35 +1316,9 @@ class MainWindow(QMainWindow):
                     options: dict) -> None:
         project = self.project
         assert project is not None
-        made: list[str] = []
-
-        def work(reporter: Reporter) -> object:
-            failed: list[str] = []
-            for done, (source, name) in enumerate(jobs):
-                reporter.check()
-                reporter.progress(done, len(jobs), source)
-                try:
-                    result, asset = project.derive_asset(source, mode, options, name=name,
-                                                         reporter=reporter)
-                except ProjectError as exc:
-                    reporter.log(f"  {source}: {exc}")
-                    failed.append(source)
-                    continue
-                if asset is None:
-                    reporter.log(f"  {source}: FAILED (exit {result.exit_code})")
-                    failed.append(source)
-                else:
-                    reporter.log(f"  + {asset.name}")
-                    made.append(asset.name)
-                    self._pending_asset = asset.name
-            reporter.progress(len(jobs), len(jobs), "done")
-            if failed:
-                reporter.log(f"retarget: {len(failed)} of {len(jobs)} failed: "
-                             f"{', '.join(failed)}")
-            return made
-
         title = "Retarget" if len(jobs) == 1 else f"Retarget {len(jobs)} assets"
-        self.jobs.start(title, work)
+        self._start_task(title, "derive", jobs=[(s, n) for s, n in jobs], mode=mode,
+                         options=dict(options))
 
     # -- builds ------------------------------------------------------------
     def new_build(self) -> None:
@@ -1416,21 +1342,9 @@ class MainWindow(QMainWindow):
         if then_compile and not self._studiomdl_ready():
             return
 
-        def work(reporter: Reporter) -> object:
-            result = project.run_build(name, reporter)
-            reporter.log("measuring output parts…")
-            record_part_stats(project.build_dir(name) / "last_run.json", project.root)
-            if then_compile:
-                if not result.outputs:
-                    reporter.log("nothing to compile: the build emitted no QC")
-                    return result
-                reporter.check()
-                return project.compile_build(name, reporter)
-            return result
-
         self._pending_build = name
         title = f"Build + compile {name}" if then_compile else f"Build {name}"
-        self.jobs.start(title, work)
+        self._start_task(title, "build", name=name, then_compile=then_compile)
 
     def plan_build(self, name: str) -> None:
         project = self.project
@@ -1441,7 +1355,7 @@ class MainWindow(QMainWindow):
             return
         self._pending_build = name
         self._pending_tab = "plan"
-        self.jobs.start(f"Plan {name}", lambda r: project.plan_build(name, r))
+        self._start_task(f"Plan {name}", "plan", name=name)
 
     def deploy_build(self, name: str) -> None:
         """Copy the build's compiled models + manifest into the game folder,
@@ -1472,7 +1386,7 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
         self._pending_build = name
-        self.jobs.start(f"Deploy {name}", lambda r: project.deploy_build(name, r))
+        self._start_task(f"Deploy {name}", "deploy", name=name)
 
     def _reveal_asset(self, name: str) -> None:
         """Select an asset in the Explorer (clearing a filter that hides it)."""
@@ -1510,7 +1424,7 @@ class MainWindow(QMainWindow):
                 self.run_build(name, then_compile=True)
             return
         self._pending_build = name
-        self.jobs.start(f"Compile {name}", lambda r: project.compile_build(name, r))
+        self._start_task(f"Compile {name}", "compile", name=name)
 
     def delete_build(self, name: str) -> None:
         if self.project is None or not name or self.jobs.busy:
@@ -1722,7 +1636,43 @@ class MainWindow(QMainWindow):
             self.progress.setValue(done)
         self.statusBar().showMessage(label)
 
+    def _start_task(self, title: str, task: str, **kwargs: object) -> bool:
+        """Run a heavy task of :mod:`.tasks` in a process of its own (the
+        window keeps painting); the project is saved first and re-read after."""
+        if self.project is None:
+            return False
+        self.project.save()
+        return self.jobs.start_process(title, task, root=str(self.project.root), **kwargs)
+
+    def _reload_project(self) -> None:
+        """Re-read the project a job process changed on disk; panels holding
+        the old object get the new one."""
+        if self.project is None:
+            return
+        try:
+            fresh = Project.open(self.project.root)
+        except (ProjectError, OSError, ValueError) as exc:
+            self.log.append_line(f"warn: could not re-read the project: {exc}")
+            return
+        self.project = fresh
+        window = getattr(self, "server_window", None)
+        if window is not None:
+            window.project = fresh
+            for panel in vars(window).values():
+                if hasattr(panel, "project") and panel is not window:
+                    panel.project = fresh
+
+    def _flush_log(self) -> None:
+        if self._log_buffer:
+            lines, self._log_buffer[:] = list(self._log_buffer), []
+            self.log.append_lines(lines)
+
     def _job_done(self, title: str, ok: bool, payload: object) -> None:
+        self._flush_log()
+        if self.jobs.process_job:
+            self._reload_project()
+            if isinstance(payload, dict) and payload.get("made"):
+                self._pending_asset = payload["made"][-1]  # a retarget's last result
         self.progress.setVisible(False)
         self.cancel_button.setVisible(False)
         started, warnings, errors = self._job_mark

@@ -131,7 +131,8 @@ def test_window_retargets_selected_asset(app, tmp_path: Path, monkeypatch) -> No
         assert win.jobs.wait(120_000)
         assert dialog.isVisible() and dialog.run_button.isEnabled()
         assert not dialog.name_edit.isEnabled()  # later Applies re-run this asset
-        assert "v_anaconda_canon" in project.assets
+        # the job ran in a process: the window re-read the project from disk
+        assert "v_anaconda_canon" in win.project.assets
         assert win.explorer.current_asset() == "v_anaconda_canon"
         assert "canon from asset v_anaconda" in win.inspector.source_label.text()
     finally:

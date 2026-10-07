@@ -149,6 +149,39 @@ class LogPanel(QWidget):
             if at_end:
                 bar.setValue(bar.maximum())
 
+    def append_lines(self, lines: list[str]) -> None:
+        """Many lines at once (a job's log, batched): one view update."""
+        if not lines:
+            return
+        if len(lines) == 1:
+            self.append_line(lines[0])
+            return
+        shown: list[str] = []
+        counted = False
+        for line in lines:
+            level = classify(line)
+            self._entries.append((level, line))
+            if level == "warning":
+                self.warnings += 1
+                counted = True
+            elif level == "error":
+                self.errors += 1
+                counted = True
+            if self._shown(level, line):
+                shown.append(self._html(level, line))
+        if counted:
+            self.counts_changed.emit(self.warnings, self.errors)
+        if len(self._entries) > MAX_ENTRIES:
+            del self._entries[: len(self._entries) - MAX_ENTRIES + MAX_ENTRIES // 10]
+            self._render()
+            return
+        if shown:
+            bar = self.view.verticalScrollBar()
+            at_end = bar.value() >= bar.maximum() - 4
+            self.view.append("<br>".join(shown))
+            if at_end:
+                bar.setValue(bar.maximum())
+
     def clear(self) -> None:
         self._entries.clear()
         self.warnings = self.errors = 0

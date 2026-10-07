@@ -41,6 +41,15 @@ def selftest(mdl: Path | None) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         project = Project.create(Path(tmp) / "selftest")
         window.set_project(project)
+        # heavy jobs run in a process of their own: it must start in a frozen
+        # build too (multiprocessing.freeze_support at the entry point)
+        results: list[tuple[bool, object]] = []
+        window.jobs.done.connect(lambda _t, ok, payload: results.append((ok, payload)))
+        window._start_task("selftest", "ping")
+        if not window.jobs.wait(120_000) or results != [(True, "pong from selftest")]:
+            print(f"SELFTEST FAIL: job process: {results}", flush=True)
+            return 1
+        print("job process: ok", flush=True)
         if mdl is not None:
             (asset,) = project.import_mdl(mdl)
             scene = build_scene(project.asset_dir(asset.name))
@@ -55,6 +64,11 @@ def selftest(mdl: Path | None) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     """Start the studio; an optional argument opens that project folder.
     ``--selftest [model.mdl]`` runs the headless smoke test instead."""
+    import multiprocessing
+    multiprocessing.freeze_support()  # a frozen job process stops here and runs the job
+    # threads still in use (previews, bone tools): hand the interpreter lock
+    # back to the window more often than the default 5 ms
+    sys.setswitchinterval(0.001)
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError:
