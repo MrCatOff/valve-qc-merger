@@ -512,6 +512,26 @@ successful compile* checked, Compile (and Run and compile) deploys by itself.
 the include, `.res`, ReChecker rules and versioned names (see
 [server.md](server.md)).
 
+## Command line (project)
+
+Everything the window does with builds also runs without it — from a script,
+CI or the server itself (the exe takes the same command):
+
+```bash
+valve-qc-merger project info    MyPack                 # assets, builds and their state
+valve-qc-merger project import  MyPack models/ ...     # .mdl files/folders (--decompiled: QC folders)
+valve-qc-merger project import-server MyPack /srv/hlds/cstrike
+valve-qc-merger project build   MyPack [view ...] --compile --deploy
+valve-qc-merger project compile MyPack view
+valve-qc-merger project deploy  MyPack                 # builds/<name>/cstrike -> game folder
+valve-qc-merger project package MyPack --out pkg/      # like Build ▸ Export server package
+```
+
+No build names: every build. `--studiomdl` and `--game-dir` override the
+project's settings for that run only (nothing is saved). The exit code is 0
+when everything succeeded, 2 when a build or compile failed, 3 for bad input
+(no such project or build, no game folder, not compiled yet).
+
 ## Asset status
 
 Every asset in the Explorer carries a dot (details in its tooltip and in

@@ -18,6 +18,8 @@ Project documentation lives here, one page per topic.
 - [Server tools](server.md) — precache budget per map, mod-folder doctor, sounds (ReHLDS)
 - [`merge-zhands`](merge-zhands.md) — merge CSO zombie hand view models (+ `zhands-grenade` for zombies without one)
   (knife + grenade per zombie) into one model with a shared grenade bodygroup.
+- [`project`](studio.md#command-line-project) — a Studio project from the command line:
+  info, import, build, compile, deploy, package (scripts, CI, a server).
 - [Studio (GUI)](studio.md) — the desktop IDE plan, the service layer
   (`run_<op>(options, reporter)`) and the `project.toml` project format.
 - [Building the `tmp/wpn_unpacked` pack](wpn_unpacked-build.md) — a worked

@@ -16,6 +16,7 @@ from valve_qc_merger.commands.merge_players import MergePlayersCommand
 from valve_qc_merger.commands.merge_view import MergeViewCommand
 from valve_qc_merger.commands.merge_world import MergeWorldCommand
 from valve_qc_merger.commands.merge_zhands import MergeZhandsCommand
+from valve_qc_merger.commands.project import ProjectCommand
 from valve_qc_merger.commands.retarget import RetargetCommand
 from valve_qc_merger.commands.zhands_grenade import ZhandsGrenadeCommand
 
@@ -30,6 +31,7 @@ _COMMAND_CLASSES: list[type[Command]] = [
     MergeZhandsCommand,
     ZhandsGrenadeCommand,
     DecompileCommand,
+    ProjectCommand,
 ]
 
 
