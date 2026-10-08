@@ -323,11 +323,21 @@ def _rewrite_sound_events(
 SEQ_NAME_LIMIT = 31  # studiomdl strcpy's labels into char[32] unchecked
 
 
+def _sanitize_label(label: str) -> str:
+    """A sequence label studiomdl and the file system both take: printable
+    ASCII, no spaces or quotes. A decompiled label can hold bytes of another
+    code page (``"\ufffd\ufffd KakTyc"``): written into the QC as one byte
+    string and into the SMD's file name as another, studiomdl then cannot
+    find the animation and the whole compile fails."""
+    return "".join(ch if "!" <= ch <= "~" and ch != '"' else "_" for ch in label) or "seq"
+
+
 def _unique_sequence_names(models: list[ModelInput]) -> dict[tuple[str, str], str]:
     taken: set[str] = set()
     out: dict[tuple[str, str], str] = {}
     for model in models:
-        for seq_name in model.anims:
+        for original in model.anims:
+            seq_name = _sanitize_label(original)
             final = seq_name if seq_name not in taken else f"{model.name}__{seq_name}"
             final = final[:SEQ_NAME_LIMIT]
             counter = 2
@@ -337,7 +347,7 @@ def _unique_sequence_names(models: list[ModelInput]) -> dict[tuple[str, str], st
                          + suffix)
                 counter += 1
             taken.add(final)
-            out[(model.name, seq_name)] = final
+            out[(model.name, original)] = final
     return out
 
 

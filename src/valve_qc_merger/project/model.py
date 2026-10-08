@@ -1215,6 +1215,9 @@ class Project:
                 deployed = self.deploy_build(name, reporter)
                 if not deployed.ok:
                     total.exit_code = deployed.exit_code
+        else:
+            reporter.log(f"server files ({SERVER_TREE}/) not made: "
+                         f"{len(total.failures)} model(s) failed to compile")
         return total
 
 
