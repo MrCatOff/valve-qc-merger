@@ -21,3 +21,13 @@ def test_unique_names_keep_the_original_key() -> None:
     assert names[("v_a", "ф idle")] == "__idle"
     assert names[("v_a", "draw")] == "draw"
     assert names[("v_b", "draw")] == "v_b__draw"
+
+
+def test_repeated_labels_keep_every_sequence_in_order() -> None:
+    from valve_qc_merger.merge_view.discovery import _unique_names
+    from valve_qc_merger.retarget.qc_build import QcSequence
+    seqs = [QcSequence(name, None, (), smd=f"a/{i}") for i, name in
+            enumerate(["idle", "reload", "Reload", "reload", "draw"])]
+    assert [s.name for s in _unique_names(seqs)] == ["idle", "reload", "Reload_2",
+                                                     "reload_3", "draw"]
+    assert [s.smd for s in _unique_names(seqs)] == [s.smd for s in seqs]

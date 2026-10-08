@@ -9,6 +9,7 @@ disk with every textual reference patched, before anything is parsed.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -145,6 +146,23 @@ def _resolve_smd(model_dir: Path, stem: str) -> Path:
     return model_dir / relative
 
 
+def _unique_names(sequences: list[QcSequence]) -> list[QcSequence]:
+    """Sequences with a label already taken renamed ``<label>_2``, ``_3``…
+    (decompiled models repeat labels — three "reload"s). Keyed by name, the
+    later ones overwrote the first: the merge lost animations and every
+    sequence after them shifted (the game asks by number)."""
+    taken: set[str] = set()
+    out: list[QcSequence] = []
+    for seq in sequences:
+        name, counter = seq.name, 2
+        while name.lower() in taken:
+            name = f"{seq.name}_{counter}"
+            counter += 1
+        taken.add(name.lower())
+        out.append(seq if name == seq.name else dataclasses.replace(seq, name=name))
+    return out
+
+
 def load_model(model_dir: Path, *, require_anims: bool = True) -> ModelInput:
     """Parse one model's QC manifest and every SMD it references.
 
@@ -155,7 +173,7 @@ def load_model(model_dir: Path, *, require_anims: bool = True) -> ModelInput:
     qc_path = sorted(model_dir.glob("*.qc"))[0]
     qc_text = qc_path.read_text(encoding="latin-1")
     bodygroups = parse_bodygroups(qc_text)
-    sequences = parse_sequences(qc_text)
+    sequences = _unique_names(parse_sequences(qc_text))
     model = ModelInput(
         name=model_dir.name, directory=model_dir, qc_path=qc_path, qc_text=qc_text,
         bodygroups=bodygroups, sequences=sequences,
