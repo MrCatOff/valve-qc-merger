@@ -207,7 +207,8 @@ def test_export_package_writes_tree_include_res_and_report(tmp_path: Path) -> No
         ' { event 5004 9 "weapons/nowhere.wav" }\n}\n', encoding="latin-1")
     (output / "v_pack_p1.mdl").write_bytes(b"IDST" + b"\0" * 300)
     (project.build_dir("view") / "output" / "models.ini").write_text(
-        "[v_ak47]\nmodel = v_pack_p1.mdl\npev_body = 3\nanim_reload = 1\nanim_draw = 2\n",
+        "[v_ak47]\nmodel = v_pack_p1.mdl\npev_body = 3\nanim_reload = 1\nanim_draw = 2\n"
+        "anim_shoot1 = 4\nanim_shoot_empty = 5\n",
         encoding="utf-8")
     (project.build_dir("view") / "last_run.json").write_text(json.dumps(
         {"outputs": ["builds/view/output/p1/v_pack_p1.qc"]}), encoding="utf-8")
@@ -228,6 +229,14 @@ def test_export_package_writes_tree_include_res_and_report(tmp_path: Path) -> No
     assert '"sound/weapons/pack_clipin.wav",' in inc
     assert '#define VQM_V_AK47_MODEL "models/v_pack_p1.mdl"' in inc
     assert "#define VQM_V_AK47_BODY 3" in inc and "#define VQM_V_AK47_ANIM_RELOAD 1" in inc
+    # run-time rows for vqm_weapons.sma: source order -> merged sequences
+    assert "stock const VQM_WEAPON_COUNT = 1;" in inc
+    assert "stock const VQM_SEQ[] = { 1, 2, 4, 5 };" in inc
+    assert "stock const VQM_SHOOT[] = { 4 };" in inc  # shoot_empty is not a shot
+    assert "stock const VQM_BODIES[] = { 3 };" in inc and "stock vqm_find(" in inc
+    amxx = tmp_path / "out" / "amxx"
+    assert "#include \"vqm_resources.inc\"" in (amxx / "vqm_weapons.sma").read_text()
+    assert "; view models: v_ak47" in (amxx / "vqm_weapons.ini").read_text()
     res = (tmp_path / "out" / "vqm_resources.res").read_text().splitlines()
     assert "models/v_pack_p1.mdl" in res and "sound/weapons/pack_clipin.wav" in res
     text = (tmp_path / "out" / "package_report.txt").read_text()

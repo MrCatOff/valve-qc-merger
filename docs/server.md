@@ -154,7 +154,11 @@ Build ▸ **Export server package…** (Ctrl+Shift+E) writes
   too: `precache_sound`), a `vqm_precache()` to call from `plugin_precache()`
   — the split follows the Server window's mode and each sound's choice, and per merged
   weapon `VQM_<WEAPON>_MODEL`, `_BODY` (its `pev_body`), `_SKIN` and
-  `_ANIM_<SEQUENCE>` numbers from the manifest.
+  `_ANIM_<SEQUENCE>` numbers from the manifest — and the same weapons as
+  run-time rows (`VQM_NAMES`, `VQM_MODEL_PATHS`, `VQM_BODIES`, `VQM_SEQ`… and
+  `vqm_find(name)`).
+- `amxx/vqm_weapons.sma` + `vqm_weapons.ini` — a ready ReAPI plugin (see
+  below) and its config, listing every v_/p_/w_ name of the package.
 - `vqm_resources.res` — the same files as a `.res` list (copy as
   `maps/<map>.res` for a map to send them).
 - `rechecker/resources.ini` — rules for
@@ -166,6 +170,34 @@ Build ▸ **Export server package…** (Ctrl+Shift+E) writes
 - `package_report.txt` — files and sizes, what a new player downloads,
   sounds the models play that nothing provides, builds left out (not run or
   not compiled).
+
+### The weapon plugin (vqm_weapons.sma)
+
+A starting point that puts the merged models on the stock weapons, compiled
+and checked with AMX Mod X 1.10 + ReAPI 5.29 includes (test it on your server
+before going live). Copy `vqm_resources.inc` next to it in `scripting/`,
+compile (`amxxpc vqm_weapons.sma`), put `vqm_weapons.ini` in `configs/`:
+
+```ini
+; <stock weapon> = <v_ name> <p_ name> <w_ name> [<shot sound>]
+weapon_ak47 = v_ak47long_hands p_ak47long w_ak47long weapons/ak47long-1.wav
+weapon_knife = v_combat_hands p_combat -
+```
+
+- Deploy sets the line's v_/p_ models; the weapon's body selects its submodel.
+- Every animation the game sends (`SendWeaponAnim`) is renumbered: the source
+  model's n-th sequence is the stock weapon's animation n (the manifest keeps
+  that order — a repeated label is `<label>_2`), and sent with the body, also
+  to `cl_lw 1` players.
+- With a shot sound, the client's prediction and the stock fire event are off
+  for that weapon (they would play stock numbers with body 0): the plugin
+  plays one of the merged model's `shoot*`/`fire*` sequences and the sound
+  for everyone (no shell / smoke effects then).
+- Dropped weapons get the w_ model and body (`CWeaponBox::SetModel`).
+- `vqm_hand 1`: the second hands of a shared-hands view model (body + 1).
+  `vqm_p_body 1` (default): the p_ body goes on the player — GoldSource draws
+  the p_ model with the player's body, which also picks the player model's own
+  bodygroups; turn it off if your player models use them.
 
 ### Updates: new names for what changed
 

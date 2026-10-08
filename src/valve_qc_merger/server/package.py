@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from valve_qc_merger.project.model import Project
 
 MOD_FOLDER = "cstrike"
+PLUGIN_TEMPLATE = "vqm_weapons.sma"  # storage/server: the ReAPI plugin template
 
 
 @dataclass
@@ -147,6 +148,11 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
     (out / "amxx").mkdir(parents=True, exist_ok=True)
     (out / "amxx" / "vqm_resources.inc").write_text(
         amxx_include(result, project.settings.client_sounds, project.name), encoding="utf-8")
+    from valve_qc_merger.resources import data_root
+    template = data_root() / "storage" / "server" / PLUGIN_TEMPLATE
+    if template.is_file():
+        shutil.copyfile(template, out / "amxx" / PLUGIN_TEMPLATE)
+        (out / "amxx" / "vqm_weapons.ini").write_text(plugin_config(result), encoding="utf-8")
     (out / "vqm_resources.res").write_text(res_file(result), encoding="utf-8")
     from valve_qc_merger.server.rechecker import rules
     (out / "rechecker").mkdir(parents=True, exist_ok=True)
@@ -254,6 +260,85 @@ def amxx_include(result: PackageResult, client_sounds: str = "generic",
                     lines.append(f"#define VQM_{ident}_ANIM_{anim} {int(value)}")
                 except (TypeError, ValueError):
                     continue
+    lines += _runtime_tables(result)
+    return "\n".join(lines) + "\n"
+
+
+_SHOOT = re.compile(r"(?i)^anim_(shoot|fire)(?!.*empty)")
+
+
+def _int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return default
+
+
+def _runtime_tables(result: PackageResult) -> list[str]:
+    """Every merged weapon as rows a plugin looks up by manifest name at run
+    time (vqm_weapons.sma): model, body, skin, its sequences in the source
+    model's order (the stock weapon's animation numbers -> the merged
+    model's) and its shoot sequences."""
+    names, models, bodies, skins = [], [], [], []
+    seq_first, seq_count, seqs = [], [], []
+    shoot_first, shoot_count, shoots = [], [], []
+    for weapon, entry in sorted(result.weapons.items()):
+        anims = [(k, _int(v, -1)) for k, v in entry.items() if k.startswith("anim_")]
+        anims = [(k, v) for k, v in anims if v >= 0]
+        names.append(weapon)
+        models.append(str(entry.get("model", "")))
+        bodies.append(_int(entry.get("pev_body")))
+        skins.append(_int(entry.get("skin")))
+        seq_first.append(len(seqs))
+        seq_count.append(len(anims))
+        seqs += [v for _k, v in anims]
+        picked = [v for k, v in anims if _SHOOT.match(k)]
+        shoot_first.append(len(shoots))
+        shoot_count.append(len(picked))
+        shoots += picked
+
+    def strings(values: list[str]) -> list[str]:
+        return [f'\t"{v}",' for v in values or ["-"]]
+
+    def numbers(values: list[int]) -> str:
+        return ", ".join(map(str, values or [0]))
+
+    return [
+        "", "// the same weapons as rows, looked up by manifest name at run time",
+        "// (vqm_weapons.sma): VQM_SEQ[VQM_SEQ_FIRST[i] + n] is the merged model's",
+        "// sequence for the source model's n-th — the stock weapon's animation n",
+        f"stock const VQM_WEAPON_COUNT = {len(names)};",
+        "stock const VQM_NAMES[][] = {", *strings(names), "};",
+        "stock const VQM_MODEL_PATHS[][] = {", *strings(models), "};",
+        f"stock const VQM_BODIES[] = {{ {numbers(bodies)} }};",
+        f"stock const VQM_SKINS[] = {{ {numbers(skins)} }};",
+        f"stock const VQM_SEQ_FIRST[] = {{ {numbers(seq_first)} }};",
+        f"stock const VQM_SEQ_COUNT[] = {{ {numbers(seq_count)} }};",
+        f"stock const VQM_SEQ[] = {{ {numbers(seqs)} }};",
+        f"stock const VQM_SHOOT_FIRST[] = {{ {numbers(shoot_first)} }};",
+        f"stock const VQM_SHOOT_COUNT[] = {{ {numbers(shoot_count)} }};",
+        f"stock const VQM_SHOOT[] = {{ {numbers(shoots)} }};",
+        "",
+        "// the row of a manifest name, or -1",
+        "stock vqm_find(const name[])", "{",
+        "\tfor (new i = 0; i < VQM_WEAPON_COUNT; i++)",
+        "\t\tif (equali(VQM_NAMES[i], name)) return i;",
+        "\treturn -1;", "}",
+    ]
+
+
+def plugin_config(result: PackageResult) -> str:
+    """A ``vqm_weapons.ini`` to fill in: the format and every manifest name."""
+    lines = ["; vqm_weapons.sma: which merged weapon each stock weapon becomes.",
+             "; <stock weapon> = <v_ name> <p_ name> <w_ name> [<shot sound>]",
+             '; "-" keeps the stock model; the shot sound (relative to sound/) turns on',
+             "; the plugin's own shoot sequence + sound for that weapon. Example:",
+             ";weapon_ak47 = v_ak47long_hands p_ak47long w_ak47long weapons/ak47long-1.wav",
+             ""]
+    for prefix, title in (("v_", "view models"), ("p_", "player-held"), ("w_", "world")):
+        names = sorted(n for n in result.weapons if n.lower().startswith(prefix))
+        if names:
+            lines.append(f"; {title}: " + " ".join(names))
     return "\n".join(lines) + "\n"
 
 
@@ -301,4 +386,5 @@ def report(result: PackageResult) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["PackageResult", "amxx_include", "export_package", "report", "res_file"]
+__all__ = ["PackageResult", "amxx_include", "export_package", "plugin_config", "report",
+           "res_file"]
