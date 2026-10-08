@@ -135,3 +135,33 @@ def test_deploy_makes_a_missing_server_tree(project: Project, tmp_path: Path) ->
     assert names == {f"models/{mdl.name}", f"models/{mdl.stem}T.mdl",
                      "models/v_zhands_models.ini"}
     assert project.server_tree("zh").is_dir()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fake compiler")
+def test_compile_skips_unchanged_models_also_across_a_run(project: Project,
+                                                          tmp_path: Path) -> None:
+    count = tmp_path / "count"
+    fake = tmp_path / "studiomdl"
+    fake.write_text(f"#!/bin/sh\necho x >> {count}\nprintf 'IDST' > v_zhands.mdl\n"
+                    "printf 'T' > v_zhandsT.mdl\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    project.settings.studiomdl = str(fake)
+
+    def runs() -> int:
+        return len(count.read_text().split()) if count.exists() else 0
+
+    assert project.compile_build("zh", CollectingReporter()).ok and runs() == 1
+    reporter = CollectingReporter()
+    assert project.compile_build("zh", reporter).ok and runs() == 1
+    assert any("up to date: v_zhands.mdl" in line for line in reporter.lines)
+    # a run rewrites the same sources: the stashed model comes back
+    assert project.run_build("zh", CollectingReporter()).ok
+    mdl = compiled_model_path(project.build_dir("zh") / "output" / "v_zhands.qc")
+    assert not mdl.exists()
+    assert project.compile_build("zh", CollectingReporter()).ok and runs() == 1
+    assert mdl.exists() and mdl.with_name("v_zhandsT.mdl").exists()
+    # a changed source compiles again; force compiles anyway
+    smd = next((project.build_dir("zh") / "output").rglob("*.smd"))
+    smd.write_text(smd.read_text() + "\n")
+    assert project.compile_build("zh", CollectingReporter()).ok and runs() == 2
+    assert project.compile_build("zh", CollectingReporter(), force=True).ok and runs() == 3

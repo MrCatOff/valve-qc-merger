@@ -320,6 +320,9 @@ class MainWindow(QMainWindow):
         self.act_compile_build = build_menu.addAction(
             "Compile selected build",
             lambda: self.compile_build(self.explorer.current_build()), QKeySequence("F7"))
+        self.act_force_compile_build = build_menu.addAction(
+            "Compile selected build — every model",
+            lambda: self.compile_build(self.explorer.current_build(), force=True))
         self.act_run_compile_build = build_menu.addAction(
             "Run and compile selected build",
             lambda: self.run_build(self.explorer.current_build(), then_compile=True),
@@ -824,6 +827,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(asset and idle)
         for action in (self.act_run_build, self.act_compile_build, self.act_plan_build,
                        self.act_deploy_build, self.act_run_compile_build,
+                       self.act_force_compile_build,
                        self.act_delete_build):
             action.setEnabled(build and idle)
         for action in (self.act_new, self.act_open):
@@ -1406,7 +1410,9 @@ class MainWindow(QMainWindow):
                                 "Set the studiomdl path in Project ▸ Settings first.")
         return False
 
-    def compile_build(self, name: str) -> None:
+    def compile_build(self, name: str, force: bool = False) -> None:
+        """Compile the build's last run; models whose sources did not change
+        are taken from the last compile unless ``force``."""
         project = self.project
         if project is None or not name or self.jobs.busy:
             if project is not None and not name:
@@ -1425,7 +1431,7 @@ class MainWindow(QMainWindow):
                 self.run_build(name, then_compile=True)
             return
         self._pending_build = name
-        self._start_task(f"Compile {name}", "compile", name=name)
+        self._start_task(f"Compile {name}", "compile", name=name, force=force)
 
     def delete_build(self, name: str) -> None:
         if self.project is None or not name or self.jobs.busy:

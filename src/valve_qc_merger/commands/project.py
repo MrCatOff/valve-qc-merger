@@ -90,6 +90,9 @@ class ProjectCommand(Command):
         package.add_argument("--out", type=Path, required=True, help="package folder")
         for sub in (build, compile_):
             sub.add_argument("--studiomdl", type=Path, help="studiomdl to use this time")
+            sub.add_argument("--force", action="store_true",
+                             help="compile every model (not only those whose sources "
+                                  "changed)")
         for sub in (build, compile_, actions.choices["deploy"]):
             sub.add_argument("--game-dir", type=Path,
                              help="the game's mod folder (…/cstrike) to use this time")
@@ -141,12 +144,13 @@ class ProjectCommand(Command):
                 worst = max(worst, result.exit_code)
                 continue
             if args.compile or args.deploy:
-                worst = max(worst, self._compile_one(project, name, args.deploy))
+                worst = max(worst, self._compile_one(project, name, args.deploy, args.force))
         return worst
 
-    def _compile_one(self, project, name: str, deploy: bool) -> int:  # noqa: ANN001
+    def _compile_one(self, project, name: str, deploy: bool,  # noqa: ANN001
+                     force: bool = False) -> int:
         print(f"== compile {name}")
-        result = project.compile_build(name, Reporter())
+        result = project.compile_build(name, Reporter(), force=force)
         if not result.ok:
             for failure in result.failures:
                 print(f"  failed: {failure}")
@@ -157,7 +161,7 @@ class ProjectCommand(Command):
 
     def _compile(self, args: argparse.Namespace) -> int:
         project = _open(args)
-        return max([self._compile_one(project, name, args.deploy)
+        return max([self._compile_one(project, name, args.deploy, args.force)
                     for name in _builds(project, args.builds)], default=EXIT_OK)
 
     def _deploy_one(self, project, name: str) -> int:  # noqa: ANN001

@@ -172,6 +172,8 @@ class Settings:
 DEPLOY_DIRS = {"merge-players": "models/player"}
 DEFAULT_DEPLOY_DIR = "models"
 MANIFEST_SUFFIXES = (".ini", ".json", ".toml")
+COMPILE_CACHE = "compile_cache.json"  # builds/<name>/: QC -> digest of its last compile
+COMPILED_STASH = ".compiled"  # builds/<name>/: the models of the run before
 SERVER_TREE = "cstrike"  # builds/<name>/cstrike: the build's files as on the server
 
 
@@ -960,6 +962,7 @@ class Project:
         kind = BUILD_KINDS[build.kind]
         base = self.build_dir(name)
         output = base / "output"
+        self._stash_compiled(name)
         shutil.rmtree(output, ignore_errors=True)
         shutil.rmtree(self.server_tree(name), ignore_errors=True)  # stale until compiled
         started = time.time()
@@ -1182,9 +1185,48 @@ class Project:
         reporter.log(f"deployed {len(pairs)} file(s) to {self.settings.game_dir}")
         return result
 
-    def compile_build(self, name: str, reporter: Reporter | None = None) -> ServiceResult:
+    def _stash_compiled(self, name: str) -> None:
+        """Before a run wipes ``output/``: keep its compiled models (``.mdl``,
+        ``T.mdl``, sequence groups) in ``builds/<name>/.compiled`` so Compile
+        can take back the ones whose sources come out the same."""
+        output = self.build_dir(name) / "output"
+        stash = self.build_dir(name) / COMPILED_STASH
+        shutil.rmtree(stash, ignore_errors=True)
+        if not output.is_dir():
+            return
+        for mdl in output.rglob("*.mdl"):
+            target = stash / mdl.relative_to(output)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(mdl, target)
+
+    def _compiled_files(self, mdl: Path) -> list[Path]:
+        """``mdl`` and its ``T.mdl`` / ``NN.mdl`` companions that exist."""
+        groups = sorted(mdl.parent.glob(f"{glob.escape(mdl.stem)}[0-9][0-9].mdl"))
+        return [p for p in (mdl, mdl.with_name(f"{mdl.stem}T.mdl"), *groups) if p.exists()]
+
+    def _restore_compiled(self, name: str, mdl: Path) -> bool:
+        """Put the stashed compile of ``mdl`` back (see :meth:`_stash_compiled`)."""
+        output = self.build_dir(name) / "output"
+        stash = self.build_dir(name) / COMPILED_STASH
+        try:
+            kept = stash / mdl.relative_to(output)
+        except ValueError:
+            return False
+        files = self._compiled_files(kept)
+        if not files or files[0] != kept:
+            return False
+        for path in files:
+            shutil.move(path, mdl.parent / path.name)
+        return True
+
+    def compile_build(self, name: str, reporter: Reporter | None = None, *,
+                      force: bool = False) -> ServiceResult:
         """Compile every QC the build's last run emitted with the configured
-        studiomdl."""
+        studiomdl. A model whose sources (its QC folder's .qc/.qci/.smd/.bmp
+        and the studiomdl itself) are byte for byte those of its last
+        successful compile is not compiled again — also across a Run, which
+        only stashes the old models. ``force``: compile every one."""
+        from valve_qc_merger.services.compile import compiled_model_path, normalize_sources
         reporter = reporter or Reporter()
         if not self.settings.studiomdl:
             reporter.log("error: set the studiomdl path in the project settings")
@@ -1194,19 +1236,43 @@ class Project:
             reporter.log(f"error: build {name!r} has not been run")
             return ServiceResult(exit_code=EXIT_DISCOVERY)
         record = json.loads(record_path.read_text(encoding="utf-8"))
+        cache_path = self.build_dir(name) / COMPILE_CACHE
+        try:
+            cache = {} if force else json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cache = {}
+        studiomdl = Path(self.settings.studiomdl)
         total = ServiceResult()
-        for done, relative in enumerate(record["outputs"]):
-            reporter.check()
-            reporter.progress(done, len(record["outputs"]), relative)
-            one = run_compile(CompileOptions(qc=self.root / relative,
-                                             studiomdl=Path(self.settings.studiomdl)),
-                              reporter)
-            total.outputs.extend(one.outputs)
-            total.failures.extend(one.failures)
-            if not one.ok:
-                total.exit_code = one.exit_code
+        reused = 0
+        try:
+            for done, relative in enumerate(record["outputs"]):
+                reporter.check()
+                reporter.progress(done, len(record["outputs"]), relative)
+                qc = self.root / relative
+                digest = None
+                if qc.is_file():
+                    normalize_sources(qc)  # what studiomdl reads, so hash after it
+                    digest = _sources_digest(qc, studiomdl)
+                    mdl = compiled_model_path(qc)
+                    if cache.get(relative) == digest and (
+                            mdl.exists() or self._restore_compiled(name, mdl)):
+                        reporter.log(f"  up to date: {mdl.name}")
+                        total.outputs.append(mdl)
+                        reused += 1
+                        continue
+                cache.pop(relative, None)
+                one = run_compile(CompileOptions(qc=qc, studiomdl=studiomdl), reporter)
+                total.outputs.extend(one.outputs)
+                total.failures.extend(one.failures)
+                if one.ok and digest is not None:
+                    cache[relative] = digest
+                if not one.ok:
+                    total.exit_code = one.exit_code
+        finally:
+            cache_path.write_text(json.dumps(cache, indent=1), encoding="utf-8")
         if total.exit_code == EXIT_OK:
-            reporter.log(f"compiled {len(total.outputs)} model(s)")
+            reporter.log(f"compiled {len(total.outputs) - reused} model(s)"
+                         + (f", {reused} up to date" if reused else ""))
             try:
                 self.stage_server_tree(name, reporter)
             except ProjectError as exc:
@@ -1219,6 +1285,31 @@ class Project:
             reporter.log(f"server files ({SERVER_TREE}/) not made: "
                          f"{len(total.failures)} model(s) failed to compile")
         return total
+
+
+_COMPILE_INPUTS = {".qc", ".qci", ".smd", ".bmp"}
+
+
+def _sources_digest(qc: Path, studiomdl: Path) -> str:
+    """Digest of what compiling ``qc`` reads: every .qc/.qci/.smd/.bmp under
+    its folder (names and bytes) and which studiomdl (path, size, time)."""
+    import hashlib
+    digest = hashlib.blake2b(digest_size=16)
+    try:
+        stat_ = studiomdl.stat()
+        digest.update(f"{studiomdl.resolve()}|{stat_.st_size}|{stat_.st_mtime_ns}".encode())
+    except OSError:
+        digest.update(str(studiomdl).encode())
+    folder = qc.parent
+    for path in sorted(p for p in folder.rglob("*")
+                       if p.is_file() and p.suffix.lower() in _COMPILE_INPUTS):
+        digest.update(path.relative_to(folder).as_posix().encode("utf-8", "surrogateescape"))
+        digest.update(b"\0")
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _asset_dict(asset: Asset) -> dict[str, Any]:

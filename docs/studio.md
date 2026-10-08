@@ -486,6 +486,17 @@ hands only after a run), folded weapons, and every rejection with its reason
 records `plan.json`. On the 56-pistol corpus the plan matched the real run
 for every model (part and `pev_body`).
 
+## Incremental compile
+
+Compile skips a model whose sources — every `.qc`/`.qci`/`.smd`/`.bmp` of
+its QC folder and the studiomdl itself — are byte for byte those of its last
+successful compile (log: `up to date: <model>.mdl`). Running the build again
+keeps the old models in `builds/<name>/.compiled` and Compile takes back the
+ones whose sources came out the same, so after changing one weapon only its
+part compiles again. Build ▸ *Compile selected build — every model* (CLI:
+`--force`) compiles all of them; the digests live in
+`builds/<name>/compile_cache.json`.
+
 ## Server files and Deploy
 
 Every successful **Compile** lays out what the build puts on a server in

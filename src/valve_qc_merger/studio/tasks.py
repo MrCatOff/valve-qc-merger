@@ -44,8 +44,9 @@ def plan(root: str, name: str, *, reporter: Reporter) -> object:
     return Project.open(Path(root)).plan_build(name, reporter)
 
 
-def compile_build(root: str, name: str, *, reporter: Reporter) -> object:
-    return Project.open(Path(root)).compile_build(name, reporter)
+def compile_build(root: str, name: str, force: bool = False, *,
+                  reporter: Reporter) -> object:
+    return Project.open(Path(root)).compile_build(name, reporter, force=force)
 
 
 def deploy(root: str, name: str, *, reporter: Reporter) -> object:
