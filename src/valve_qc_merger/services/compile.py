@@ -24,6 +24,7 @@ class CompileOptions:
     qc: Path
     studiomdl: Path
     normalize: bool = True  # LF line endings + forward slashes in the QC
+    preflight: bool = True  # check the QC first (services/qc_check.py)
 
 
 def normalize_sources(qc: Path) -> None:
@@ -61,6 +62,22 @@ def run_compile(opts: CompileOptions, reporter: Reporter | None = None) -> Servi
         return result
     if opts.normalize:
         normalize_sources(opts.qc)
+    if opts.preflight:
+        from valve_qc_merger.services.qc_check import check_qc
+        try:
+            problems = check_qc(opts.qc)
+        except (OSError, ValueError) as exc:  # the check never blocks on itself
+            reporter.log(f"  warn: QC check skipped: {exc}")
+            problems = []
+        errors = [p for p in problems if p.level == "error"]
+        for problem in problems:
+            reporter.log(f"  {'error' if problem.level == 'error' else 'warn'}: "
+                         f"{opts.qc.name}: {problem.message}")
+        if errors:
+            result.failures.append(f"{opts.qc.name}: {errors[0].message}"
+                                   + (f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""))
+            result.exit_code = EXIT_FAIL
+            return result
     target = compiled_model_path(opts.qc)
     # Remove a stale .mdl so success means "studiomdl wrote it just now":
     # some studiomdl builds exit 0 after printing an Error.

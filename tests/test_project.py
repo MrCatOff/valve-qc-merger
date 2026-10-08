@@ -144,6 +144,8 @@ def test_compile_service_with_a_fake_studiomdl(tmp_path: Path) -> None:
     qc = tmp_path / "m" / "model.qc"
     qc.parent.mkdir()
     qc.write_bytes(b'$modelname "out.mdl"\r\n$body studio "sub\\\\mesh"\r\n')
+    (qc.parent / "sub").mkdir()
+    (qc.parent / "sub" / "mesh.smd").write_bytes(b"version 1\nnodes\nend\n")
     fake = tmp_path / "studiomdl"
     fake.write_text("#!/bin/sh\necho compiling $1\nprintf 'IDST' > out.mdl\n")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)

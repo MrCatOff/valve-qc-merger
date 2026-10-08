@@ -46,6 +46,13 @@ Every operation is `run_<op>(options, reporter) -> ServiceResult` in
 - `run_compile` normalises the QC folder (LF endings, `/` in the QC), deletes
   a stale `.mdl`, streams studiomdl's output and succeeds only when studiomdl
   exits 0 AND wrote the `.mdl` (some builds exit 0 after an error).
+- Before studiomdl runs, `services/qc_check.py` reads the QC as bytes (as
+  studiomdl does) and stops the compile with a plain message on what studiomdl
+  would fail on or silently break: an SMD missing under that exact name
+  (another case, or a label of another code page spelled differently in the
+  QC and on disk), a sequence label over 31 bytes, more than 32 submodels in a
+  bodygroup or 32 bodygroups, a material with a space or over 63 bytes, more
+  than 128 bones. Non-ASCII labels, paths and materials are warnings.
 
 ## Project format
 

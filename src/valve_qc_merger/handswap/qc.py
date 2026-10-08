@@ -52,7 +52,7 @@ def _unq(s: str) -> str:
 
 
 def parse(path: str) -> QcInfo:
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, "r", encoding="latin-1") as f:
         text = f.read()
 
     m = re.search(r'(?im)^\s*\$modelname\s+("[^"]+"|\S+)', text)

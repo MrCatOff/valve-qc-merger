@@ -202,7 +202,7 @@ def convert(args, log=log) -> dict:
         at = anchor.start() if anchor else len(qc_text)
         qc_text = qc_text[:at] + lines + qc_text[at:]
     qc_name = os.path.basename(model.qc.path)
-    with open(os.path.join(out_dir, qc_name), "w", encoding="utf-8",
+    with open(os.path.join(out_dir, qc_name), "w", encoding="latin-1",
               newline="\n") as f:
         f.write(qc_text)
     log("Wrote %s" % qc_name)

@@ -127,7 +127,7 @@ def parse(path: str) -> Smd:
     material = None
     tri_verts: list[Vertex] = []
 
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, "r", encoding="latin-1") as f:
         for raw in f:
             line = raw.strip()
             # NOTE: '#' is NOT a comment — GoldSrc texture names may start
@@ -227,7 +227,7 @@ def _validate(smd: Smd) -> None:
 
 
 def write(path: str, smd: Smd) -> None:
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
+    with open(path, "w", encoding="latin-1", newline="\n") as f:
         f.write("version 1\n")
         f.write("nodes\n")
         for n in smd.nodes:
