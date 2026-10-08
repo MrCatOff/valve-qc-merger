@@ -1359,8 +1359,8 @@ class MainWindow(QMainWindow):
         self._start_task(f"Plan {name}", "plan", name=name)
 
     def deploy_build(self, name: str) -> None:
-        """Copy the build's compiled models + manifest into the game folder,
-        after confirming what gets overwritten."""
+        """Copy the build's server files (models, manifest, sounds) into the
+        game folder, after confirming what gets overwritten."""
         project = self.project
         if project is None or not name or self.jobs.busy:
             return
@@ -1369,7 +1369,7 @@ class MainWindow(QMainWindow):
                                     "Set the game folder in Project ▸ Settings first.")
             return
         try:
-            pairs = project.deploy_files(name)
+            pairs = project.deploy_pairs(name)
         except ProjectError as exc:
             QMessageBox.information(self, "Deploy", str(exc))
             return
@@ -1471,6 +1471,9 @@ class MainWindow(QMainWindow):
                 else:
                     subprocess.Popen([viewer, str(target)])
                 return
+        if not target.exists():
+            self.statusBar().showMessage("not there yet: run and compile the build", 5000)
+            return
         self._open_path(target)
 
     def _asset_scene(self, name: str) -> tuple[ModelInfo, ModelScene] | None:

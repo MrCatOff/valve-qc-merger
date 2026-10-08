@@ -18,6 +18,7 @@ copies because the services sanitise file names in place.
 
 from __future__ import annotations
 
+import filecmp
 import glob
 import json
 import os
@@ -171,6 +172,7 @@ class Settings:
 DEPLOY_DIRS = {"merge-players": "models/player"}
 DEFAULT_DEPLOY_DIR = "models"
 MANIFEST_SUFFIXES = (".ini", ".json", ".toml")
+SERVER_TREE = "cstrike"  # builds/<name>/cstrike: the build's files as on the server
 
 
 # --------------------------------------------------------------------------- #
@@ -959,6 +961,7 @@ class Project:
         base = self.build_dir(name)
         output = base / "output"
         shutil.rmtree(output, ignore_errors=True)
+        shutil.rmtree(self.server_tree(name), ignore_errors=True)  # stale until compiled
         started = time.time()
         staged = self._stage(name, base, reporter)
         if staged is None:
@@ -1093,12 +1096,73 @@ class Project:
                 pairs.append((path, target / f"{stem}{path.suffix}"))
         return pairs
 
+    def build_sound_files(self, name: str, root: Path) -> tuple[list[tuple[Path, Path]],
+                                                                 list[str]]:
+        """``(source, root/sound/<path>)`` of every sound the build's models
+        play — as their QC names it (merge-v's sound folder, shared sounds
+        already swapped in) — and the sounds not found. Stock sounds are left
+        out: the game has them."""
+        from valve_qc_merger.project import sounds as library
+        from valve_qc_merger.server.budget import _CLIENT_SOUND
+        texts = [qc.read_text(encoding="latin-1")
+                 for qc in sorted((self.build_dir(name) / "output").rglob("*.qc"))]
+        named = {library.sound_key(s): s.replace("\\", "/").strip()
+                 for text in texts for s in _CLIENT_SOUND.findall(text)}
+        pairs: list[tuple[Path, Path]] = []
+        missing: list[str] = []
+        for key in sorted(library.project_sound_kinds(self, texts)):
+            sound = named.get(key, key)
+            source = library.resolve(self, sound)
+            if source is None:
+                missing.append(sound)
+            else:
+                pairs.append((source, Path(root) / "sound" / sound))
+        return pairs, missing
+
+    def server_tree(self, name: str) -> Path:
+        """``builds/<name>/cstrike``: what the build puts on a server, laid
+        out as in the game folder (made by Compile, copied by Deploy)."""
+        return self.build_dir(name) / SERVER_TREE
+
+    def stage_server_tree(self, name: str, reporter: Reporter | None = None) -> Path:
+        """(Re)make :meth:`server_tree`: the compiled models (+ ``T.mdl`` and
+        sequence groups) under the build's deploy folder, player models in
+        ``models/player/<model>/<model>.mdl``, the manifest, and every sound
+        the models play under ``sound/``. Raises ProjectError when the build
+        is not run or compiled."""
+        reporter = reporter or Reporter()
+        tree = self.server_tree(name)
+        pairs = self.deploy_files(name, root=tree)
+        sounds, missing = self.build_sound_files(name, tree)
+        shutil.rmtree(tree, ignore_errors=True)
+        for source, destination in pairs + sounds:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        for sound in missing:
+            reporter.log(f"  warn: sound {sound} not found (import it in Sounds)")
+        reporter.log(f"server files: {len(pairs)} model/manifest file(s), {len(sounds)} "
+                     f"sound(s) in {tree}")
+        return tree
+
+    def deploy_pairs(self, name: str) -> list[tuple[Path, Path]]:
+        """``(source, destination)`` of Deploy: every file of the build's
+        :meth:`server_tree` (made first when missing) into the game folder."""
+        if not self.settings.game_dir:
+            raise ProjectError("set the game folder in the project settings")
+        tree = self.server_tree(name)
+        if not tree.is_dir():
+            self.stage_server_tree(name)
+        game = Path(self.settings.game_dir)
+        return [(path, game / path.relative_to(tree))
+                for path in sorted(tree.rglob("*")) if path.is_file()]
+
     def deploy_build(self, name: str, reporter: Reporter | None = None) -> ServiceResult:
-        """Copy the build's compiled models and manifest into the game folder."""
+        """Copy the build's server files (``builds/<name>/cstrike``) into the
+        game folder."""
         reporter = reporter or Reporter()
         result = ServiceResult()
         try:
-            pairs = self.deploy_files(name)
+            pairs = self.deploy_pairs(name)
         except ProjectError as exc:
             reporter.log(f"error: {exc}")
             result.exit_code = EXIT_DISCOVERY
@@ -1107,6 +1171,11 @@ class Project:
             reporter.check()
             reporter.progress(done, len(pairs), destination.name)
             destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists() and destination.samefile(source):
+                continue
+            if destination.exists() and filecmp.cmp(source, destination, shallow=False):
+                result.outputs.append(destination)
+                continue  # the game has this very file already (a shared sound)
             shutil.copy2(source, destination)
             reporter.log(f"  deployed {destination}")
             result.outputs.append(destination)
@@ -1138,6 +1207,10 @@ class Project:
                 total.exit_code = one.exit_code
         if total.exit_code == EXIT_OK:
             reporter.log(f"compiled {len(total.outputs)} model(s)")
+            try:
+                self.stage_server_tree(name, reporter)
+            except ProjectError as exc:
+                reporter.log(f"warn: server files not made: {exc}")
             if self.settings.deploy_after_compile and self.settings.game_dir:
                 deployed = self.deploy_build(name, reporter)
                 if not deployed.ok:

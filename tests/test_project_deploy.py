@@ -1,7 +1,8 @@
-"""Deploy: compiled models + manifest into the game folder."""
+"""Deploy: the build's server files (builds/<name>/cstrike) into the game folder."""
 
 from __future__ import annotations
 
+import re
 import stat
 import sys
 from pathlib import Path
@@ -80,3 +81,57 @@ def test_deploy_after_compile(project: Project, tmp_path: Path) -> None:
     reporter = CollectingReporter()
     assert project.compile_build("zh", reporter).ok, reporter.lines
     assert (tmp_path / "cstrike" / "models" / "v_zhands.mdl").exists()
+    assert (project.server_tree("zh") / "models" / "v_zhands.mdl").exists()
+
+
+def _play_sounds(project: Project, *sounds: str) -> None:
+    """Give the built QC's idle sequence client sound events."""
+    import json
+    record = json.loads((project.build_dir("zh") / "last_run.json").read_text())
+    qc = project.root / record["outputs"][0]
+    events = " ".join(f'{{ event 5004 1 "{s}" }}' for s in sounds)
+    qc.write_text(re.sub(r"(\$sequence \S+ \{)", rf"\1 {events}", qc.read_text(), count=1))
+
+
+def test_server_tree_holds_models_manifest_and_played_sounds(project: Project,
+                                                              tmp_path: Path) -> None:
+    from valve_qc_merger.project import sounds as library
+    build = project.builds["zh"]
+    build.deploy_dir = "models/my/path"
+    project.update_build(build)
+    with pytest.raises(ProjectError, match="not compiled"):
+        project.stage_server_tree("zh")
+    _play_sounds(project, "weapons/zh/slash.wav", "weapons/knife_hit1.wav",
+                 "weapons/zh/missing.wav")
+    wav = library.sounds_dir(project) / "weapons" / "zh" / "slash.wav"
+    wav.parent.mkdir(parents=True)
+    wav.write_bytes(b"RIFF")
+    mdl = _fake_compile(project)
+    reporter = CollectingReporter()
+    tree = project.stage_server_tree("zh", reporter)
+    assert tree == project.build_dir("zh") / "cstrike"
+    files = sorted(p.relative_to(tree).as_posix() for p in tree.rglob("*") if p.is_file())
+    assert files == [f"models/my/path/{mdl.name}", f"models/my/path/{mdl.stem}T.mdl",
+                     "models/my/path/v_zhands_models.ini",
+                     "sound/weapons/zh/slash.wav"]  # the stock knife_hit1 is the game's
+    assert any("weapons/zh/missing.wav" in line for line in reporter.lines)
+
+    # Deploy copies the tree as it is; a re-run makes it stale (gone)
+    project.settings.game_dir = str(tmp_path / "game" / "cstrike")
+    assert project.deploy_build("zh", CollectingReporter()).ok
+    game = tmp_path / "game" / "cstrike"
+    assert (game / "sound/weapons/zh/slash.wav").read_bytes() == b"RIFF"
+    assert (game / "models/my/path" / mdl.name).exists()
+    assert project.run_build("zh", CollectingReporter()).ok
+    assert not tree.exists()
+
+
+def test_deploy_makes_a_missing_server_tree(project: Project, tmp_path: Path) -> None:
+    project.settings.game_dir = str(tmp_path / "cstrike")
+    mdl = _fake_compile(project)
+    assert not project.server_tree("zh").exists()
+    names = {d.relative_to(tmp_path / "cstrike").as_posix()
+             for _s, d in project.deploy_pairs("zh")}
+    assert names == {f"models/{mdl.name}", f"models/{mdl.stem}T.mdl",
+                     "models/v_zhands_models.ini"}
+    assert project.server_tree("zh").is_dir()

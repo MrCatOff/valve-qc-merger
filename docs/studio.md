@@ -479,16 +479,31 @@ hands only after a run), folded weapons, and every rejection with its reason
 records `plan.json`. On the 56-pistol corpus the plan matched the real run
 for every model (part and `pev_body`).
 
-## Deploy
+## Server files and Deploy
+
+Every successful **Compile** lays out what the build puts on a server in
+`builds/<name>/cstrike/`, as in the game folder:
+
+- the compiled models (+ `<name>T.mdl` texture files and `NN.mdl` sequence
+  groups) under `models/` — per build: Settings ▸ *Deploy to*, e.g.
+  `models/my/path`; player models in `models/player/<model>/<model>.mdl`;
+- the manifest, renamed `<output name>_models.ini` so two builds never
+  overwrite each other's `models.ini`;
+- every sound the models play, under `sound/` as their QC names it (merge-v's
+  sound folder; a shared sound is the kept one). Stock sounds are left out
+  (the game has them); a sound not found is a warning in the log.
+
+Running the build again removes the folder until the next Compile. Build
+panel ▸ Outputs ▸ **Server files (cstrike)** opens it — upload it as it is.
 
 Project ▸ Settings ▸ **Game folder** (the mod folder, e.g. `…/cstrike`).
-**Deploy** (build panel, Explorer ▸ build ▸ Deploy to game, F8) copies the
-build's compiled models — and their `<name>T.mdl` texture files — into
-`models/` (player models: `models/player/<model>/<model>.mdl`; per build:
-Settings ▸ *Deploy to*), plus the manifest renamed `<output name>_models.ini`
-so two builds never overwrite each other's `models.ini`. It lists every file
-first and marks the ones it replaces. With *deploy after every successful
-compile* checked, Compile (and Run and compile) deploys by itself.
+**Deploy** (build panel, Explorer ▸ build ▸ Deploy to game, F8) copies that
+folder into the game folder (making it first when it is missing). It lists
+every file first and marks the ones it replaces. With *deploy after every
+successful compile* checked, Compile (and Run and compile) deploys by itself.
+**Export server package** puts the same files of every build together, plus
+the include, `.res`, ReChecker rules and versioned names (see
+[server.md](server.md)).
 
 ## Asset status
 

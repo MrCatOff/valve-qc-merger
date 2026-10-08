@@ -275,10 +275,14 @@ class BuildPanel(QTabWidget):
         row = QHBoxLayout()
         for text, slot in (("Preview in viewport", self._preview),
                            ("Open .mdl in viewer", self._open_mdl),
-                           ("Show folder", self._show_folder)):
+                           ("Show folder", self._show_folder),
+                           ("Server files (cstrike)", self._show_server_tree)):
             button = QPushButton(text)
             button.clicked.connect(slot)
             row.addWidget(button)
+        button.setToolTip("What this build puts on the server, laid out as in the game "
+                          "folder: models, manifest and the sounds they play. Compile "
+                          "makes it; Deploy copies it into the game folder.")
         out_layout.addLayout(row)
         self.addTab(outputs, "Outputs")
 
@@ -624,6 +628,10 @@ class BuildPanel(QTabWidget):
             self.open_requested.emit(str(qc.parent))
         elif self.project is not None and self.build_name:
             self.open_requested.emit(str(self.project.build_dir(self.build_name)))
+
+    def _show_server_tree(self) -> None:
+        if self.project is not None and self.build_name:
+            self.open_requested.emit(str(self.project.server_tree(self.build_name)))
 
 
 __all__ = ["BuildPanel", "NewBuildDialog"]
