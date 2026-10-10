@@ -39,7 +39,7 @@ def test_normalize_renames_files_and_rewrites_the_qc(tmp_path: Path) -> None:
         '$bodygroup "my hands"\n{\n studio "Ref Mesh"\n blank\n}\n'
         '$texturegroup skinfamilies\n{\n { "Star - Glow.bmp" }\n { "skin [2].bmp" }\n}\n'
         '$sequence "äëÿ idle" {\n "anims dir/äëÿ idle"\n fps 30\n'
-        ' { event 5004 1 "weapons/x y.wav" }\n}\n'
+        ' { event 5004 1 "weapons/x y.wav" }\n { event 5004 9 "\\weapons\\draw.wav" }\n}\n'
         '$sequence "shoot 1" "anims dir/Shoot-1" fps 20 LX\n', encoding="latin-1")
 
     report = normalize_model(folder)
@@ -51,6 +51,7 @@ def test_normalize_renames_files_and_rewrites_the_qc(tmp_path: Path) -> None:
     assert '$texrendermode "_128_red.bmp" masked' in text
     assert '{ "skin_2_.bmp" }' in text
     assert '"weapons/x y.wav"' in text  # sound paths are the game's, not ours
+    assert '{ event 5004 9 "weapons/draw.wav" }' in text  # ... without a leading slash
     smd = (folder / "Ref_Mesh.smd").read_text(encoding="latin-1")
     assert "Star_Glow.bmp" in smd and "_128_red.bmp" in smd and "Bip01 R Hand" in smd
     files = [p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file()]

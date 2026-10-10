@@ -177,6 +177,15 @@ def normalize_model(folder: Path) -> NormalizeReport:
     per_dir: dict[Path, _Unique] = {}
     smds: list[Path] = []
 
+    def sound_ref(token: _Token) -> None:
+        # "\weapons\x.wav" / "/weapons/x.wav": the engine prefixes sound/,
+        # so the game folder holds sound/weapons/x.wav — name it so
+        if token.text.lower().endswith(".wav"):
+            path = token.text.replace("\\", "/").lstrip("/")
+            if path != token.text:
+                report.note("sound", token.text, path)
+                replace(token, path)
+
     def smd_ref(token: _Token) -> None:
         """An SMD reference: give the file a portable name, rename it."""
         raw = token.text.replace("\\", "/")
@@ -238,13 +247,14 @@ def normalize_model(folder: Path) -> NormalizeReport:
                             break
                 elif token.text.startswith("$"):
                     break
-                if token.text in "{}" or (braced and depth > 1):
-                    i += 1
-                    continue
-                if low == "event":  # old form: event <id> <frame> ["options"]
+                if low == "event":  # { event <id> <frame> ["options"] } or the old form
                     i += 3
                     if i < len(tokens) and tokens[i].quoted:
+                        sound_ref(tokens[i])
                         i += 1
+                    continue
+                if token.text in "{}" or (braced and depth > 1):
+                    i += 1
                     continue
                 if low in _SEQ_OPTIONS:
                     i += _SEQ_OPTIONS[low] + 1
