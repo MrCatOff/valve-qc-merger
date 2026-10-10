@@ -505,9 +505,10 @@ def planned(models_in: list[ModelInput], grenade_prefix: str = "frogbomb"
 
 
 class _PoolBones:
-    """Bones a run of models would pool to — the merge's own pool plan, run
-    on the bone tables alone (exact, and a fraction of :func:`planned`'s
-    cost, which also applies the pool and measures every sequence)."""
+    """Bones a run of models would pool to without reshaping a rig — the
+    merge's own pool plan, run on the bone tables alone (a fraction of
+    :func:`planned`'s cost, which also applies the pool and measures every
+    sequence)."""
 
     def __init__(self, models_in: list[ModelInput], grenade_prefix: str) -> None:
         self.tables: dict[str, dict[str, str | None]] = {}
@@ -520,8 +521,11 @@ class _PoolBones:
         from valve_qc_merger.merge_view.bonepool import plan_pool
         names = [m.name for m in models_in]
         shared = set().union(*(self.shared[n] for n in names))
+        # without reshaping: a full pool reshapes the rigs instead of growing
+        # (never over the limit, so no bound at all), and reshapes turn
+        # constant channels into animated ones — the 64K a sequence goes first
         plan = plan_pool({n: self.tables[n] for n in names}, shared,
-                         max_slots=BONE_LIMIT - len(shared))
+                         max_slots=BONE_LIMIT - len(shared), allow_reparent=False)
         return plan.size + len(shared)
 
 
@@ -542,10 +546,11 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
     always together, in input order.
 
     A part takes the longest run of zombies that fits: its end is found by
-    the pooled bone count (cheap: :class:`_PoolBones`), galloping then
-    halving; the run is then measured exactly (:func:`planned`) and halved
-    again while a sequence is over 64K — a few exact runs a part, not one
-    after every zombie (quadratic: most of an hour on 241 models)."""
+    the pooled bone count without reshapes (cheap: :class:`_PoolBones`),
+    galloping then halving; the run is then measured exactly
+    (:func:`planned`) — halved while a sequence is over 64K, else grown by a
+    few zombies while it fits — a few exact runs a part, not one after every
+    zombie (quadratic: most of an hour on 241 models)."""
     zombies: dict[str, list[ModelInput]] = {}
     for model in models:
         zombies.setdefault(zombie_of(model.name), []).append(model)
@@ -585,10 +590,14 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
     parts: list[list[ModelInput]] = []
     start = 0
     while start < len(groups):
-        # a part takes its first zombie whatever
+        # a part takes its first zombie whatever; the longest run pooling
+        # without a reshape, checked exactly, then grown while it fits
+        # exactly (the merge may still reshape a little within the 64K)
         end = longest(start, start + 1, len(groups), fits_bones)
         if end > start + 1 and not fits(start, end):
             end = longest(start, start + 1, end - 1, fits)
+        else:
+            end = longest(start, end, min(len(groups), end + 4), fits)
         parts.append(run(start, end))
         start = end
     return parts
