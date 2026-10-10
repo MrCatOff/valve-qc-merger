@@ -149,6 +149,18 @@ def normalize(root: str, *, reporter: Reporter) -> dict[str, int]:
     for name, count in sorted(changed.items()):
         reporter.log(f"  {name}: {count} name(s) made portable")
     reporter.log(f"  {len(changed)} of {len(project.assets)} asset(s) changed")
+    from valve_qc_merger.project.handless import hands_are_the_model
+    marked = []
+    for asset in project.assets.values():
+        if asset.kind == "v" and not asset.hands_model:
+            why = hands_are_the_model(project.asset_dir(asset.name), asset.source)
+            if why:
+                asset.hands_model = True
+                marked.append(f"{asset.name} ({why})")
+    if marked:
+        project.save()
+        reporter.log(f"  {len(marked)} view model(s) marked 'hands are the model': "
+                     + ", ".join(marked))
     return changed
 
 

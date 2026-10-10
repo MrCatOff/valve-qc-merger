@@ -129,6 +129,26 @@ bones. Pass `--reference` to override.
 sequence index for every original animation name — identical animations are
 deduped within a part, so recolour variants share sequence indices.
 
+## Models whose hands are the model (Studio builds)
+
+Zombie claws, a gauntlet, or a view model with no hands at all (a floating
+gun) have nothing a hand swap can apply to. Their asset carries **Hands are
+the model** (Inspector ▸ Overview; set on import when it is clear: no hands
+found and nothing named hand / arm, under 5 % of the geometry off the hands,
+or `claw` in the name — Project ▸ Normalize names marks older assets). A
+merge-v build:
+
+- never retargets them;
+- merges them as they are with [merge-props](merge-props.md) into a part of
+  their own, `<name>_nohands` (`output/nohands/`): no hands bodygroup,
+  `pev_body` = the model, each with its own bones and animations;
+- puts their entries in the build's manifest with `model =
+  <name>_nohands.mdl` and `hands = model`.
+
+A model whose retarget finds no hands to swap although it has some (hands
+without finger bones: `v_ak47_beast`) goes to the same part with its own
+hands (`hands = own`) instead of shipping on its own.
+
 ## Skins and header commands
 
 **Skins.** A view model's `$texturegroup` (CSO upgrade skins: `Luger_v_6`,

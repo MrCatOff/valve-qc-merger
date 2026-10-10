@@ -140,7 +140,7 @@ def unify_skeletons(models: list[ModelInput], skeleton: dict[str, str | None]) -
     # byte-faithful to the decompiled original when inspected in Blender.
     # (Prior art: goldsource-models _unify_skeleton, which never moved verts.)
     for model in models:
-        for smd in {**model.meshes, **model.anims}.values():
+        for _key, smd in model.all_smds():
             conform_to_table(smd, table, bind_locals)
 
 

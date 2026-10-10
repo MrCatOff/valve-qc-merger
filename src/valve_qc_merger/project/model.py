@@ -132,6 +132,9 @@ class Asset:
     # "options": service options that differ from the defaults}
     derived: dict[str, Any] | None = None
     category: str = ""  # "" = uncategorized
+    # view models only: the hands ARE the model (zombie claws) or there are
+    # none — no retarget; merge-v builds merge them into a no-hands part
+    hands_model: bool = False
 
 
 @dataclass
@@ -177,6 +180,7 @@ MANIFEST_SUFFIXES = (".ini", ".json", ".toml")
 COMPILE_CACHE = "compile_cache.json"  # builds/<name>/: QC -> digest of its last compile
 COMPILED_STASH = ".compiled"  # builds/<name>/: the models of the run before
 SERVER_TREE = "cstrike"  # builds/<name>/cstrike: the build's files as on the server
+NOHANDS_INPUT = "nohands_input"  # builds/<name>/: merge-v's no-hands models, staged
 
 
 # --------------------------------------------------------------------------- #
@@ -481,6 +485,10 @@ class Project:
             asset = Asset(name=name, kind=asset_kind, path=relative.as_posix(),
                           source=str(directory.resolve()),
                           category=category or self._sibling_category(name))
+            if asset_kind == "v":
+                from valve_qc_merger.project.handless import hands_are_the_model
+                asset.hands_model = hands_are_the_model(self.root / relative,
+                                                        str(directory)) is not None
             self.assets[name] = asset
             added.append(asset)
         if kind is None:
@@ -957,9 +965,21 @@ class Project:
                              "the same weapon twice")
         for note in notes:
             reporter.log(f"  warn: {note}")
+        nohands = work / NOHANDS_INPUT
+        shutil.rmtree(nohands, ignore_errors=True)
+        if build.kind == "merge-v":
+            for asset in assets:
+                if asset.hands_model:
+                    nohands.mkdir(parents=True, exist_ok=True)
+                    shutil.move(staged / asset.name, nohands / asset.name)
+            if nohands.is_dir():
+                reporter.log(f"  {len(list(nohands.iterdir()))} model(s) whose hands are the "
+                             "model (or that have none): no retarget, merged into the "
+                             "no-hands part")
         if build.retarget:
-            notes += self._retarget_for_build(assets, staged, work / "retarget", build,
-                                              reporter)
+            notes += self._retarget_for_build(
+                [a for a in assets if not (build.kind == "merge-v" and a.hands_model)],
+                staged, work / "retarget", build, reporter)
             models_dir = work / "retarget"
             options["shared_hands"] = True
         return assets, models_dir, options, notes
@@ -1041,7 +1061,14 @@ class Project:
         opts = options_from_dict(kind.options, {
             **options, "models_dir": str(models_dir), "out": str(output),
         })
-        result = kind.run(opts, reporter)
+        nohands = base / NOHANDS_INPUT
+        if build.kind == "merge-v" and nohands.is_dir() and not any(
+                d.is_dir() for d in Path(models_dir).iterdir()):
+            result = ServiceResult()  # every model is a no-hands one
+        else:
+            result = kind.run(opts, reporter)
+        if build.kind == "merge-v" and nohands.is_dir() and any(nohands.iterdir()):
+            self._merge_nohands(nohands, output, opts, result, reporter)
         self._fold_notes(result, notes)
         record = {
             "build": name,
@@ -1056,6 +1083,43 @@ class Project:
         }
         (base / "last_run.json").write_text(json.dumps(record, indent=1), encoding="utf-8")
         return result
+
+    def _merge_nohands(self, models_dir: Path, output: Path, opts: Any,
+                       result: ServiceResult, reporter: Reporter) -> None:
+        """merge-v's no-hands part: the models whose hands are the model (and
+        those whose hands the retarget cannot swap, with their own hands),
+        merged as they are (merge-props) into ``output/nohands`` as
+        ``<name>_nohands``; their entries join the build's manifest with
+        ``hands = model`` / ``own``."""
+        from valve_qc_merger.merge_view.merger import write_manifest_data
+        from valve_qc_merger.server.package import _manifest
+        from valve_qc_merger.services.merge_props import MergePropsOptions, run_merge_props
+        reporter.log(f"no-hands part: {len(list(models_dir.iterdir()))} model(s)")
+        part = run_merge_props(MergePropsOptions(
+            models_dir=models_dir, out=output / "nohands", name=f"{opts.name}_nohands",
+            manifest_format=opts.manifest_format,
+            standalone_rejects=getattr(opts, "standalone_rejects", True)), reporter)
+        result.outputs.extend(part.outputs)
+        result.warnings.extend(part.warnings)
+        result.failures.extend(part.failures)
+        if not part.ok and result.exit_code == EXIT_OK:
+            result.exit_code = part.exit_code
+        suffix = {"json": ".json", "toml": ".toml"}.get(opts.manifest_format, ".ini")
+        main = output / f"models{suffix}"
+        extra = output / "nohands" / f"models{suffix}"
+        if not extra.is_file():
+            return
+        data = _manifest(main) if main.is_file() else {}
+        for weapon, entry in data.items():  # one part: entries without "model"
+            if "model" not in entry and weapon != "textures":
+                entry["model"] = f"{opts.name}.mdl"
+        for weapon, entry in _manifest(extra).items():
+            entry.setdefault("model", f"{opts.name}_nohands.mdl")
+            asset = self.assets.get(weapon)
+            entry["hands"] = "model" if asset is not None and asset.hands_model else "own"
+            data[weapon] = entry
+        write_manifest_data(output, data, opts.manifest_format)
+        extra.unlink()
 
     def hands_asset(self, source: str) -> Asset | None:
         """The Retarget (swap hands) asset made from ``source``, if any."""
@@ -1113,6 +1177,14 @@ class Project:
                 converted += 1
                 continue
             why = result.failures[-1] if result.failures else f"exit {result.exit_code}"
+            if "no hands found" in why or "no hands found" in " ".join(result.failures):
+                # nothing to swap: the model has no hands (or they are the model)
+                nohands = retargeted.parent / NOHANDS_INPUT
+                nohands.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(source, nohands / asset.name)
+                reporter.log(f"  retarget {asset.name}: no hands the retarget can swap — "
+                             "merged as it is, with its own hands, into the no-hands part")
+                continue
             if build.options.get("standalone_rejects", True):
                 # the merge ships it on its own, with the hands it came with
                 shutil.copytree(source, retargeted / asset.name)
@@ -1395,6 +1467,8 @@ def _asset_dict(asset: Asset) -> dict[str, Any]:
     data = vars(asset).copy()
     if not data["category"]:
         del data["category"]
+    if not data["hands_model"]:
+        del data["hands_model"]
     return data
 
 

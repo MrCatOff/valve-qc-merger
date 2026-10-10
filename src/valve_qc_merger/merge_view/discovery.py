@@ -132,6 +132,13 @@ class ModelInput:
     anims: dict[str, Smd] = field(default_factory=dict)  # sequence name -> parsed SMD
     warnings: list[str] = field(default_factory=list)
 
+    def all_smds(self) -> list[tuple[str, Smd]]:
+        """Every mesh and animation SMD, keyed ``mesh:<stem>`` / ``anim:<seq>``
+        (a sequence named like a mesh — ``reference`` — must not hide it, as
+        ``{**meshes, **anims}`` did)."""
+        return ([(f"mesh:{k}", v) for k, v in self.meshes.items()]
+                + [(f"anim:{k}", v) for k, v in self.anims.items()])
+
     @property
     def bone_names(self) -> list[str]:
         """Node names from the fullest mesh (reference SMDs carry the rig)."""

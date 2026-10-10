@@ -238,7 +238,7 @@ def share_attachments(
     data: list[list[tuple[dict[str, Transform], list[Transform | None]]]] = []
     seen: set[int] = set()
     for model in models:
-        for smd in {**model.meshes, **model.anims}.values():
+        for _key, smd in model.all_smds():
             if id(smd) in seen:
                 continue
             seen.add(id(smd))

@@ -219,7 +219,7 @@ def apply_pool(
     for old, new in sorted(slot_of.items()):
         model.qc_text = model.qc_text.replace(f'"{old}"', f'"{new}"')
 
-    for smd in {**model.meshes, **model.anims}.values():
+    for _key, smd in model.all_smds():
         reparented.extend(_apply_to_smd(smd, slot_of, slot_parent, root))
     return sorted(set(reparented))
 

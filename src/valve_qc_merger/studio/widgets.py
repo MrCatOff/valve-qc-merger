@@ -19,6 +19,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QFrame,
@@ -859,6 +860,7 @@ class Inspector(QWidget):
 
     kind_changed = Signal(str, str)  # asset, kind
     notes_changed = Signal(str, str)
+    hands_model_changed = Signal(str, bool)  # asset, the hands are the model
     sequence_edit_requested = Signal(int)  # sequence position in the QC
     render_mode_edit_requested = Signal(str)  # texture name
     retarget_requested = Signal(str)
@@ -931,6 +933,14 @@ class Inspector(QWidget):
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             label.setWordWrap(True)
         form.addRow("Kind", self.kind_box)
+        self.hands_model_box = QCheckBox("Hands are the model")
+        self.hands_model_box.setToolTip(
+            "Zombie claws, a gauntlet, or a view model with no hands at all: no retarget — "
+            "merge-v builds merge it as it is into their no-hands part (<name>_nohands, "
+            "pev_body = the model). Set on import when it is clear; tick it for the rest.")
+        self.hands_model_box.toggled.connect(
+            lambda on: self._asset and self.hands_model_changed.emit(self._asset, on))
+        form.addRow("", self.hands_model_box)
         form.addRow("Category", self.category_label)
         form.addRow("Status", self.status_label)
         form.addRow("Folder", path_holder)
@@ -1131,6 +1141,10 @@ class Inspector(QWidget):
         self.status_label.setText("—")
         self.status_line.setText(f"{asset.category or UNCATEGORIZED}")
         self.kind_box.setCurrentIndex(ASSET_KINDS.index(asset.kind))
+        self.hands_model_box.blockSignals(True)
+        self.hands_model_box.setChecked(asset.hands_model)
+        self.hands_model_box.blockSignals(False)
+        self.hands_model_box.setVisible(asset.kind == "v")
         self._path = str(project.root / asset.path)
         self.path_label.setText(Path(asset.path).as_posix())
         self.path_label.setToolTip(self._path)

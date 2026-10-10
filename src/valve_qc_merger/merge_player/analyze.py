@@ -145,7 +145,7 @@ def collapse_weapon_bones(model: ModelInput) -> PlayerPlan:
             plan.warnings.append(
                 f"bones {tree_names} carry no vertices; removed entirely"
             )
-            for smd in {**model.meshes, **model.anims}.values():
+            for _key, smd in model.all_smds():
                 present = {n.name for n in smd.nodes}
                 remove_bones(smd, set(tree_names) & present)
             continue
@@ -156,7 +156,7 @@ def collapse_weapon_bones(model: ModelInput) -> PlayerPlan:
     anchors = [anchor for _s, anchor, _r in groups]
     finals = _final_names(model.name, anchors)
     for (survivor, anchor, removed), final in zip(groups, finals, strict=True):
-        for smd in {**model.meshes, **model.anims}.values():
+        for _key, smd in model.all_smds():
             present = {n.name for n in smd.nodes}
             if survivor not in present:
                 continue

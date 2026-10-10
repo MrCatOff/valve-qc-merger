@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
         self.sprite_panel.reveal_requested.connect(self._reveal_sprite)
         self.inspector.kind_changed.connect(self.set_kind)
         self.inspector.notes_changed.connect(self._set_notes)
+        self.inspector.hands_model_changed.connect(self._set_hands_model)
         self.inspector.retarget_requested.connect(lambda name: self.derive_assets([name]))
         self.inspector.rederive_requested.connect(lambda name: self.rederive_asset(name, False))
         self.inspector.reveal_requested.connect(self._reveal)
@@ -1018,6 +1019,15 @@ class MainWindow(QMainWindow):
         self.log.append_line(f"{name}: kind -> {kind}")
         self.explorer.show_project(self.project)
         self._select_asset(name)
+
+    def _set_hands_model(self, name: str, on: bool) -> None:
+        if self.project is not None and name in self.project.assets:
+            self.project.assets[name].hands_model = on
+            self.project.save()
+            self.statusBar().showMessage(
+                f"{name}: " + ("hands are the model — no retarget, no-hands part" if on
+                               else "a weapon held by hands — retargeted in shared-hands "
+                                    "builds"), 5000)
 
     def _set_notes(self, name: str, notes: str) -> None:
         if self.project is not None and name in self.project.assets:

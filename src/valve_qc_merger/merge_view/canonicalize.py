@@ -103,7 +103,7 @@ def canonicalize_model(
             {renames.get(name, name): pos for name, pos in frame.items()}
             for frame in _snapshot(smd)
         ]
-        for key, smd in {**model.meshes, **model.anims}.items()
+        for key, smd in model.all_smds()
     }
 
     for old, new in sorted(renames.items()):
@@ -113,7 +113,7 @@ def canonicalize_model(
     keep = {name for name, _ in plan} | _qc_kept_bones(model)
 
     ref_parent = dict(plan)
-    for smd in {**model.meshes, **model.anims}.values():
+    for _key, smd in model.all_smds():
         rename_bones(smd, renames)
         ensure_root(smd, _ROOT)
         present = {n.name for n in smd.nodes}
@@ -197,7 +197,7 @@ def verify_pose_preserved(
 ) -> float:
     """Max world-position deviation of surviving bones vs the baseline."""
     worst = 0.0
-    for key, smd in {**model.meshes, **model.anims}.items():
+    for key, smd in model.all_smds():
         for frame_index, frame in enumerate(smd.frames):
             name_of = {n.index: n.name for n in smd.nodes}
             worlds = fk_worlds(smd, frame)
