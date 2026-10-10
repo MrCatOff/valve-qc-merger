@@ -442,11 +442,8 @@ def pool_bones(models: list[ZombieModel], report: ZhandsReport) -> int:
     tables: dict[str, dict[str, str | None]] = {}
     shared: set[str] = set()
     for zm in models:
-        fullest = max(zm.model.meshes.values(), key=lambda m: len(m.nodes))
-        name_of = {n.index: n.name for n in fullest.nodes}
-        tables[zm.stem] = {n.name: name_of.get(n.parent) for n in fullest.nodes}
-        shared |= {n.name for smd in zm.model.meshes.values() for n in smd.nodes
-                   if n.name.startswith(GRENADE_PREFIX)}
+        tables[zm.stem], own = _pool_table(zm)
+        shared |= own
     plan = plan_pool(tables, shared, max_slots=BONE_LIMIT - len(shared))
     for zm in models:
         assignment = plan.assignments[zm.stem]
@@ -468,18 +465,36 @@ def zombie_of(name: str) -> str:
     return match.group("zombie").lower() if match else name.lower()
 
 
-def planned(models_in: list[ModelInput], grenade_prefix: str = "frogbomb"
-            ) -> tuple[int, int]:
-    """(bones, largest sequence's anim bytes) a merge of ``models_in`` would
-    have, with the bones pooled (nothing written; the models are left
-    untouched). Pooling reshapes channels, so the bytes are measured with
-    studiomdl's exact quantise+RLE replica."""
+def _prepared(models_in: list[ModelInput], grenade_prefix: str) -> list[ZombieModel]:
+    """Copies of ``models_in`` split, renamed and canonicalised as the merge
+    does, reduced to their hands and grenade meshes (the originals stay)."""
     models = [prepare_model(m.clone(), grenade_prefix) for m in models_in]
     canonicalize_hands(models, ZhandsReport())
     for zm in models:
         zm.model.meshes = {"hands": zm.hands}
         if zm.grenade is not None:
             zm.model.meshes["grenade"] = zm.grenade
+    return models
+
+
+def _pool_table(zm: ZombieModel) -> tuple[dict[str, str | None], set[str]]:
+    """A model's bones for the pool (name -> parent name) and its grenade
+    bones (shared by name, never pooled)."""
+    fullest = max(zm.model.meshes.values(), key=lambda m: len(m.nodes))
+    name_of = {n.index: n.name for n in fullest.nodes}
+    table = {n.name: name_of.get(n.parent) for n in fullest.nodes}
+    shared = {n.name for smd in zm.model.meshes.values() for n in smd.nodes
+              if n.name.startswith(GRENADE_PREFIX)}
+    return table, shared
+
+
+def planned(models_in: list[ModelInput], grenade_prefix: str = "frogbomb"
+            ) -> tuple[int, int]:
+    """(bones, largest sequence's anim bytes) a merge of ``models_in`` would
+    have, with the bones pooled (nothing written; the models are left
+    untouched). Pooling reshapes channels, so the bytes are measured with
+    studiomdl's exact quantise+RLE replica."""
+    models = _prepared(models_in, grenade_prefix)
     pool_bones(models, ZhandsReport())
     inputs = [zm.model for zm in models]
     skeleton = merged_skeleton(inputs)
@@ -487,6 +502,27 @@ def planned(models_in: list[ModelInput], grenade_prefix: str = "frogbomb"
         return len(skeleton), 0
     unify_skeletons(inputs, skeleton)
     return len(skeleton), max(sequence_sizes(inputs).values(), default=0)
+
+
+class _PoolBones:
+    """Bones a run of models would pool to — the merge's own pool plan, run
+    on the bone tables alone (exact, and a fraction of :func:`planned`'s
+    cost, which also applies the pool and measures every sequence)."""
+
+    def __init__(self, models_in: list[ModelInput], grenade_prefix: str) -> None:
+        self.tables: dict[str, dict[str, str | None]] = {}
+        self.shared: dict[str, set[str]] = {}
+        for model_in, zm in zip(models_in, _prepared(models_in, grenade_prefix),
+                                strict=True):
+            self.tables[model_in.name], self.shared[model_in.name] = _pool_table(zm)
+
+    def __call__(self, models_in: list[ModelInput]) -> int:
+        from valve_qc_merger.merge_view.bonepool import plan_pool
+        names = [m.name for m in models_in]
+        shared = set().union(*(self.shared[n] for n in names))
+        plan = plan_pool({n: self.tables[n] for n in names}, shared,
+                         max_slots=BONE_LIMIT - len(shared))
+        return plan.size + len(shared)
 
 
 def planned_bones(models_in: list[ModelInput], grenade_prefix: str = "frogbomb") -> int:
@@ -501,45 +537,60 @@ def _fits(plan: tuple[int, int], limit: int) -> bool:
 
 def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
                   limit: int = BONE_LIMIT) -> list[list[ModelInput]]:
-    """Parts under the bone limit (with the bones pooled) and the submodel
-    limit, a zombie's models (knife, grenade, variants) always together, in
-    input order.
+    """Parts under the bone limit (with the bones pooled), the 64K a sequence
+    and the submodel limit, a zombie's models (knife, grenade, variants)
+    always together, in input order.
 
-    A part takes the longest run of zombies that fits — found by galloping
-    then halving (a few :func:`planned` runs a part), not by replanning the
-    part after every zombie (quadratic: 40 zombies took most of an hour)."""
+    A part takes the longest run of zombies that fits: its end is found by
+    the pooled bone count (cheap: :class:`_PoolBones`), galloping then
+    halving; the run is then measured exactly (:func:`planned`) and halved
+    again while a sequence is over 64K — a few exact runs a part, not one
+    after every zombie (quadratic: most of an hour on 241 models)."""
     zombies: dict[str, list[ModelInput]] = {}
     for model in models:
         zombies.setdefault(zombie_of(model.name), []).append(model)
     groups = list(zombies.values())
+    pool_bones_of = _PoolBones(models, grenade_prefix)
 
     def run(start: int, end: int) -> list[ModelInput]:
         return [model for group in groups[start:end] for model in group]
 
-    def fits(start: int, end: int) -> bool:
+    def fits_bones(start: int, end: int) -> bool:
         trial = run(start, end)
         # one hands entry per model at most, plus the grenade group's two
-        return len(trial) <= hands_limit() and _fits(planned(trial, grenade_prefix), limit)
+        return len(trial) <= hands_limit() and pool_bones_of(trial) <= limit
 
-    parts: list[list[ModelInput]] = []
-    start = 0
-    while start < len(groups):
-        good, bad, step = start + 1, None, 1  # a part takes its first zombie whatever
-        while good < len(groups):
-            trial = min(good + step, len(groups))
-            if fits(start, trial):
+    def fits(start: int, end: int) -> bool:
+        return _fits(planned(run(start, end), grenade_prefix), limit)
+
+    def longest(start: int, good: int, end: int, test) -> int:
+        """The last end in (good, end] that passes ``test`` (good passes or
+        is the one zombie a part always takes); gallop from good, then halve."""
+        bad, step = None, 1
+        while good < end:
+            trial = min(good + step, end)
+            if test(start, trial):
                 good, step = trial, step * 2
             else:
                 bad = trial
                 break
         while bad is not None and bad - good > 1:
             middle = (good + bad) // 2
-            if fits(start, middle):
+            if test(start, middle):
                 good = middle
             else:
                 bad = middle
-        parts.append(run(start, good))
-        start = good
+        return good
+
+    parts: list[list[ModelInput]] = []
+    start = 0
+    while start < len(groups):
+        # a part takes its first zombie whatever
+        end = longest(start, start + 1, len(groups), fits_bones)
+        if end > start + 1 and not fits(start, end):
+            end = longest(start, start + 1, end - 1, fits)
+        parts.append(run(start, end))
+        start = end
     return parts
 
 
