@@ -545,10 +545,19 @@ class Project:
             if only_known and model not in chosen and role == "pack":
                 packs.append(model)  # after the rest: its models may be here on their own
                 continue
+            from valve_qc_merger.project.handless import is_claw_path
+            # zombie claws without a v_ name (alien_claw, headcrab_t_knife in
+            # .../claws/) are view models whose hands are the model, not props
+            claws = role == "other" and is_claw_path(model)
             try:
                 added = self.import_mdl(model, category=category,
-                                        kind="prop" if role == "other" else None,
+                                        kind="v" if claws else
+                                        "prop" if role == "other" else None,
                                         reporter=_QuietProgress(reporter))
+                for asset in added if claws else []:
+                    asset.hands_model = True
+                if claws:
+                    self.save()
             except (ProjectError, OSError, ValueError) as exc:
                 outcome.failed.append(f"{model.name}: {exc}")
                 continue
@@ -611,6 +620,12 @@ class Project:
             for asset in added:
                 if asset.name in originals:
                     asset.source = str(originals[asset.name].resolve())
+                    if asset.kind == "v" and not asset.hands_model:
+                        # the import ran from a staging folder: judge again
+                        # with the real path (zhh/claws/…)
+                        from valve_qc_merger.project.handless import hands_are_the_model
+                        asset.hands_model = hands_are_the_model(
+                            self.asset_dir(asset.name), asset.source) is not None
             self.save()
             return added
         finally:

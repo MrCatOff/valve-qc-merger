@@ -11,7 +11,8 @@ without loading animations):
   model without hands;
 - under 5 % of the vertices off the hands and the arms holding them: the
   hands are the model (claws);
-- ``claw`` in the model's or its source's name.
+- ``claw`` in the model's name or its source's path (``zhh/claws/``; a
+  model there without a ``v_`` name is imported as a view model too).
 
 Claws with a "weapon" of their own (a tongue, a blade on the arm) look like
 any knife here; the Inspector's *Hands are the model* box sets them.
@@ -26,6 +27,11 @@ from pathlib import Path
 WEAPON_FRACTION = 0.05  # less geometry than this off the hands: claws
 _CLAW = re.compile(r"(?i)claw")
 _HAND = re.compile(r"(?i)hand|finger|(?:^|[^a-z])(?:fore)?arms?(?:$|[^a-z])")
+
+
+def is_claw_path(path: Path | str) -> bool:
+    """``claw`` in the file's name or one of its folders (``zhh/claws/``)."""
+    return bool(_CLAW.search(Path(path).as_posix()))
 
 
 def hands_are_the_model(folder: Path, source: str | None = None) -> str | None:
@@ -89,4 +95,4 @@ def hands_are_the_model(folder: Path, source: str | None = None) -> str | None:
     return None
 
 
-__all__ = ["WEAPON_FRACTION", "hands_are_the_model"]
+__all__ = ["WEAPON_FRACTION", "hands_are_the_model", "is_claw_path"]

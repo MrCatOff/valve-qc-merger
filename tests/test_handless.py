@@ -55,3 +55,14 @@ def test_merge_v_build_puts_them_in_a_no_hands_part(tmp_path: Path) -> None:
     assert manifest["v_floating"]["pev_body"] == "0"
     assert manifest["v_anaconda"]["model"] == "v_pack.mdl"
     assert Project.open(project.root).assets["v_floating"].hands_model  # saved
+
+
+def test_import_judges_claws_by_the_real_path(tmp_path: Path) -> None:
+    claws = tmp_path / "server" / "models" / "zhh" / "claws"
+    claws.mkdir(parents=True)
+    shutil.copy(_MINI, claws / "v_knife_zombie.mdl")
+    shutil.copy(_MINI, claws / "alien_claw.mdl")  # no v_ name: still a view model
+    project = Project.create(tmp_path / "pack")
+    project.import_models([tmp_path / "server" / "models"])
+    assert project.assets["v_knife_zombie"].hands_model
+    assert project.assets["alien_claw"].kind == "v" and project.assets["alien_claw"].hands_model
