@@ -125,7 +125,7 @@ def _two_hand_smd(gun_pos: list[Vector3], *, mesh: bool) -> Smd:
     )
 
 
-def test_slots_hang_off_the_wrist_they_stay_closest_to(tmp_path: Path) -> None:
+def test_one_models_slots_stay_on_their_bones(tmp_path: Path) -> None:
     # Elite-style: slot 0 = left muzzle, slot 1 = right muzzle.
     directory = tmp_path / "v_dual"
     directory.mkdir()
@@ -144,7 +144,9 @@ def test_slots_hang_off_the_wrist_they_stay_closest_to(tmp_path: Path) -> None:
     anim = parse_smd_file(out / "v_dual" / "shoot.smd")
     name_of = {n.index: n.name for n in anim.nodes}
     parent = {n.name: name_of.get(n.parent) for n in anim.nodes}
-    assert parent["attachment0"] == "Hand.L"
-    assert parent["attachment1"] == "Hand.R"
+    # one model: each slot stays on its own bone (a fixed offset); slots
+    # several weapons hang off different bones go to the closest wrist
+    assert parent["attachment0"] == "gun_l"
+    assert parent["attachment1"] == "gun_r"
     assert _slot_world(anim, 0, 1) == Vector3(-10.0, -4.0, 0.0)
     assert _slot_world(anim, 1, 1) == Vector3(10.0, -4.0, 0.0)

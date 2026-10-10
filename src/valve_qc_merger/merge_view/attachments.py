@@ -11,9 +11,11 @@ Fix: up to 4 SHARED slot bones ``attachment0..3``, one
 animates slot N to that model's own attachment N (its bone's world pose
 composed with the QC offset), per frame. Each weapon's sequences therefore
 drive the shared slots to its own muzzle/shell points; a weapon lacking slot
-N parks it at the slot's parent. Each slot hangs off the wrist its points
-stay closest to (``Bip01`` without wrists): relative to the gripping hand a
-muzzle barely moves, so its channels are near-constant and RLE-cheap.
+N parks it at the slot's parent. A slot every model hangs off the same bone
+stays on that bone (a fixed offset: constant channels); any other hangs off
+the wrist its points stay closest to (``Bip01`` without wrists): relative to
+the gripping hand a muzzle barely moves, so its channels are near-constant
+and RLE-cheap.
 
 A weapon may park a slot far off-map (CSO: ``$attachment 1 ... -1000000``
 hides the shell eject). studiomdl quantises each bone channel with ONE scale
@@ -234,6 +236,15 @@ def share_attachments(
     # Pass 1: every SMD's slot world poses, plus the candidate parents.
     table = [n.name for n in anchor.nodes]
     hands = _hand_bones(table)
+    # A slot every model hangs off the same bone stays on that bone: a fixed
+    # offset, constant channels (a monster's head, one weapon's muzzle) — a
+    # wrist would animate it, which pushed long sequences past 64K.
+    own_bone: dict[int, str] = {}
+    for slot in range(slots):
+        bones_used = {atts[slot][0] for atts in parsed.values() if slot in atts}
+        if len(bones_used) == 1 and next(iter(bones_used)) in table:
+            own_bone[slot] = next(iter(bones_used))
+    anchors = [*hands, *sorted(set(own_bone.values()) - set(hands))]
     smds: list[Smd] = []
     data: list[list[tuple[dict[str, Transform], list[Transform | None]]]] = []
     seen: set[int] = set()
@@ -243,7 +254,7 @@ def share_attachments(
                 continue
             seen.add(id(smd))
             smds.append(smd)
-            data.append(_slot_worlds(smd, slots, parsed[model.name], hands))
+            data.append(_slot_worlds(smd, slots, parsed[model.name], anchors))
     if not any(smd is anchor for smd in smds):
         raise ValueError("anchor mesh is not one of the models' meshes")
     if not anchor.triangles:
@@ -263,6 +274,9 @@ def share_attachments(
     # streams under studiomdl's 64K-per-sequence cap. Bip01 if no wrists.
     parent_of: dict[int, str | None] = {}
     for slot in range(slots):
+        if slot in own_bone:
+            parent_of[slot] = own_bone[slot]
+            continue
         best, best_cost = None, None
         for hand in hands:
             cost = 0.0
