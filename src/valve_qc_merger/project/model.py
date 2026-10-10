@@ -1828,7 +1828,7 @@ def _import_task(source: str, out: str, *, reporter: Reporter) -> dict[str, Any]
 def folder_categories(root: Path, models: list[Path]) -> dict[Path, str]:
     """A category per model from the folder it sits in under ``root``:
     ``weapons/pistols/p_x.mdl`` -> ``pistols``; a model's own folder
-    (``player/zim/zim.mdl``) does not count; a folder name met under two
+    (``player/zim/zim.mdl``, ``zim/zim_lv2.mdl``) does not count; a folder name met under two
     parents gets its parent's name too (``player`` and ``zombies player``).
     Models right under ``root``: none."""
     folders: dict[Path, tuple[str, ...]] = {}
@@ -1837,8 +1837,8 @@ def folder_categories(root: Path, models: list[Path]) -> dict[Path, str]:
             parts = model.relative_to(root).parent.parts
         except ValueError:
             continue
-        if parts and parts[-1].lower() == model.stem.lower():
-            parts = parts[:-1]
+        if parts and model.stem.lower().startswith(parts[-1].lower()):
+            parts = parts[:-1]  # its own folder (zim/zim_lv2.mdl, zg_goliath/zg_goliath2.mdl)
         if parts:
             folders[model] = parts
     parents: dict[str, set[tuple[str, ...]]] = {}

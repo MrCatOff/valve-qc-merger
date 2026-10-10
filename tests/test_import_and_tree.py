@@ -135,10 +135,11 @@ def test_categories_from_folders(tmp_path: Path) -> None:
     root = tmp_path / "models"
     models = [root / "weapons" / "pistols" / "p_x.mdl", root / "player" / "zim" / "zim.mdl",
               root / "zombies" / "player" / "boomer" / "boomer.mdl", root / "loose.mdl",
-              root / "weapons" / "knives" / "v_k.mdl"]
+              root / "weapons" / "knives" / "v_k.mdl",
+              root / "zombies" / "player" / "boomer" / "boomer_lv2.mdl"]
     assert folder_categories(root, models) == {
         models[0]: "pistols", models[1]: "player", models[2]: "zombies player",
-        models[4]: "knives"}
+        models[4]: "knives", models[5]: "zombies player"}
     # an import files models by their folder; recategorising does it afterwards
     (root / "weapons" / "pistols").mkdir(parents=True)
     shutil.copy(_MINI, root / "weapons" / "pistols" / "v_one.mdl")

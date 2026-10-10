@@ -31,6 +31,7 @@ def test_detection(tmp_path: Path) -> None:
     gun = _mini(tmp_path, "v_floating")  # a gun, no hand bones, nothing named hand
     assert hands_are_the_model(gun) == "no hands"
     assert hands_are_the_model(gun, "/srv/models/zhh/claws/v_x.mdl") == "claws (named so)"
+    assert hands_are_the_model(gun, "/srv/models/knives/v_zsh_clawhammer.mdl") == "no hands"
     qc = next(gun.glob("*.qc"))  # a group named "hand": hands the finder cannot see
     qc.write_text(qc.read_text().replace('$body "body"', '$body "hand"'))
     assert hands_are_the_model(gun) is None

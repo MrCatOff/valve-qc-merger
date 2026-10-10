@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 
 WEAPON_FRACTION = 0.05  # less geometry than this off the hands: claws
-_CLAW = re.compile(r"(?i)claw")
+_CLAW = re.compile(r"(?i)claws?(?!hammer)")  # a claw hammer is a weapon held by hands
 _HAND = re.compile(r"(?i)hand|finger|(?:^|[^a-z])(?:fore)?arms?(?:$|[^a-z])")
 
 
