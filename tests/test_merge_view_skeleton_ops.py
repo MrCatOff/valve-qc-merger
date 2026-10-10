@@ -7,6 +7,7 @@ import math
 import pytest
 
 from valve_qc_merger.merge_view.skeleton_ops import (
+    ensure_root,
     rebind_vertices,
     remove_bones,
     rename_bones,
@@ -86,6 +87,19 @@ def test_reparent_preserves_world_pose_and_guards_cycles() -> None:
     _assert_worlds_preserved(original, edited)
     with pytest.raises(ValueError, match="descendant"):
         reparent_bone(edited, "arm", "fingerB")
+
+
+def test_ensure_root_lifts_a_named_bone_hung_under_another() -> None:
+    # CSO v_lightzg: Bip01 under Dummy03 — it becomes the root, exactly
+    original = _smd()
+    edited = _smd()
+    rename_bones(original, {"arm": "Bip01"})
+    rename_bones(edited, {"arm": "Bip01"})
+    ensure_root(edited, "Bip01")
+    parent = {n.name: n.parent for n in edited.nodes}
+    index = {n.name: n.index for n in edited.nodes}
+    assert parent["Bip01"] == -1 and parent["root"] == index["Bip01"]
+    _assert_worlds_preserved(original, edited)
 
 
 def test_rename_and_renumber_keep_triangles_bound() -> None:

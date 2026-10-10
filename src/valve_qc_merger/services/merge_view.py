@@ -175,9 +175,14 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
         canonical: dict[str, object] = {}
         if not opts.dry_run:
             reference_nodes = parse_smd_file(reference_path).nodes
-            canon = canonicalize_model(
-                model, match, reference_nodes, prune=opts.prune
-            )
+            try:
+                canon = canonicalize_model(
+                    model, match, reference_nodes, prune=opts.prune
+                )
+            except ValueError as exc:  # a rig the canonical form cannot take
+                reject(model.name, f"model {model.name!r}: {exc}", "CANON-FAIL",
+                       f"hands not canonicalised: {exc}")
+                continue
             if canon.max_pose_deviation > 1e-4:
                 message = (f"model {model.name!r}: pose NOT preserved "
                            f"(deviation {canon.max_pose_deviation:.6f}u)")

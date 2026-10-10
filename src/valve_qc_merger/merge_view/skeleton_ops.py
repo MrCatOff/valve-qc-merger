@@ -204,11 +204,13 @@ def ensure_root(smd: Smd, name: str = "Bip01") -> None:
 
     A missing root is inserted with an identity transform in every frame, so
     reparenting old roots under it is exact (their locals equal their worlds).
-    A pre-existing bone of that name must already be a root.
+    A bone of that name hung under another (CSO ``v_lightzg``: ``Bip01``
+    under ``Dummy03``) becomes a root first, keeping its world pose per frame;
+    its old parents then hang under it like any other root.
     """
     existing = next((n for n in smd.nodes if n.name == name), None)
     if existing is not None and existing.parent != -1:
-        raise ValueError(f"bone {name!r} exists but is not a root")
+        reparent_bones(smd, {name: None})
     if existing is None:
         index = max((n.index for n in smd.nodes), default=-1) + 1
         smd.nodes = [*smd.nodes, Node(index, name, -1)]
@@ -217,8 +219,8 @@ def ensure_root(smd: Smd, name: str = "Bip01") -> None:
             Frame(f.time, (*f.poses, BonePose(index, zero, zero)))
             for f in smd.frames
         ]
-    for root_name in [n.name for n in smd.nodes if n.parent == -1 and n.name != name]:
-        reparent_bone(smd, root_name, name)
+    reparent_bones(smd, {n.name: name for n in smd.nodes
+                         if n.parent == -1 and n.name != name})
     renumber(smd)
 
 
