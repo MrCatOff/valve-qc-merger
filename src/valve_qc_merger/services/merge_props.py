@@ -49,7 +49,7 @@ from valve_qc_merger.merge_view.parts import (
     _part_counts,
     _sequence_keys,
     _texture_keys,
-    texture_bytes,
+    part_bytes,
 )
 from valve_qc_merger.services.base import (
     EXIT_DISCOVERY,
@@ -225,8 +225,7 @@ def split_prop_parts(pairs: list[Pair], *, textures: int = TEXTURE_BUDGET,
             return False
         if body_range(part) > (body_values or limits.body_values()):
             return False
-        keys = set().union(*(texture_keys[m.name] for m, _p in part))
-        if texture_bytes(keys) > limits.PART_TEXTURE_BYTES:
+        if part_bytes(part, texture_keys) > limits.PART_BYTES:
             return False
         models = [m for m, _p in part]
         return len(merged_skeleton(models)) + attachment_slots(models) <= BONE_LIMIT

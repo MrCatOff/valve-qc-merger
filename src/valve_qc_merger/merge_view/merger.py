@@ -232,6 +232,7 @@ def _stage_textures(
     the ordered list of staged file names.
     """
     staged: dict[str, bytes] = {}
+    by_content: dict[bytes, str] = {}  # texture bytes -> the name staged for them
     all_renames: dict[str, dict[str, str]] = {}
     for model in models:
         renames: dict[str, str] = all_renames.setdefault(model.name, {})
@@ -249,11 +250,15 @@ def _stage_textures(
                 data = source.read_bytes()
                 final = renames.get(material, _sanitize_material(material))
                 if final in staged and staged[final] != data:
-                    final = _sanitize_material(f"{model.name}__{material}")
+                    # the same image may be staged already under another
+                    # model's name: one copy, whatever names point at it
+                    final = by_content.get(data) or _sanitize_material(
+                        f"{model.name}__{material}")
                 if final != material:
                     renames[material] = final
                 if final not in staged:
                     staged[final] = data
+                    by_content.setdefault(data, final)
                     (out_dir / final).write_bytes(data)
         if renames:
             for smd in written[model.name]:

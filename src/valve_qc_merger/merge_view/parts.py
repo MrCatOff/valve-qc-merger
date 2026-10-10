@@ -129,11 +129,22 @@ def _part_counts(
     return submodels, len(materials), len(sequences)
 
 
-def _part_texture_bytes(part: list[Pair], textures: dict[str, set[tuple[str, str]]]) -> int:
+_MESH_BYTES: dict[int, int] = {}  # id(model) -> its kept meshes' bytes (estimated)
+
+
+def part_bytes(part: list[Pair], textures: dict[str, set[tuple[str, str]]]) -> int:
+    """Estimated textures + meshes of a merged part (a .mdl stays under 16 MB)."""
     keys: set[tuple[str, str]] = set()
-    for model, _parts in part:
+    meshes = 0
+    for model, parts in part:
         keys |= textures[model.name]
-    return texture_bytes(keys)
+        if id(model) not in _MESH_BYTES:
+            stems = [s for group in parts.weapon_stems for s in group]
+            stems += [parts.hands_stem] if parts.hands_stem is not None else []
+            _MESH_BYTES[id(model)] = limits.mesh_bytes(model.meshes[s] for s in stems
+                                                       if s in model.meshes)
+        meshes += _MESH_BYTES[id(model)]
+    return texture_bytes(keys) + meshes
 
 
 def view_body_range(part: list[Pair], *, shared_hands: bool = False) -> int:
@@ -200,7 +211,7 @@ def split_parts(
         if current and (submodels > budget.submodels
                         or texcount > budget.textures
                         or seqcount > budget.sequences
-                        or _part_texture_bytes(trial, textures) > limits.PART_TEXTURE_BYTES
+                        or part_bytes(trial, textures) > limits.PART_BYTES
                         or view_body_range(trial, shared_hands=shared_hands)
                         > limits.VIEW_BODY_VALUES
                         or not bones_fit(trial)):
@@ -214,5 +225,5 @@ def split_parts(
 
 
 __all__ = ["PartBudget", "SEQUENCE_BUDGET", "SHARED_HANDS_SEQUENCE_BUDGET", "SUBMODEL_LIMIT",
-           "TEXTURE_BUDGET", "TEXTURE_SIZES", "split_parts", "texture_bytes",
+           "TEXTURE_BUDGET", "TEXTURE_SIZES", "part_bytes", "split_parts", "texture_bytes",
            "view_body_range"]

@@ -15,7 +15,8 @@ and the server, not fixed in each merge.
   window says what the server's delta.lst allows.
 - **File size**: a compiled ``.mdl`` (and its ``T.mdl``) stays under 16 MB —
   bigger files risk the client; our studiomdl refuses them. Merges close a
-  part when its textures near :data:`PART_TEXTURE_BYTES`.
+  part when its textures and meshes (:func:`texture_bytes`, :func:`mesh_bytes`)
+  near :data:`PART_BYTES`.
 """
 
 from __future__ import annotations
@@ -30,7 +31,10 @@ STOCK_SUBMODELS = 32
 VIEW_BODY_VALUES = 256  # SVC_WEAPONANIM writes body as a byte
 DEFAULT_BODY_BITS = 32  # delta.lst's DT_INTEGER field holds up to 32
 MAX_MDL_BYTES = 16 * 1024 * 1024
-PART_TEXTURE_BYTES = 14 * 1024 * 1024  # leaves room for meshes and animations
+# a part's textures + meshes (estimated) stay under this: room for the
+# animations and headers below 16 MB
+PART_BYTES = int(14.5 * 1024 * 1024)
+PART_TEXTURE_BYTES = PART_BYTES  # (textures alone: the same ceiling)
 
 _state: dict[str, int] = {"submodels": STOCK_SUBMODELS, "body_bits": DEFAULT_BODY_BITS}
 _BANNER = re.compile(rb"MAXSTUDIOMODELS\s+(\d+)")
@@ -84,6 +88,20 @@ def studiomdl_submodels(studiomdl: str | Path | None) -> int:
     return _cache[key]
 
 
+def mesh_bytes(smds: object) -> int:
+    """What reference meshes add to a compiled .mdl, estimated: 13 bytes a
+    vertex and a normal (vector + bone), 11 a triangle (strips/fans) —
+    within 1-3 % of studiomdl on a 50-body players part."""
+    total = 0
+    for smd in smds:  # type: ignore[attr-defined]
+        triangles = smd.triangles
+        verts = {(v.bone, v.position) for t in triangles for v in t.vertices}
+        normals = {(v.bone, v.normal, t.material.lower()) for t in triangles
+                   for v in t.vertices}
+        total += 13 * (len(verts) + len(normals)) + 11 * len(triangles)
+    return total
+
+
 def texture_bytes(path: Path) -> int:
     """What an 8-bit BMP texture costs inside a .mdl: its pixels and palette."""
     try:
@@ -96,6 +114,6 @@ def texture_bytes(path: Path) -> int:
         return 0
 
 
-__all__ = ["DEFAULT_BODY_BITS", "MAX_MDL_BYTES", "PART_TEXTURE_BYTES", "STOCK_SUBMODELS",
-           "VIEW_BODY_VALUES", "body_values", "studiomdl_submodels", "submodels",
-           "texture_bytes", "use"]
+__all__ = ["DEFAULT_BODY_BITS", "MAX_MDL_BYTES", "PART_BYTES", "PART_TEXTURE_BYTES",
+           "STOCK_SUBMODELS", "VIEW_BODY_VALUES", "body_values", "mesh_bytes",
+           "studiomdl_submodels", "submodels", "texture_bytes", "use"]

@@ -21,13 +21,21 @@ def _materials(model: PlayerModel) -> set[str]:
     return {t.material.lower() for smd in model.body_meshes for t in smd.triangles}
 
 
-def _texture_sizes(model: PlayerModel) -> dict[str, int]:
+def _texture_keys(model: PlayerModel) -> dict[tuple[str, str], int]:
+    """(material, content digest) -> bytes in a .mdl, for every texture the
+    body uses. Keyed by content: CSO bodies reuse names (``face.bmp``) for
+    different images, which the merge stages as separate textures."""
+    import hashlib
+
     from valve_qc_merger.merge_view.merger import _find_texture
-    out: dict[str, int] = {}
+    out: dict[tuple[str, str], int] = {}
     for material in _materials(model):
         found = _find_texture(model.directory, material)
-        if found is not None:
-            out[material] = limits.texture_bytes(found)
+        if found is None:
+            out[(material, "")] = 0
+            continue
+        digest = hashlib.md5(found.read_bytes()).hexdigest()
+        out[(material, digest)] = limits.texture_bytes(found)
     return out
 
 
@@ -49,8 +57,9 @@ def split_parts(
         submodel_limit = limits.submodels()
     parts: list[list[PlayerModel]] = []
     current: list[PlayerModel] = []
-    textures: set[str] = set()
-    sizes: dict[str, int] = {}  # material (lower) -> bytes in the .mdl
+    textures: set[tuple[str, str]] = set()
+    sizes: dict[tuple[str, str], int] = {}  # (material, digest) -> bytes in the .mdl
+    meshes = 0  # the part's mesh bytes (estimated)
     for model in models:
         reserve = reserve_submodels if not parts else 0
         cand = [*current, model]
@@ -59,18 +68,21 @@ def split_parts(
             1 + sum(1 for m in cand if len(m.body_meshes) > k)
             for k in range(1, slots)
         )
-        mats = _materials(model)
-        sizes.update(_texture_sizes(model))
+        keys = _texture_keys(model)
+        sizes.update(keys)
+        mats = set(keys)
+        mesh = limits.mesh_bytes(model.body_meshes)
         over_sub = bool(current) and submodels > submodel_limit
         over_tex = bool(current) and (
             len(textures | mats) > texture_budget
-            or sum(sizes.get(m, 0) for m in textures | mats) > limits.PART_TEXTURE_BYTES)
+            or sum(sizes[m] for m in textures | mats) + meshes + mesh > limits.PART_BYTES)
         over_skins = bool(current) and max_skins is not None and len(cand) > max_skins
         if current and (over_sub or over_tex or over_skins):
             parts.append(current)
-            current, textures = [], set()
+            current, textures, meshes = [], set(), 0
         current.append(model)
         textures |= mats
+        meshes += mesh
     if current:
         parts.append(current)
     return parts

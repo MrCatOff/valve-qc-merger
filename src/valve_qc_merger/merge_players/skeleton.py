@@ -51,41 +51,64 @@ def _prune_vertexless_leaves(mesh: Smd) -> None:
 
 
 def reduce_body(mesh: Smd, donor: Donor) -> list[str]:
-    """Collapse foreign bones and prune vertexless leaves (in place).
+    """Put a body mesh on the donor skeleton (in place).
 
-    A bone is *foreign* if its name is not a donor bone, OR its parent differs
-    from the donor's parent for that name — CSO rigs reuse generic names
-    (``Bone01``, ``Object04``) for unrelated bones, and keeping one whose
-    parentage disagrees with the donor animations makes studiomdl reject the
-    compile ("illegal parent bone replacement"). Foreign bones' vertices fold
-    onto the nearest non-foreign ancestor (exact: they are static under the
-    donor animations). Returns the collapsed bone names.
-    """
+    1. A bone whose NAME is not a donor bone is *foreign*: its vertices fold
+       onto the nearest donor-named ancestor (exact: it is static under the
+       donor animations) — or onto the donor root when it hangs off no donor
+       bone (an effect bone ``fx02`` at the root, a ``Scene Root`` above
+       ``Bip01``) — and it is dropped.
+    2. The rest is conformed to the donor's node table: a donor bone the body
+       lacks is grafted at the donor's bind, and a donor-named bone hanging off
+       another parent (``Bip01 Head`` under ``Spine`` with no ``Neck``) is
+       re-parented as the donor has it, world poses kept exactly. Dropping
+       such a bone instead re-hung its children further up, against the donor
+       animations ("illegal parent bone replacement").
+    3. Vertex-less leaves are pruned (studiomdl's own pruning corrupts mesh
+       strips).
+
+    Returns the collapsed (foreign) bone names."""
+    from valve_qc_merger.merge_view.skeleton_ops import conform_to_table
     donor_names = {name for name, _ in donor.table}
-    donor_parent = dict(donor.table)
+    root = next(name for name, parent in donor.table if parent is None)
     name_by_index = {n.index: n.name for n in mesh.nodes}
     parent_of = {n.name: name_by_index.get(n.parent) for n in mesh.nodes}
+    used = {name_by_index[v.bone] for t in mesh.triangles for v in t.vertices}
 
-    def foreign(name: str) -> bool:
-        return name not in donor_names or parent_of.get(name) != donor_parent.get(name)
-
-    doomed = [n.name for n in mesh.nodes if foreign(n.name)]
-    # Deepest first so a foreign chain folds toward the core without gaps.
+    doomed = [n.name for n in mesh.nodes if n.name not in donor_names]
     for name in sorted(doomed, key=lambda s: -_depth(s, parent_of)):
         ancestor = parent_of.get(name)
-        while ancestor is not None and foreign(ancestor):
+        while ancestor is not None and ancestor not in donor_names:
             ancestor = parent_of.get(ancestor)
         if ancestor is None:
-            raise SkeletonError(
-                f"foreign bone {name!r} has no donor ancestor to collapse onto"
-            )
+            if name not in used:
+                continue  # nothing to keep: the bone just goes
+            if root not in parent_of:
+                _graft_root(mesh, root, donor)
+                parent_of[root] = None
+            ancestor = root
         rebind_vertices(mesh, name, ancestor)
+        used.add(ancestor)
 
     if doomed:
         remove_bones(mesh, set(doomed))  # refuses vertex-carrying bones (rebound above)
+    try:
+        conform_to_table(mesh, list(donor.table), dict(donor.bind))
+    except (KeyError, ValueError) as exc:
+        raise SkeletonError(f"cannot fit the donor skeleton: {exc}") from exc
     _prune_vertexless_leaves(mesh)
     renumber(mesh)
     return sorted(doomed)
+
+
+def _graft_root(mesh: Smd, root: str, donor: Donor) -> None:
+    """Add the donor root bone at its bind (for vertices of a foreign root)."""
+    from valve_qc_merger.models.smd import BonePose, Frame, Node
+    index = max((n.index for n in mesh.nodes), default=-1) + 1
+    mesh.nodes = [*mesh.nodes, Node(index, root, -1)]
+    pos, rot = donor.bind[root]
+    mesh.frames = [Frame(f.time, (*f.poses, BonePose(index, pos, rot)))
+                   for f in mesh.frames]
 
 
 __all__ = ["reduce_body", "SkeletonError"]

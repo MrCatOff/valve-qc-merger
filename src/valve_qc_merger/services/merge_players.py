@@ -19,6 +19,7 @@ from valve_qc_merger.merge_players.parts import (
     split_parts,
 )
 from valve_qc_merger.merge_players.sequences import DEFAULT_PLACEHOLDER_GLOBS
+from valve_qc_merger.merge_players.skeleton import reduce_body
 from valve_qc_merger.merge_players.verify import verify_players_part
 from valve_qc_merger.merge_view.atlas import TextureOptions
 from valve_qc_merger.merge_view.discovery import (
@@ -104,8 +105,10 @@ def run_merge_players(opts: MergePlayersOptions,  # noqa: C901 - orchestration
         sanitize_model_dir(model_dir)
         try:
             model = load_player_body(model_dir)
-        except (MergeViewError, ValueError) as exc:
-            failures.append(str(exc))
+            for mesh in model.body_meshes:  # one body that cannot fit the donor
+                reduce_body(mesh.clone(), donor)  # skips itself, not the whole merge
+        except (MergeViewError, ValueError, RuntimeError) as exc:
+            failures.append(f"{model_dir.name}: {exc}")
             reporter.log(f"  {model_dir.name:<24} FAIL  {exc}")
             continue
         models.append(model)

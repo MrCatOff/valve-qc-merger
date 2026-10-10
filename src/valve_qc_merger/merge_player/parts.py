@@ -66,6 +66,7 @@ def split_player_parts(
     bones: set[str] = set()
     textures: set[str] = set()
     sizes: dict[str, int] = {}  # staged texture name -> bytes in the .mdl
+    meshes = 0  # the part's mesh bytes (estimated)
     for model, plan in pairs:
         model_bones = set(plan.shared) | {b.final for b in plan.bones}
         model_tex = _model_textures(
@@ -76,13 +77,14 @@ def split_player_parts(
             len(current) + 1 + 1 <= budget.submodels  # weapons + leading blank
             and len(bones | model_bones) <= budget.bones
             and len(textures | model_tex) <= budget.textures
-            and sum(sizes.get(t, 0) for t in textures | model_tex)
-            <= limits.PART_TEXTURE_BYTES  # a .mdl stays under 16 MB
+            and sum(sizes.get(t, 0) for t in textures | model_tex) + meshes
+            + limits.mesh_bytes(model.meshes.values()) <= limits.PART_BYTES  # < 16 MB
         )
         if current and not fits:
             parts.append(current)
-            current, bones, textures = [], set(), set()
+            current, bones, textures, meshes = [], set(), set(), 0
         current.append((model, plan))
+        meshes += limits.mesh_bytes(model.meshes.values())
         bones |= model_bones
         textures |= model_tex
     if current:
