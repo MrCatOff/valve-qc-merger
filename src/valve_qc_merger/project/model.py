@@ -213,6 +213,28 @@ def _folder_kind(directory: Path) -> str:
     return "player" if any(_PLAYER_SEQUENCE.match(label) for label in labels) else "prop"
 
 
+def _part_sources(path: Path) -> list[list[str]]:
+    """Per bodypart, the source models its submodels name (see
+    :func:`pack_sources`)."""
+    from valve_qc_merger.mdl.reader import submodel_names
+    try:
+        parts = submodel_names(path)
+    except OSError:
+        return []
+    out: list[list[str]] = []
+    for _bodypart, names in parts:
+        split = [n.replace("\\", "/").split("/") for n in names if n and n.lower() != "blank"]
+        # a path that starts with ./ or ../ is the author's source tree (Valve:
+        # "..\\packs\\defuse"), never a merge's <source>/ folder
+        split = [[c for c in p if c] for p in split if p[0] not in (".", "..")]
+        split = [p for p in split if len(p) >= 2 and p[0].lower() != "hands"]
+        if split and all(p[0].lower() == "geometry" for p in split):
+            out.append(list(dict.fromkeys(p[-1] for p in split)))
+        else:
+            out.append(list(dict.fromkeys(p[0] for p in split)))
+    return out
+
+
 def pack_sources(path: Path) -> list[str]:
     """The models a merged ``.mdl`` was built from, read from its submodel
     names: a merge names each submodel ``<source model>/<mesh>``
@@ -220,38 +242,32 @@ def pack_sources(path: Path) -> list[str]:
     model of its own: no folder in the names, or one starting with ``./`` /
     ``../`` (the stock models' ``..\\packs\\defuse``). A shared hands group (``hands/…``) is
     no source."""
-    from valve_qc_merger.mdl.reader import submodel_names
-    try:
-        parts = submodel_names(path)
-    except OSError:
-        return []
-    split = [n.replace("\\", "/").split("/") for _b, names in parts for n in names
-             if n and n.lower() != "blank"]
-    # a path that starts with ./ or ../ is the author's source tree (Valve:
-    # "..\\packs\\defuse"), never a merge's <source>/ folder
-    split = [[c for c in p if c] for p in split if p[0] not in (".", "..")]
-    split = [p for p in split if len(p) >= 2 and p[0].lower() != "hands"]
-    if split and all(p[0].lower() == "geometry" for p in split):
-        return list(dict.fromkeys(p[-1] for p in split))
-    return list(dict.fromkeys(p[0] for p in split))
+    return list(dict.fromkeys(s for part in _part_sources(path) for s in part))
 
 
-def is_pack(path: Path) -> bool:
+def is_pack(path: Path, known: set[str] | None = None) -> bool:
     """A merge of other models — told by its content, no marker file needed:
-    submodels of two source models or more, or of one source that is not
-    the file itself (``case32/…`` inside ``base_w_01.mdl``)."""
-    sources = pack_sources(path)
-    return len(sources) > 1 or (len(sources) == 1
-                                and sources[0].lower() != Path(path).stem.lower())
+    one bodygroup choosing between submodels of two source models or more
+    (a merged weapon / body group), or source names that are models of their
+    own (``known``: the lower-case names of the models around it — the
+    effects in a goldsource effects pack, ``case32/…`` in ``base_w_01.mdl``).
+    Folder names alone are no pack: CSO player models keep their author's
+    folders, an accessory per bodygroup (``T-ani\\bomb``, ``xmas\\hat``)."""
+    stem = Path(path).stem.lower()
+    parts = [[s for s in part if s.lower() != stem] for part in _part_sources(path)]
+    if any(len(part) > 1 for part in parts):
+        return True
+    sources = {s.lower() for part in parts for s in part}
+    return bool(sources) and known is not None and bool(sources & known)
 
 
-def model_role(path: Path) -> str:
+def model_role(path: Path, known: set[str] | None = None) -> str:
     """What a compiled ``.mdl`` is: ``pack`` (:func:`is_pack`), ``weapon``
     (a ``v_``/``p_``/``w_`` name), ``player`` (``models/player/<x>/<x>.mdl``,
     or a model with the player aim sequences) or ``other`` — an effect, a
     projectile, a map prop, an NPC (imported as a ``prop``)."""
     path = Path(path)
-    if is_pack(path):
+    if is_pack(path, known):
         return "pack"
     if classify(path.stem) != "player":
         return "weapon"
@@ -525,6 +541,28 @@ class Project:
                 self._move_to_kind_folder(asset)
         self.save()
 
+    def categorize_from_folders(self, root: Path) -> dict[str, str]:
+        """File every asset imported from under ``root`` by the folder its
+        source sits in (:func:`folder_categories`; a pack's models by the
+        pack's). Returns ``{asset: category}`` for those changed."""
+        root = Path(root).resolve()
+        sources = {name: Path(asset.source.split("#", 1)[0]).resolve()
+                   for name, asset in self.assets.items() if asset.source}
+        found = folder_categories(root, list(set(sources.values())))
+        changed: dict[str, str] = {}
+        for name, source in sources.items():
+            category = found.get(source)
+            if category and self.assets[name].category != category:
+                self.assets[name].category = self.add_category(category, save=False)
+                changed[name] = category
+        for name, asset in self.assets.items():  # derived assets follow their origin
+            origin = self.assets.get(self._origin(asset))
+            if asset.derived and origin is not None and asset.category != origin.category:
+                asset.category = origin.category
+                changed[name] = origin.category
+        self.save()
+        return changed
+
     def normalize_assets(self, names: list[str] | None = None) -> dict[str, int]:
         """Give the assets' sequences, bodygroups, SMD files and textures
         portable ``[A-Za-z0-9_]`` names (:mod:`.normalize`; imports do it
@@ -544,7 +582,8 @@ class Project:
 
     def import_models(self, sources: list[Path], *, category: str | None = None,
                       reporter: Reporter | None = None,
-                      only_known: bool = True) -> ImportOutcome:
+                      only_known: bool = True,
+                      categories_from_folders: bool = False) -> ImportOutcome:
         """Import every ``.mdl`` of ``sources`` (files or folders) one by one:
         names already in the project are skipped, a model that fails is
         reported and the rest go on. (``only_known``) A pack found in a folder
@@ -566,12 +605,13 @@ class Project:
         taken: set[str] = set()
         packs: list[Path] = []
         todo: list[tuple[Path, str | None]] = []  # (model, kind)
+        known = {m.stem.lower() for m in models} | {n.lower() for n in self.assets}
         for model in models:
             if model.stem in self.assets or model.stem.lower() in taken:
                 outcome.skipped.append(model.stem)
                 continue
             taken.add(model.stem.lower())
-            role = model_role(model)
+            role = model_role(model, known - {model.stem.lower()})
             if only_known and model not in chosen and role == "pack":
                 packs.append(model)  # after the rest: its models may be here on their own
                 continue
@@ -580,6 +620,12 @@ class Project:
             claws = (role in ("weapon", "other") and is_claw_path(model)
                      and not re.match(r"(?i)[pw]_", model.stem))
             todo.append((model, "zhands" if claws else "prop" if role == "other" else None))
+        by_folder: dict[Path, str] = {}
+        if categories_from_folders and category is None:
+            for source in sources:
+                if Path(source).is_dir():
+                    by_folder.update(folder_categories(Path(source), [m for m, _k in todo]
+                                                       + packs))
         # decompile, normalise and judge every model in worker processes; the
         # project itself is changed here, one model after the other
         staging = self.root / ".import"
@@ -600,7 +646,7 @@ class Project:
                 try:
                     for folder in result["folders"]:
                         added = self.import_decompiled(Path(folder), kind=kind,
-                                                       category=category,
+                                                       category=by_folder.get(model, category),
                                                        prepared=result["hands"], batch=True,
                                                        move=True)
                         for asset in added:
@@ -613,11 +659,12 @@ class Project:
             shutil.rmtree(staging, ignore_errors=True)
             self.finish_import()
         if packs:
-            self._import_packs(packs, outcome, category, reporter)
+            self._import_packs(packs, outcome, category, reporter, by_folder)
         return outcome
 
     def _import_packs(self, packs: list[Path], outcome: ImportOutcome,
-                      category: str | None, reporter: Reporter) -> None:
+                      category: str | None, reporter: Reporter,
+                      by_folder: dict[Path, str] | None = None) -> None:
         """Unpack merged models into the models they were built from — in
         worker processes, each pack also normalised and judged there — and
         import those not here yet (on their own, or from an earlier pack)."""
@@ -642,7 +689,8 @@ class Project:
                         continue
                     try:
                         added = self.import_decompiled(
-                            Path(model["folder"]), category=category, batch=True,
+                            Path(model["folder"]),
+                            category=(by_folder or {}).get(pack, category), batch=True,
                             prepared={model["name"]: model["hands"]}, move=True)
                     except (ProjectError, OSError, ValueError) as exc:
                         outcome.failed.append(f"{pack.name} ({model['name']}): {exc}")
@@ -1777,6 +1825,34 @@ def _import_task(source: str, out: str, *, reporter: Reporter) -> dict[str, Any]
             "hands": hands}
 
 
+def folder_categories(root: Path, models: list[Path]) -> dict[Path, str]:
+    """A category per model from the folder it sits in under ``root``:
+    ``weapons/pistols/p_x.mdl`` -> ``pistols``; a model's own folder
+    (``player/zim/zim.mdl``) does not count; a folder name met under two
+    parents gets its parent's name too (``player`` and ``zombies player``).
+    Models right under ``root``: none."""
+    folders: dict[Path, tuple[str, ...]] = {}
+    for model in models:
+        try:
+            parts = model.relative_to(root).parent.parts
+        except ValueError:
+            continue
+        if parts and parts[-1].lower() == model.stem.lower():
+            parts = parts[:-1]
+        if parts:
+            folders[model] = parts
+    parents: dict[str, set[tuple[str, ...]]] = {}
+    for parts in folders.values():
+        parents.setdefault(parts[-1].lower(), set()).add(parts[:-1])
+    out: dict[Path, str] = {}
+    for model, parts in folders.items():
+        name = parts[-1]
+        if len(parents[name.lower()]) > 1 and len(parts) > 1:
+            name = f"{parts[-2]} {name}"
+        out[model] = re.sub(r'[/\\:*?"<>|]+', " ", name).strip() or "models"
+    return out
+
+
 def _derive_task(mode: str, options: dict[str, Any], *, reporter: Reporter) -> ServiceResult:
     """A derive service run, in a worker process (:meth:`Project.derive_many`)."""
     spec = DERIVE_MODES[mode]
@@ -1824,6 +1900,7 @@ def _build_dict(build: Build) -> dict[str, Any]:
 
 __all__ = [
     "ASSET_KINDS",
+    "folder_categories",
     "Asset",
     "BUILD_KINDS",
     "Build",

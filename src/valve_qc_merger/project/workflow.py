@@ -80,6 +80,7 @@ def import_server_folder(project: Project, root: Path, *, models: bool = True,
         result.game_dir_set = True
     if models and (root / "models").is_dir():
         outcome = project.import_models([root / "models"], category=category,
+                                        categories_from_folders=category is None,
                                         reporter=reporter)
         result.models = [a.name for a in outcome.added]
         result.skipped, result.ignored, result.failed = (outcome.skipped, outcome.ignored,

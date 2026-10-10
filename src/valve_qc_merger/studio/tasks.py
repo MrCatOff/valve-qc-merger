@@ -82,7 +82,8 @@ def import_models(root: str, sources: list[str], category: str | None, mdl: bool
     project = Project.open(Path(root))
     paths = [Path(s) for s in sources]
     if mdl:
-        outcome = project.import_models(paths, category=category, reporter=reporter)
+        outcome = project.import_models(paths, category=category, reporter=reporter,
+                                        categories_from_folders=category is None)
     else:
         outcome = ImportOutcome()
         for done, source in enumerate(paths):

@@ -128,3 +128,22 @@ def test_budget_counts_a_map_from_anywhere(tmp_path: Path) -> None:
         assert window.verdict_text() == "With zm_far, after merge: fits — 141 model slot(s) free"
     finally:
         window.close()
+
+
+def test_categories_from_folders(tmp_path: Path) -> None:
+    from valve_qc_merger.project.model import folder_categories
+    root = tmp_path / "models"
+    models = [root / "weapons" / "pistols" / "p_x.mdl", root / "player" / "zim" / "zim.mdl",
+              root / "zombies" / "player" / "boomer" / "boomer.mdl", root / "loose.mdl",
+              root / "weapons" / "knives" / "v_k.mdl"]
+    assert folder_categories(root, models) == {
+        models[0]: "pistols", models[1]: "player", models[2]: "zombies player",
+        models[4]: "knives"}
+    # an import files models by their folder; recategorising does it afterwards
+    (root / "weapons" / "pistols").mkdir(parents=True)
+    shutil.copy(_MINI, root / "weapons" / "pistols" / "v_one.mdl")
+    project = Project.create(tmp_path / "pack")
+    project.import_models([root], categories_from_folders=True)
+    assert project.assets["v_one"].category == "pistols"
+    project.assets["v_one"].category = ""
+    assert project.categorize_from_folders(root) == {"v_one": "pistols"}
