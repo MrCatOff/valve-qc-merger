@@ -27,7 +27,10 @@
  *   - dropped weapons (weaponbox) get the w_ model and body.
  *
  * Shared-hands view models (merge-v --shared-hands) select the hands with the
- * low bit: body = weapon x 2 + hand — set vqm_hand 1 for the second hands.
+ * low dimension: body = (weapon + 1) x 3 + 1 for the first hands (the value
+ * the manifest gives) — set vqm_hand 1 for the second hands (+1). Every
+ * bodygroup of a merged view model leads with a blank, so body 0 draws
+ * nothing while the client predicts the stock animations.
  * The p_ model is drawn with the PLAYER's body: vqm_p_body 1 sets it on deploy
  * (it also selects the player model's own bodygroups — turn it off when your
  * player models use them).

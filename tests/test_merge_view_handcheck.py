@@ -117,7 +117,8 @@ def test_plan_build_predicts_without_merging(models: Path, tmp_path: Path) -> No
     record = json.loads((project.build_dir("shared") / "plan.json").read_text())
     part, alone = record["parts"]
     assert part["part"] == "v_pack" and part["models"] == ["v_rt", "v_rt_moved"]
-    assert part["pev_body"] == {"v_rt": 0, "v_rt_moved": 1}  # one hand variant
+    # one hand variant; both groups lead with a blank: (weapon + 1) x 2 + 1
+    assert part["pev_body"] == {"v_rt": 3, "v_rt_moved": 5}
     # v_raw (other hands) ships on its own
     assert alone["models"] == ["v_raw"] and alone["standalone"] == "wears other hands"
     assert not record["failures"] and result.ok
@@ -126,7 +127,7 @@ def test_plan_build_predicts_without_merging(models: Path, tmp_path: Path) -> No
     # the run agrees with the plan
     project.run_build("shared", CollectingReporter())
     ini = (project.build_dir("shared") / "output" / "models.ini").read_text()
-    assert "[v_rt_moved]\npev_body = 1" in ini  # one part: no model line
+    assert "[v_rt_moved]\npev_body = 5" in ini  # one part: no model line
     with pytest.raises(KeyError):
         project.plan_build("nope")
 

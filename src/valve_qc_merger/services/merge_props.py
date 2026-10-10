@@ -76,6 +76,12 @@ class MergePropsOptions:
     # pev_body values a part may span: None = an entity's (limits.body_values,
     # the server's delta.lst); a view model's part (merge-v's no-hands) 256
     body_values: int | None = None
+    # a view model's part (merge-v's no-hands): every bodygroup leads with a
+    # blank (pev_body 0 draws nothing: the client prediction shows nothing)
+    view_model: bool = False
+    # a view model's part (merge-v's no-hands): every bodygroup leads with a
+    # blank (pev_body 0 draws nothing: the client prediction shows nothing)
+    view_model: bool = False
     # a model that fits no part on its own ships as it is (standalone/)
     standalone_rejects: bool = True
 
@@ -199,11 +205,11 @@ def repair_inputs(model_dir: Path) -> list[str]:
     return notes
 
 
-def body_range(part: list[Pair]) -> int:
+def body_range(part: list[Pair], blank_first: bool = False) -> int:
     """Values ``pev_body`` spans for ``part`` in merge_models' layout:
     ``weapon`` (one entry per model) times each extra ``weapon_k`` group
     (blank + the models with a k-th submodel)."""
-    total = len(part)
+    total = len(part) + (1 if blank_first else 0)
     groups = max(len(parts.weapon_stems) for _m, parts in part)
     for k in range(1, groups):
         total *= 1 + sum(1 for _m, parts in part if len(parts.weapon_stems) > k)
@@ -212,7 +218,8 @@ def body_range(part: list[Pair]) -> int:
 
 def split_prop_parts(pairs: list[Pair], *, textures: int = TEXTURE_BUDGET,
                      sequences: int = SHARED_HANDS_SEQUENCE_BUDGET,
-                     body_values: int | None = None) -> list[list[Pair]]:
+                     body_values: int | None = None,
+                     blank_first: bool = False) -> list[list[Pair]]:
     """Greedy parts within every budget (see the module). A model that is
     over a budget on its own still gets a part of its own; the caller
     decides whether to ship it."""
@@ -223,7 +230,7 @@ def split_prop_parts(pairs: list[Pair], *, textures: int = TEXTURE_BUDGET,
         submodels, texcount, seqcount = _part_counts(part, texture_keys, seq_keys)
         if submodels > limits.submodels() or texcount > textures or seqcount > sequences:
             return False
-        if body_range(part) > (body_values or limits.body_values()):
+        if body_range(part, blank_first) > (body_values or limits.body_values()):
             return False
         if part_bytes(part, texture_keys) > limits.PART_BYTES:
             return False
@@ -312,7 +319,8 @@ def run_merge_props(opts: MergePropsOptions,
 
     parts_list = split_prop_parts(pairs, textures=opts.texture_budget,
                                   sequences=opts.sequence_budget,
-                                  body_values=opts.body_values) if pairs else []
+                                  body_values=opts.body_values,
+                                  blank_first=opts.view_model) if pairs else []
     multi = len(parts_list) > 1
     result.data["parts"] = len(parts_list)
     aggregate: dict[str, dict[str, object]] = {}
@@ -322,7 +330,7 @@ def run_merge_props(opts: MergePropsOptions,
         part_name = f"{opts.name}_p{number}" if multi else opts.name
         part_out = opts.out / f"p{number}" if multi else opts.out
         try:
-            report = merge_models(part, part_out, part_name,
+            report = merge_models(part, part_out, part_name, blank_first=opts.view_model,
                                   manifest_format=opts.manifest_format,
                                   write_manifest=not multi)
         except MergeError as exc:

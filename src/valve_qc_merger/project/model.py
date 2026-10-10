@@ -1251,7 +1251,7 @@ class Project:
         from valve_qc_merger.limits import VIEW_BODY_VALUES
         part = run_merge_props(MergePropsOptions(
             models_dir=models_dir, out=output / "nohands", name=f"{opts.name}_nohands",
-            body_values=VIEW_BODY_VALUES,  # a view model: one byte
+            body_values=VIEW_BODY_VALUES, view_model=True,  # one byte, blank first
             manifest_format=opts.manifest_format,
             standalone_rejects=getattr(opts, "standalone_rejects", True)), reporter)
         result.outputs.extend(part.outputs)

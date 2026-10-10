@@ -71,13 +71,19 @@ resolves them directly.
 hands at the same index (`blank` where a model has none), and
 `weapon_2`/`weapon_3` carry extra always-on submodel groups. One `pev_body`
 value pairs a weapon with its hands, so the byte scales as `weapon × hands` and
-nears 255 by ~16 weapons.
+nears 255 by ~15 weapons.
+
+**Every group leads with a `blank`.** `pev_body 0` draws nothing: the client
+predicts the stock weapon's animations with body 0, so it shows nothing, and
+the plugin sets the body (from `models.ini`) and plays the animation itself.
+Each index is therefore one higher than a model's position.
 
 **`--shared-hands`.** The `hands` group is emitted FIRST as an independent
-2-entry dimension (`hands_female`, `hands_male`) shared by every weapon, and the
-`weapon` group second. `pev_body = weapon_index × 2 + hand` — set the weapon by
-its `pev_body` from `models.ini`, then OR the low bit for the male hand. The
-byte is therefore `2N − 1` (well under 255; 42 pistols → max 47) instead of
+dimension (`blank`, then the shared hand variants, e.g. `hands_female`,
+`hands_male`) shared by every weapon, and the `weapon` group (`blank`, then one
+entry per weapon) second. `pev_body = (weapon_index + 1) × 3 + 1` for the first
+hand variant (the value `models.ini` gives) and `+ 1` for the second. The byte
+is therefore `3N + 2` (84 weapons a part under 255) instead of
 `weapon × hands`. This is valid only when the inputs share the same hand bind
 (the grip lives in the sequences, not the mesh) — the merge checks it: hand
 meshes are compared in bone-local space (each vertex in its bone's bind frame,
@@ -222,7 +228,7 @@ are reported as "not carried" warnings.
 | `--exclude NAME` | skip a model directory (repeatable) |
 | `--reference SMD` | canonical hand skeleton (default `storage/hands/reference_hands.smd`; with `--shared-hands`, `storage/handswap/cso_reference_hands.smd` — the CSO hands with the full arm, so the elbow is preserved) |
 | `--skip-unmatched` | continue past models whose rig cannot be matched |
-| `--shared-hands` | inputs already wear our male/female hands (e.g. the `retarget` output): emit ONE shared hands bodygroup (`pev_body = weapon × 2 + hand`) instead of per-weapon hands; a multi-part weapon is first folded into one submodel (see `--max-decimation`), and rejected only when that fails |
+| `--shared-hands` | inputs already wear our male/female hands (e.g. the `retarget` output): emit ONE shared hands bodygroup (`pev_body = (weapon + 1) × 3 + hand`, every group leading with a blank) instead of per-weapon hands; a multi-part weapon is first folded into one submodel (see `--max-decimation`), and rejected only when that fails |
 | `--no-skin-variants` | keep only each weapon's first `$texturegroup` row instead of one weapon entry `<model>_skin<k>` per extra row (see *Skins and header commands*) |
 | `--max-decimation F` | with `--shared-hands`: a weapon whose always-on parts exceed one 2048-vertex submodel is folded into ONE submodel when removing at most this fraction of its vertices fits it (default 0.15; 0 disables). Half-edge collapses only — every kept vertex keeps its exact position and bone; UV seams, material borders and open edges are never touched, so the silhouette and texturing stay intact. The log reports `folded N parts … -p%, surface error <= e u` |
 | `--prune` | also fold away vertex-less unreferenced bones (default keeps everything except `Finger*Nub`) |

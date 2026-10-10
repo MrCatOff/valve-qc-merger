@@ -58,13 +58,13 @@ def test_shared_hands_emits_one_shared_hands_bodygroup(tmp_path: Path) -> None:
     assert not (out / "v_w0" / "hands.smd").exists()
 
 
-def test_shared_hands_pev_body_is_weapon_times_two(tmp_path: Path) -> None:
-    # hands first (stride 1, 2 entries), weapon second (stride 2): pev_body base
-    # == position * 2, the male hand adds the low-order +1 at runtime, so worst
-    # case 2N-1 stays well under 255.
+def test_shared_hands_pev_body_is_weapon_times_three(tmp_path: Path) -> None:
+    # hands first {blank, male, female} (stride 1), weapon second {blank, w0…}
+    # (stride 3): pev_body = (position + 1) x 3 + 1 (the first hand), the
+    # second hand +1 at runtime; 0 draws nothing (the client prediction).
     pairs = [_model(f"v_w{i}", tmp_path) for i in range(4)]
     report = merge_models(pairs, tmp_path / "out", "v_merged", shared_hands=True)
-    assert [report.pev_body[f"v_w{i}"] for i in range(4)] == [0, 2, 4, 6]
+    assert [report.pev_body[f"v_w{i}"] for i in range(4)] == [4, 7, 10, 13]
     assert max(report.pev_body.values()) < 255
 
 

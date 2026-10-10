@@ -41,10 +41,11 @@ def _model(name: str, tmp_path: Path, material: str, hands: bool = True,
 def test_split_respects_submodel_budget_with_per_model_hands(
     tmp_path: Path,
 ) -> None:
-    # 40 weapons, each bringing its own hands: 2 submodels per model.
+    # 40 weapons, each bringing its own hands: 2 submodels per model, plus the
+    # blank each of the two groups leads with: 2N + 2 <= 32 -> 15
     pairs = [_model(f"m{i:02d}", tmp_path, "tex.bmp") for i in range(40)]
     parts = split_parts(pairs, PartBudget(submodels=32, textures=80))
-    assert [len(p) for p in parts] == [16, 16, 8]
+    assert [len(p) for p in parts] == [15, 15, 10]
     assert [m.name for m, _ in parts[0]][:2] == ["m00", "m01"]
 
 
@@ -61,14 +62,15 @@ def test_split_distinct_hands_count_separately(tmp_path: Path) -> None:
     pairs = [
         _model(f"m{i}", tmp_path, "tex.bmp", offset=float(i)) for i in range(4)
     ]
-    parts = split_parts(pairs, PartBudget(submodels=4, textures=80))
-    # Each model brings weapon + own hands = 2 submodels; 4 fits two models.
+    parts = split_parts(pairs, PartBudget(submodels=6, textures=80))
+    # Each model brings weapon + own hands = 2 submodels, plus the two groups'
+    # leading blanks: 6 fits two models.
     assert [len(p) for p in parts] == [2, 2]
 
 
 def test_split_shared_hands_counts_one_hands_group(tmp_path: Path) -> None:
     # --shared-hands: ONE hands group (male/female) for the whole part, so a
-    # part takes 30 weapons + 2 hand variants = 32 submodels, not 16 + 16.
+    # part takes 28 weapons + their blank + {blank, male, female} = 32.
     pairs = []
     for i in range(40):
         model, parts = _model(f"m{i:02d}", tmp_path, "tex.bmp")
@@ -76,4 +78,4 @@ def test_split_shared_hands_counts_one_hands_group(tmp_path: Path) -> None:
         pairs.append((model, parts))
     parts = split_parts(pairs, PartBudget(submodels=32, textures=80),
                         shared_hands=True)
-    assert [len(p) for p in parts] == [30, 10]
+    assert [len(p) for p in parts] == [28, 12]  # N + blank + 3 hands entries <= 32

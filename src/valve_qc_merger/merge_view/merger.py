@@ -367,13 +367,20 @@ def merge_models(
     textures: TextureOptions | None = None,
     sound_path: str | None = None,
     shared_hands: bool = False,
+    blank_first: bool = True,
 ) -> MergeReport:
     """Write the merged model directory; returns the budget report.
+
+    ``blank_first`` (view models): every bodygroup leads with a ``blank``, so
+    ``pev_body 0`` draws nothing — the client's weapon prediction (which
+    plays the stock animations with body 0) shows nothing, and the plugin sets
+    the body and starts the animation itself. Every weapon's pev_body moves
+    up by one entry in each group.
 
     With ``shared_hands`` the models all wear the same hands (our retargeted
     male/female, identical bind): one shared ``hands`` bodygroup (2 submodels)
     is emitted for the whole model instead of one hands entry per weapon, so
-    ``pev_body`` stays ``hand + weapon x 2`` (< 255) rather than ``weapon x hands``.
+    ``pev_body`` stays ``hand + (weapon + 1) x 3`` (< 255) rather than ``weapon x hands``.
     """
     report = MergeReport()
     models = [model for model, _ in pairs]
@@ -541,16 +548,17 @@ def merge_models(
     if empty:
         raise MergeError(f"no weapon mesh in {', '.join(empty)} (only hands): "
                          "nothing to put in the weapon bodygroup")
+    lead = ["blank"] if blank_first else []
     groups: list[tuple[str, list[str]]] = []
     if shared_hand_paths:
         # ONE shared hands bodygroup for the whole model (male/female), emitted
-        # FIRST as the low-order dimension: pev_body = weapon x 2 + hand, so the
+        # FIRST as the low-order dimension: pev_body = (weapon + 1) x 3 + hand, so the
         # male/female bit is the cheap +1 the game toggles and the weapon index
         # scales by 2. (Independent of the weapon: 2N-1 max, not weapon x hands.)
-        groups.append(("hands", list(shared_hand_paths)))
-        groups.append(("weapon", [weapon_paths[m.name][0] for m in models]))
+        groups.append(("hands", lead + list(shared_hand_paths)))
+        groups.append(("weapon", lead + [weapon_paths[m.name][0] for m in models]))
     else:
-        groups.append(("weapon", [weapon_paths[m.name][0] for m in models]))
+        groups.append(("weapon", lead + [weapon_paths[m.name][0] for m in models]))
         for extra in range(1, max_weapon_groups):
             entries = ["blank"] + [
                 weapon_paths[m.name][extra] for m in models
@@ -560,7 +568,7 @@ def merge_models(
         if hands_paths:
             # One entry per model, aligned with the weapon group, so one pev_body
             # index pairs each weapon with its own hands (prior-art layout).
-            groups.append(("hands", [
+            groups.append(("hands", lead + [
                 hands_paths.get(m.name, "blank") for m in models
             ]))
     report.bodyparts = len(groups)
@@ -605,15 +613,15 @@ def merge_models(
         stride = 1
         for group_name, entries in groups:
             if group_name == "weapon":
-                index = position
+                index = position + len(lead)
             elif group_name.startswith("weapon_"):
                 extra = int(group_name.split("_")[1]) - 1
                 paths = weapon_paths[model.name]
                 index = entries.index(paths[extra]) if len(paths) > extra else 0
-            elif shared_hand_paths:  # shared hands: independent group, default 0
-                index = 0
+            elif shared_hand_paths:  # shared hands: independent group, its first variant
+                index = len(lead)
             else:  # per-weapon hands, aligned with the weapon group
-                index = position
+                index = position + len(lead)
             value += index * stride
             stride *= len(entries)
         report.pev_body[model.name] = value

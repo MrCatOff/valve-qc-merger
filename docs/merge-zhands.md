@@ -39,9 +39,11 @@ out/zhands/
   *.bmp, models.ini
 ```
 
-`pev_body = grenade_on + 2 * hands_index`: the grenade group comes first, so
-it is the low bit — a zombie's knife and grenade are `n` and `n | 1` (the
-merge-v `--shared-hands` convention). `models.ini` gives each
+`pev_body = grenade_on + 2 * (hands_index + 1)`: the grenade group comes first,
+so it is the low bit — a zombie's knife and grenade are `n` and `n | 1`; the
+hands group (like the grenade group) leads with a `blank`, so `pev_body 0`
+draws nothing (the client's prediction shows nothing until the plugin sets
+the body). `models.ini` gives each
 input model its `pev_body`, its `hands` entry and every `anim_<name>` index;
 the knife and grenade weapons of one zombie use the same .mdl with different
 `pev_body` values.

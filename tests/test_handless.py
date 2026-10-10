@@ -52,7 +52,7 @@ def test_merge_v_build_puts_them_in_a_no_hands_part(tmp_path: Path) -> None:
     manifest.read(output / "models.ini")
     assert manifest["v_floating"]["model"] == "v_pack_nohands.mdl"
     assert manifest["v_floating"]["hands"] == "model"
-    assert manifest["v_floating"]["pev_body"] == "0"
+    assert manifest["v_floating"]["pev_body"] == "1"  # 0 = the leading blank
     assert manifest["v_anaconda"]["model"] == "v_pack.mdl"
     assert Project.open(project.root).assets["v_floating"].hands_model  # saved
 

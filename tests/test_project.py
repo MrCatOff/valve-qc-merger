@@ -118,7 +118,7 @@ def test_run_zhands_build(tmp_path: Path) -> None:
     project.add_build(Build("zombies", "merge-zhands"))
     result = project.run_build("zombies", CollectingReporter())
     assert result.ok
-    assert result.manifest["v_alpha_grenade"]["pev_body"] == 1
+    assert result.manifest["v_alpha_grenade"]["pev_body"] == 3  # hands lead with a blank
 
 
 def test_build_rejects_assets_of_another_kind(tmp_path: Path) -> None:
