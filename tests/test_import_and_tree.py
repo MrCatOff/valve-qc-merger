@@ -45,17 +45,16 @@ def test_import_models_skips_ignores_and_goes_on(tmp_path: Path) -> None:
     folder = tmp_path / "server" / "models"
     folder.mkdir(parents=True)
     shutil.copy(_MINI, folder / "v_one.mdl")
-    shutil.copy(_MINI, folder / "crate.mdl")  # a prop: left out of a folder import
+    shutil.copy(_MINI, folder / "crate.mdl")  # a prop / effect: a prop asset
     (folder / "v_broken.mdl").write_bytes(b"IDST" + b"\0" * 10)
     project = Project.create(tmp_path / "pack")
     first = project.import_models([folder])
-    assert [a.name for a in first.added] == ["v_one"]
-    assert first.ignored == ["crate"] and len(first.failed) == 1
+    assert sorted(a.name for a in first.added) == ["crate", "v_one"]
+    assert project.assets["crate"].kind == "prop"
+    assert not first.ignored and len(first.failed) == 1
     assert first.failed[0].startswith("v_broken.mdl:")
     again = project.import_models([folder])  # import everything again: no error
-    assert again.skipped == ["v_one"] and not again.added
-    chosen = project.import_models([folder / "crate.mdl"])  # named on its own: imported
-    assert [a.name for a in chosen.added] == ["crate"]
+    assert sorted(again.skipped) == ["crate", "v_one"] and not again.added
 
 
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")

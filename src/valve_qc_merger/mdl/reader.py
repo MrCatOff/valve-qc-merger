@@ -304,6 +304,27 @@ def _read_tricmds(data: bytes, offset: int) -> list[tuple[TriVertex, TriVertex, 
     return tris
 
 
+def submodel_names(path: Path) -> list[tuple[str, list[str]]]:
+    """``(bodypart, [submodel names])`` of a model, read from the header
+    alone (a quick look: no meshes, textures or animations decoded)."""
+    data = Path(path).read_bytes()
+    if len(data) < HEADER_SIZE or data[:4] != b"IDST":
+        return []
+    numbodyparts, bodypartindex = struct.unpack_from("<2i", data, 136 + 17 * 4)
+    out: list[tuple[str, list[str]]] = []
+    try:
+        for i in range(max(min(numbodyparts, 64), 0)):
+            off = bodypartindex + i * 76
+            name = _cstr(data[off:off + 64]).decode("latin-1")
+            nummodels, _base, modelindex = struct.unpack_from("<3i", data, off + 64)
+            models = [_cstr(data[modelindex + k * 112:modelindex + k * 112 + 64])
+                      .decode("latin-1") for k in range(max(min(nummodels, 256), 0))]
+            out.append((name, models))
+    except struct.error:
+        return out
+    return out
+
+
 def read_mdl(path: Path) -> StudioModel:
     """Parse ``path`` (and its ``T.mdl`` / ``NN.mdl`` companions)."""
     path = Path(path)
@@ -460,6 +481,7 @@ def read_mdl(path: Path) -> StudioModel:
 
 
 __all__ = [
+    "submodel_names",
     "Attachment",
     "Bone",
     "BoneController",

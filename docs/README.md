@@ -15,6 +15,8 @@ Project documentation lives here, one page per topic.
   donor's animations (unneeded slots voided with a placeholder).
 - [`merge-w`](merge-w.md) — merge decompiled w_ (dropped-weapon)
   models onto a single hitboxed weapon bone.
+- [`merge-props`](merge-props.md) — effects, projectiles, props (any rig) and view
+  models without separate hands merged into a few models; `pev_body` picks the model.
 - [Server tools](server.md) — precache budget per map, mod-folder doctor, sounds (ReHLDS)
 - [`merge-zhands`](merge-zhands.md) — merge CSO zombie hand view models (+ `zhands-grenade` for zombies without one)
   (knife + grenade per zombie) into one model with a shared grenade bodygroup.

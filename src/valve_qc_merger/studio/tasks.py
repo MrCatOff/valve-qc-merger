@@ -21,6 +21,7 @@ KIND_TITLES = {
     "w": "World (w_)",
     "player": "Player bodies",
     "zhands": "Zombie hands",
+    "prop": "Props & effects",
 }
 
 
@@ -112,8 +113,8 @@ def import_models(root: str, sources: list[str], category: str | None, mdl: bool
                      + ", ".join(outcome.skipped[:12])
                      + (" …" if len(outcome.skipped) > 12 else ""))
     if outcome.ignored:
-        reporter.log(f"  {len(outcome.ignored)} left out (map props, effects, NPCs — not "
-                     "weapon or player models): " + ", ".join(outcome.ignored[:12])
+        reporter.log(f"  {len(outcome.ignored)} pack(s) left out (merges of other "
+                     "models): " + ", ".join(outcome.ignored[:12])
                      + (" …" if len(outcome.ignored) > 12 else ""))
     for line in outcome.failed:
         reporter.log(f"  warn: {line}")
@@ -133,8 +134,8 @@ def import_server(root: str, folder: str, options: dict[str, Any], *,
                + (f"; {len(result.skipped)} already here" if result.skipped else ""))
     reporter.log(f"  imported {summary}")
     if result.ignored:
-        reporter.log(f"  {len(result.ignored)} model(s) left out — map props, effects, NPCs "
-                     "(not weapon or player models): " + ", ".join(result.ignored[:12])
+        reporter.log(f"  {len(result.ignored)} pack(s) left out (merges of other "
+                     "models): " + ", ".join(result.ignored[:12])
                      + (" …" if len(result.ignored) > 12 else ""))
     if result.game_dir_set:
         reporter.log(f"  game folder set to {folder} (budgets, maps, doctor)")

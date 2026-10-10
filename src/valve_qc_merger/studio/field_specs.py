@@ -70,6 +70,13 @@ SPECS: dict[str, FieldSpec] = {
         "other hands, unmatched rig, failed retarget) becomes a model of its own next to "
         "the parts — in the manifest with standalone = 1 and why — instead of being left "
         "out. Each takes a model slot."),
+    "merge-props.standalone_rejects": FieldSpec(
+        "Ship rejected models on their own", "A model too big to merge even alone (bones, "
+        "sequences) becomes a model of its own next to the parts — in the manifest with "
+        "standalone = 1 and why — instead of being left out."),
+    "merge-props.sequence_budget": _adv("Sequences per part", "Most sequences one compiled "
+                                        "part may hold (the engine sends the sequence in "
+                                        "8 bits: 255 at most)."),
     "merge-v.sound_path": FieldSpec(
         "Sound path template", "Rewrite the sound event paths of every weapon; "
         "${fileBasename} is the original file name, e.g. csforce/pistols/${fileBasename}.",

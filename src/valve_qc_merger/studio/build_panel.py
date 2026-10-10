@@ -52,6 +52,8 @@ KIND_DESCRIPTIONS = {
     "merge-w": "Weapons lying on the ground → one w_ model with a bodygroup per weapon.",
     "merge-players": "Player characters → models on one shared rig, a skin per character.",
     "merge-zhands": "Zombie knife and grenade hands → one model sharing a single grenade.",
+    "merge-props": "Effects, projectiles and props → a few models; pev->body picks the "
+                   "model, each keeps its own bones and animations.",
 }
 
 
@@ -163,7 +165,8 @@ class NewBuildDialog(QDialog):
         self.kind_hint.setText(KIND_DESCRIPTIONS.get(kind, ""))
         self.kind_hint.setMinimumHeight(self.kind_hint.heightForWidth(400))
         base = {"merge-v": "view", "merge-p": "player_held", "merge-w": "world",
-                "merge-players": "players", "merge-zhands": "zombie_hands"}[kind]
+                "merge-players": "players", "merge-zhands": "zombie_hands",
+                "merge-props": "props"}[kind]
         category = self.category_box.currentData() if hasattr(self, "category_box") else None
         if category:
             base = f"{re.sub(r'[^0-9A-Za-z]+', '_', category).strip('_').lower()}_{base}"

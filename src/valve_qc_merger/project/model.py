@@ -48,6 +48,7 @@ from valve_qc_merger.services.compile import CompileOptions, run_compile
 from valve_qc_merger.services.decompile import DecompileOptions, find_models, run_decompile
 from valve_qc_merger.services.merge_player import MergePlayerOptions, run_merge_player
 from valve_qc_merger.services.merge_players import MergePlayersOptions, run_merge_players
+from valve_qc_merger.services.merge_props import MergePropsOptions, run_merge_props
 from valve_qc_merger.services.merge_view import MergeViewOptions, run_merge_view
 from valve_qc_merger.services.merge_world import MergeWorldOptions, run_merge_world
 from valve_qc_merger.services.merge_zhands import MergeZhandsOptions, run_merge_zhands
@@ -60,7 +61,7 @@ from valve_qc_merger.services.zhands_grenade import (
 
 FORMAT_VERSION = 2  # 2: asset categories, category builds
 PROJECT_FILE = "project.toml"
-ASSET_KINDS = ("v", "p", "w", "player", "zhands")
+ASSET_KINDS = ("v", "p", "w", "player", "zhands", "prop")
 
 
 class ProjectError(RuntimeError):
@@ -85,6 +86,7 @@ BUILD_KINDS: dict[str, BuildKind] = {
                                frozenset({"player"})),
     "merge-zhands": BuildKind(MergeZhandsOptions, run_merge_zhands,
                               frozenset({"zhands"})),
+    "merge-props": BuildKind(MergePropsOptions, run_merge_props, frozenset({"prop"})),
 }
 
 @dataclass(frozen=True)
@@ -192,12 +194,59 @@ def classify(name: str) -> str:
 _PLAYER_SEQUENCE = re.compile(r"(?i)^(?:ref_aim|crouch_aim|ref_shoot|crouch_shoot)")
 
 
+def _folder_kind(directory: Path) -> str:
+    """:func:`classify` for a decompiled folder: a name without a
+    ``v_``/``p_``/``w_`` prefix is a ``player`` only with the player aim
+    sequences in its QC, else a ``prop`` (an effect, a projectile)."""
+    kind = classify(directory.name)
+    if kind != "player":
+        return kind
+    labels = re.findall(r'(?im)^\s*\$sequence\s+"?([^"\s{]+)',
+                        "\n".join(q.read_text(encoding="latin-1")
+                                  for q in directory.glob("*.qc")))
+    return "player" if any(_PLAYER_SEQUENCE.match(label) for label in labels) else "prop"
+
+
+def pack_sources(path: Path) -> list[str]:
+    """The models a merged ``.mdl`` was built from, read from its submodel
+    names: a merge names each submodel ``<source model>/<mesh>``
+    (``v_awp_kraken/v_zgun``; our merge-p ``geometry/<model>``). [] for a
+    model of its own: no folder in the names, or one starting with ``./`` /
+    ``../`` (the stock models' ``..\\packs\\defuse``). A shared hands group (``hands/…``) is
+    no source."""
+    from valve_qc_merger.mdl.reader import submodel_names
+    try:
+        parts = submodel_names(path)
+    except OSError:
+        return []
+    split = [n.replace("\\", "/").split("/") for _b, names in parts for n in names
+             if n and n.lower() != "blank"]
+    # a path that starts with ./ or ../ is the author's source tree (Valve:
+    # "..\\packs\\defuse"), never a merge's <source>/ folder
+    split = [[c for c in p if c] for p in split if p[0] not in (".", "..")]
+    split = [p for p in split if len(p) >= 2 and p[0].lower() != "hands"]
+    if split and all(p[0].lower() == "geometry" for p in split):
+        return list(dict.fromkeys(p[-1] for p in split))
+    return list(dict.fromkeys(p[0] for p in split))
+
+
+def is_pack(path: Path) -> bool:
+    """A merge of other models — told by its content, no marker file needed:
+    submodels of two source models or more, or of one source that is not
+    the file itself (``case32/…`` inside ``base_w_01.mdl``)."""
+    sources = pack_sources(path)
+    return len(sources) > 1 or (len(sources) == 1
+                                and sources[0].lower() != Path(path).stem.lower())
+
+
 def model_role(path: Path) -> str:
-    """What a compiled ``.mdl`` is: ``weapon`` (a ``v_``/``p_``/``w_`` name),
-    ``player`` (``models/player/<x>/<x>.mdl``, or a model with the player
-    aim sequences) or ``other`` — a map prop, an effect, an NPC: nothing a
-    build of this project takes."""
+    """What a compiled ``.mdl`` is: ``pack`` (:func:`is_pack`), ``weapon``
+    (a ``v_``/``p_``/``w_`` name), ``player`` (``models/player/<x>/<x>.mdl``,
+    or a model with the player aim sequences) or ``other`` — an effect, a
+    projectile, a map prop, an NPC (imported as a ``prop``)."""
     path = Path(path)
+    if is_pack(path):
+        return "pack"
     if classify(path.stem) != "player":
         return "weapon"
     if path.parent.parent.name.lower() == "player" and path.parent.name.lower() == \
@@ -230,7 +279,7 @@ class _QuietProgress(Reporter):
 class ImportOutcome:
     added: list[Asset] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)  # already in the project
-    ignored: list[str] = field(default_factory=list)  # props / effects / NPCs
+    ignored: list[str] = field(default_factory=list)  # packs (merges of other models)
     failed: list[str] = field(default_factory=list)  # "<file>: why"
 
 
@@ -425,7 +474,7 @@ class Project:
                 raise ProjectError(f"asset {name!r} already exists")
             if name in self.assets:
                 self.remove_asset(name)
-            asset_kind = kind or classify(name)
+            asset_kind = kind or _folder_kind(directory)
             relative = Path("assets") / asset_kind / name
             shutil.copytree(directory, self.root / relative)
             _normalize_quietly(self.root / relative)
@@ -461,9 +510,10 @@ class Project:
                       only_known: bool = True) -> ImportOutcome:
         """Import every ``.mdl`` of ``sources`` (files or folders) one by one:
         names already in the project are skipped, a model that fails is
-        reported and the rest go on, and (``only_known``) models found in a
-        folder that are neither weapons nor players — map props, effects — are
-        left out (a file named on its own is always imported)."""
+        reported and the rest go on, and (``only_known``) packs found in a
+        folder — merges of other models — are left out (a file named on its
+        own is always imported); effects, projectiles and props come in as
+        ``prop`` assets."""
         reporter = reporter or Reporter()
         outcome = ImportOutcome()
         models: list[Path] = []
@@ -481,11 +531,13 @@ class Project:
             if model.stem in self.assets or model.stem.lower() in taken:
                 outcome.skipped.append(model.stem)
                 continue
-            if only_known and model not in chosen and model_role(model) == "other":
+            role = model_role(model)
+            if only_known and model not in chosen and role == "pack":
                 outcome.ignored.append(model.stem)
                 continue
             try:
                 added = self.import_mdl(model, category=category,
+                                        kind="prop" if role == "other" else None,
                                         reporter=_QuietProgress(reporter))
             except (ProjectError, OSError, ValueError) as exc:
                 outcome.failed.append(f"{model.name}: {exc}")
