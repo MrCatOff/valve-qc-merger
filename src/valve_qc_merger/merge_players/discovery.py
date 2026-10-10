@@ -151,7 +151,9 @@ def _resolve_materials(meshes: list[Smd], directory: Path) -> list[str]:
     that so studiomdl's ``$cliptotextures`` finds the BMP (a missing texture
     SIGTRAPs the compiler, not a clean error). Returns unresolved material names.
     """
-    files = [p.name for p in directory.iterdir() if p.is_file()]
+    # next to the QC, or in a texture folder (our decompiles: maps_8bit/)
+    files = [p.name for p in sorted(directory.rglob("*"))
+             if p.is_file() and p.suffix.lower() == ".bmp"]
     exact = {f.lower(): f for f in files}
     exact |= {f.rsplit(".", 1)[0].lower(): f for f in files}
     ascii_map = {_ascii_key(f): f for f in files}
