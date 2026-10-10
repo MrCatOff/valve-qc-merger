@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 from valve_qc_merger.merge_view.animsize import sequence_sizes
 from valve_qc_merger.merge_view.discovery import ModelInput
-from valve_qc_merger.merge_view.skeleton_ops import rename_bones, reparent_bone
+from valve_qc_merger.merge_view.skeleton_ops import rename_bones, reparent_bones
 from valve_qc_merger.models.smd import Smd
 
 SLOT_FORMAT = "Bone_WPNJ{n}_TYPE1"
@@ -234,19 +234,16 @@ def _apply_to_smd(
         for n in smd.nodes
     }
     present = set(name_parent)
+    moves: dict[str, str] = {}
     for bone in sorted(slot_of, key=lambda b: _slot_number(slot_of[b])):
         slot = slot_of[bone]
         if slot not in present:
             continue
         expected = slot_parent[slot] or root
         if name_parent.get(slot) != expected and expected in present:
-            reparent_bone(smd, slot, expected)
-            name_parent = {
-                n.name: next(
-                    (p.name for p in smd.nodes if p.index == n.parent), None)
-                for n in smd.nodes
-            }
+            moves[slot] = expected
             reparented.append(slot)
+    reparent_bones(smd, moves)  # one pass a frame for all (exact either way)
     return reparented
 
 

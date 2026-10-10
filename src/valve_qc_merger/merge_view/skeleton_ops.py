@@ -120,35 +120,43 @@ def remove_bones(smd: Smd, names: set[str]) -> None:
 
 def reparent_bone(smd: Smd, bone: str, new_parent: str | None) -> None:
     """Move ``bone`` under ``new_parent`` keeping its world pose, per frame."""
-    index = next(n.index for n in smd.nodes if n.name == bone)
-    parent_index = (
-        -1 if new_parent is None
-        else next(n.index for n in smd.nodes if n.name == new_parent)
-    )
-    # Cycle guard: the new parent must not be a descendant of the moved bone.
+    reparent_bones(smd, {bone: new_parent})
+
+
+def reparent_bones(smd: Smd, moves: dict[str, str | None]) -> None:
+    """Move each bone of ``moves`` under its new parent (None: a root),
+    keeping every world pose, per frame — one forward pass a frame for all
+    of them: a reparent keeps the world pose of every bone, so each new local
+    is the new parent's world inverse composed with the bone's world, both
+    from the frame as it was."""
+    if not moves:
+        return
+    index_of = {n.name: n.index for n in smd.nodes}
     parent_of = {n.index: n.parent for n in smd.nodes}
-    cursor = parent_index
-    while cursor >= 0:
-        if cursor == index:
-            raise ValueError(f"reparenting {bone!r} under its own descendant")
-        cursor = parent_of[cursor]
+    moved = {index_of[bone]: (-1 if parent is None else index_of[parent])
+             for bone, parent in moves.items()}
+    parent_of.update(moved)
+    for index in moved:  # cycle guard: no bone may end up under itself
+        cursor, steps = parent_of[index], 0
+        while cursor >= 0:
+            if cursor == index or steps > len(parent_of):
+                name = next(n.name for n in smd.nodes if n.index == index)
+                raise ValueError(f"reparenting {name!r} under its own descendant")
+            cursor, steps = parent_of[cursor], steps + 1
 
     new_frames: list[Frame] = []
     for frame in smd.frames:
         worlds = fk_worlds(smd, frame)
-        world = worlds[index]
-        parent_world = worlds[parent_index] if parent_index >= 0 else _IDENTITY
-        local = parent_world.inverse().compose(world)
-        euler = matrix_to_euler(local.rotation)
+        locals_: dict[int, BonePose] = {}
+        for index, parent_index in moved.items():
+            parent_world = worlds[parent_index] if parent_index >= 0 else _IDENTITY
+            local = parent_world.inverse().compose(worlds[index])
+            locals_[index] = BonePose(index, local.translation,
+                                      matrix_to_euler(local.rotation))
         new_frames.append(Frame(frame.time, tuple(
-            BonePose(p.bone, local.translation, euler) if p.bone == index else p
-            for p in frame.poses
-        )))
+            locals_.get(p.bone, p) for p in frame.poses)))
     smd.frames = new_frames
-    smd.nodes = [
-        Node(n.index, n.name, parent_index if n.index == index else n.parent)
-        for n in smd.nodes
-    ]
+    smd.nodes = [Node(n.index, n.name, moved.get(n.index, n.parent)) for n in smd.nodes]
     renumber(smd)
 
 

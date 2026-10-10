@@ -9,6 +9,7 @@ disk with every textual reference patched, before anything is parsed.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import re
 from dataclasses import dataclass, field
@@ -131,6 +132,18 @@ class ModelInput:
     meshes: dict[str, Smd] = field(default_factory=dict)  # studio stem -> parsed SMD
     anims: dict[str, Smd] = field(default_factory=dict)  # sequence name -> parsed SMD
     warnings: list[str] = field(default_factory=list)
+
+    def clone(self) -> ModelInput:
+        """An independent copy at a fraction of ``copy.deepcopy``'s cost: SMDs
+        by :meth:`Smd.clone` (their elements are immutable), the small rest
+        copied deeply."""
+        return ModelInput(
+            name=self.name, directory=self.directory, qc_path=self.qc_path,
+            qc_text=self.qc_text, bodygroups=copy.deepcopy(self.bodygroups),
+            sequences=copy.deepcopy(self.sequences),
+            meshes={k: v.clone() for k, v in self.meshes.items()},
+            anims={k: v.clone() for k, v in self.anims.items()},
+            warnings=list(self.warnings))
 
     def all_smds(self) -> list[tuple[str, Smd]]:
         """Every mesh and animation SMD, keyed ``mesh:<stem>`` / ``anim:<seq>``

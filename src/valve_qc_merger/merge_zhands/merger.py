@@ -20,7 +20,6 @@ Pipeline per input model (decompiled ``v_<zombie>_<knife|grenade>[_variant]``):
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 import hashlib
 import re
@@ -424,7 +423,7 @@ def hands_limit() -> int:
 def hands_size(model: ModelInput, grenade_prefix: str = "frogbomb") -> tuple[int, int]:
     """(vertices, normals) of the one hands entry ``model`` becomes, counted
     as studiomdl does (the model is left untouched)."""
-    zm = prepare_model(copy.deepcopy(model), grenade_prefix)
+    zm = prepare_model(model.clone(), grenade_prefix)
     triangles = zm.hands.triangles if zm.hands is not None else []
     return (len({(v.bone, v.position) for t in triangles for v in t.vertices}),
             len({(v.bone, v.normal, t.material.lower()) for t in triangles
@@ -475,7 +474,7 @@ def planned(models_in: list[ModelInput], grenade_prefix: str = "frogbomb"
     have, with the bones pooled (nothing written; the models are left
     untouched). Pooling reshapes channels, so the bytes are measured with
     studiomdl's exact quantise+RLE replica."""
-    models = [prepare_model(copy.deepcopy(m), grenade_prefix) for m in models_in]
+    models = [prepare_model(m.clone(), grenade_prefix) for m in models_in]
     canonicalize_hands(models, ZhandsReport())
     for zm in models:
         zm.model.meshes = {"hands": zm.hands}
@@ -504,23 +503,43 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
                   limit: int = BONE_LIMIT) -> list[list[ModelInput]]:
     """Parts under the bone limit (with the bones pooled) and the submodel
     limit, a zombie's models (knife, grenade, variants) always together, in
-    input order."""
+    input order.
+
+    A part takes the longest run of zombies that fits — found by galloping
+    then halving (a few :func:`planned` runs a part), not by replanning the
+    part after every zombie (quadratic: 40 zombies took most of an hour)."""
     zombies: dict[str, list[ModelInput]] = {}
     for model in models:
         zombies.setdefault(zombie_of(model.name), []).append(model)
-    parts: list[list[ModelInput]] = []
-    current: list[ModelInput] = []
-    for group in zombies.values():
-        trial = current + group
+    groups = list(zombies.values())
+
+    def run(start: int, end: int) -> list[ModelInput]:
+        return [model for group in groups[start:end] for model in group]
+
+    def fits(start: int, end: int) -> bool:
+        trial = run(start, end)
         # one hands entry per model at most, plus the grenade group's two
-        if current and (len(trial) > hands_limit()
-                        or not _fits(planned(trial, grenade_prefix), limit)):
-            parts.append(current)
-            current = list(group)
-        else:
-            current = trial
-    if current:
-        parts.append(current)
+        return len(trial) <= hands_limit() and _fits(planned(trial, grenade_prefix), limit)
+
+    parts: list[list[ModelInput]] = []
+    start = 0
+    while start < len(groups):
+        good, bad, step = start + 1, None, 1  # a part takes its first zombie whatever
+        while good < len(groups):
+            trial = min(good + step, len(groups))
+            if fits(start, trial):
+                good, step = trial, step * 2
+            else:
+                bad = trial
+                break
+        while bad is not None and bad - good > 1:
+            middle = (good + bad) // 2
+            if fits(start, middle):
+                good = middle
+            else:
+                bad = middle
+        parts.append(run(start, good))
+        start = good
     return parts
 
 

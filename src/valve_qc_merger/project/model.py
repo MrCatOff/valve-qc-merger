@@ -1496,8 +1496,10 @@ class Project:
                 converted += 1
                 continue
             why = result.failures[-1] if result.failures else f"exit {result.exit_code}"
-            if "no hands found" in why or "no hands found" in " ".join(result.failures):
-                # nothing to swap: the model has no hands (or they are the model)
+            said = " ".join([why, *result.failures])
+            if any(marker in said for marker in _HANDS_ARE_THE_MODEL):
+                # nothing to swap: the model has no hands, or they are all of it
+                # (a zombie's emote: hands, no weapon)
                 nohands = retargeted.parent / NOHANDS_INPUT
                 nohands.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(source, nohands / asset.name)
@@ -1823,6 +1825,11 @@ def _import_task(source: str, out: str, *, reporter: Reporter) -> dict[str, Any]
             hands[folder.name] = hands_are_the_model(folder, source) is not None
     return {"folders": [str(f) for f in folders], "failures": list(result.failures),
             "hands": hands}
+
+
+# a retarget failing so: nothing to swap — the model goes, as it is, into
+# merge-v's no-hands part
+_HANDS_ARE_THE_MODEL = ("no hands found", "hand detection ate the whole model")
 
 
 def folder_categories(root: Path, models: list[Path]) -> dict[Path, str]:
