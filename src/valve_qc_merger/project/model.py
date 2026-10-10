@@ -1023,6 +1023,8 @@ class Project:
                 reporter.log(f"  {len(list(nohands.iterdir()))} model(s) whose hands are the "
                              "model (or that have none): no retarget, merged into the "
                              "no-hands part")
+        if build.kind == "merge-zhands":
+            notes += self._prepare_zhands(assets, staged, work, reporter)
         if build.retarget:
             notes += self._retarget_for_build(
                 [a for a in assets if not (build.kind == "merge-v" and a.hands_model)],
@@ -1116,6 +1118,8 @@ class Project:
             result = kind.run(opts, reporter)
         if build.kind == "merge-v" and nohands.is_dir() and any(nohands.iterdir()):
             self._merge_nohands(nohands, output, opts, result, reporter)
+        if build.kind == "merge-zhands":
+            self._rename_manifest(base, output, opts, result)
         self._fold_notes(result, notes)
         record = {
             "build": name,
@@ -1130,6 +1134,97 @@ class Project:
         }
         (base / "last_run.json").write_text(json.dumps(record, indent=1), encoding="utf-8")
         return result
+
+    def _prepare_zhands(self, assets: list[Asset], staged: Path, work: Path,
+                        reporter: Reporter) -> list[str]:
+        """Stage a merge-zhands build: every zombie's claws get the shared
+        frog grenade (a "Make grenade" asset made — and kept — for the claws
+        that have none), and models not named ``v_<zombie>_knife`` /
+        ``_grenade`` (``v_smoker``, ``alien_claw``) are staged under such
+        names; ``staged_names.json`` maps them back for the manifest."""
+        notes: list[str] = []
+        names: dict[str, str] = {}  # staged name -> asset name
+        taken = {a.name.lower() for a in assets}
+
+        def slug(name: str) -> str:
+            base = re.sub(r"(?i)^v_", "", name)
+            base = re.sub(r"(?i)(^|_)(knife|claws?)(?=_|$)", "", base).strip("_")
+            return re.sub(r"[^A-Za-z0-9]+", "", base) or "zombie"
+
+        def stage_as(asset_name: str, staged_name: str, source: Path) -> None:
+            if staged_name.lower() != asset_name.lower() and staged_name.lower() in taken:
+                staged_name = f"{staged_name}{len(names) + 2}"
+            target = staged / staged_name
+            if source.resolve() == (staged / asset_name).resolve():
+                source.rename(target)
+            else:
+                shutil.copytree(source, target)
+            taken.add(staged_name.lower())
+            names[staged_name] = asset_name
+
+        grenade_of = {a.derived["from"]: a for a in self.assets.values()
+                      if a.derived and a.derived.get("mode") == "grenade"}
+        for asset in assets:
+            if asset.derived and asset.derived.get("mode") == "grenade":
+                continue  # staged with its claws below
+            match = _ZOMBIE_RE.match(asset.name)
+            holds_bomb = re.search(r"(?i)grenade|bomb|nade", asset.name) is not None
+            if match:
+                zombie, knife_name = match.group("zombie"), asset.name
+            else:
+                zombie = slug(asset.name)
+                knife_name = f"v_{zombie}_knife"
+                stage_as(asset.name, knife_name, staged / asset.name)
+            if holds_bomb or (match and match.group("role").lower() == "grenade"):
+                continue
+            if any(_ZOMBIE_RE.match(a.name) and a.name.lower() == f"v_{zombie}_grenade".lower()
+                   for a in self.assets.values()):
+                continue  # its own grenade model is an asset already
+            grenade = grenade_of.get(asset.name)
+            if grenade is None:
+                reporter.log(f"  {asset.name}: no grenade yet — making one (donor frog bomb)")
+                try:
+                    result, grenade = self.derive_asset(asset.name, "grenade", {},
+                                                        reporter=reporter)
+                except ProjectError as exc:
+                    result, grenade = ServiceResult(exit_code=EXIT_FAIL,
+                                                    failures=[str(exc)]), None
+                if grenade is None:
+                    why = result.failures[-1] if result.failures else f"exit {result.exit_code}"
+                    notes.append(f"{asset.name}: no grenade could be made ({why}); "
+                                 "its claws are merged without one")
+                    reporter.log(f"  warn: {notes[-1]}")
+                    continue
+            if (staged / grenade.name).exists():
+                (staged / grenade.name).rename(staged / f"v_{zombie}_grenade")
+                names[f"v_{zombie}_grenade"] = grenade.name
+            else:
+                stage_as(grenade.name, f"v_{zombie}_grenade", self.asset_dir(grenade.name))
+        for staged_name, asset_name in list(names.items()):
+            if staged_name == asset_name:
+                del names[staged_name]
+        (work / "staged_names.json").write_text(json.dumps(names, indent=1), encoding="utf-8")
+        if names:
+            reporter.log(f"  {len(names)} model(s) staged under v_<zombie>_knife/_grenade "
+                         "names (the manifest keeps the asset names)")
+        return notes
+
+    def _rename_manifest(self, work: Path, output: Path, opts: Any,
+                         result: ServiceResult) -> None:
+        """Put back the asset names :meth:`_prepare_zhands` staged under."""
+        from valve_qc_merger.merge_view.merger import write_manifest_data
+        from valve_qc_merger.server.package import _manifest
+        path = work / "staged_names.json"
+        names = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        if not names:
+            return
+        suffix = {"json": ".json", "toml": ".toml"}.get(opts.manifest_format, ".ini")
+        manifest = output / f"models{suffix}"
+        if manifest.is_file():
+            data = {names.get(k, k): v for k, v in _manifest(manifest).items()}
+            write_manifest_data(output, data, opts.manifest_format)
+        if result.manifest:
+            result.manifest = {names.get(k, k): v for k, v in result.manifest.items()}
 
     def _merge_nohands(self, models_dir: Path, output: Path, opts: Any,
                        result: ServiceResult, reporter: Reporter) -> None:

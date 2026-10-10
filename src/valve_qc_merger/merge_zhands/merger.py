@@ -20,6 +20,7 @@ Pipeline per input model (decompiled ``v_<zombie>_<knife|grenade>[_variant]``):
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import hashlib
 import re
@@ -410,6 +411,58 @@ def _unique_names(models: list[ZombieModel]) -> dict[tuple[str, str], str]:
             taken.add(final.lower())
             out[(zm.stem, seq)] = final
     return out
+
+
+VERTEX_LIMIT = 2048  # studiomdl: vertices, and normals, per submodel
+
+
+def hands_size(model: ModelInput, grenade_prefix: str = "frogbomb") -> tuple[int, int]:
+    """(vertices, normals) of the one hands entry ``model`` becomes, counted
+    as studiomdl does (the model is left untouched)."""
+    zm = prepare_model(copy.deepcopy(model), grenade_prefix)
+    triangles = zm.hands.triangles if zm.hands is not None else []
+    return (len({(v.bone, v.position) for t in triangles for v in t.vertices}),
+            len({(v.bone, v.normal, t.material.lower()) for t in triangles
+                 for v in t.vertices}))
+
+
+def zombie_of(name: str) -> str:
+    """The zombie a ``v_<zombie>_<knife|grenade>[_variant]`` model belongs to."""
+    match = _NAME_RE.match(name)
+    return match.group("zombie").lower() if match else name.lower()
+
+
+def planned_bones(models_in: list[ModelInput], grenade_prefix: str = "frogbomb") -> int:
+    """Bones a merge of ``models_in`` would have (nothing written; the
+    models are left untouched)."""
+    models = [prepare_model(copy.deepcopy(m), grenade_prefix) for m in models_in]
+    canonicalize_hands(models, ZhandsReport())
+    for zm in models:
+        zm.model.meshes = {"hands": zm.hands}
+        if zm.grenade is not None:
+            zm.model.meshes["grenade"] = zm.grenade
+    return len(merged_skeleton([zm.model for zm in models]))
+
+
+def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
+                  limit: int = BONE_LIMIT) -> list[list[ModelInput]]:
+    """Parts under the bone limit, a zombie's models (knife, grenade,
+    variants) always together, in input order."""
+    zombies: dict[str, list[ModelInput]] = {}
+    for model in models:
+        zombies.setdefault(zombie_of(model.name), []).append(model)
+    parts: list[list[ModelInput]] = []
+    current: list[ModelInput] = []
+    for group in zombies.values():
+        trial = current + group
+        if current and planned_bones(trial, grenade_prefix) > limit:
+            parts.append(current)
+            current = list(group)
+        else:
+            current = trial
+    if current:
+        parts.append(current)
+    return parts
 
 
 def merge_zhands(

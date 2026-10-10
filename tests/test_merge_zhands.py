@@ -90,3 +90,42 @@ def test_grenade_root_name_clash_with_a_hand_root(tmp_path: Path) -> None:
     parent = {n.name: names.get(n.parent) for n in grenade.nodes}
     assert parent["gren_root"] == "Bone_Lefthand"
     assert parent["Bone_Root"] is None  # beta knife's hand root, untouched
+
+
+def test_split_keeps_a_zombies_models_together(tmp_path: Path) -> None:
+    from valve_qc_merger.merge_view.discovery import load_model
+    from valve_qc_merger.merge_zhands.merger import planned_bones, split_zombies
+    src = tmp_path / "src"
+    for name, grenade in (("v_alpha_knife", False), ("v_alpha_grenade", True),
+                          ("v_beta_knife", False), ("v_beta_grenade", True)):
+        _write_model(src, name, grenade=grenade, hand_root="Bone01")
+    models = [load_model(src / n) for n in ("v_alpha_knife", "v_alpha_grenade",
+                                            "v_beta_knife", "v_beta_grenade")]
+    one = planned_bones(models[:2])
+    assert planned_bones(models) == one  # one rig: the bones are shared
+    parts = split_zombies(models, limit=one - 1)  # nothing fits: a zombie a part
+    assert [[m.name for m in part] for part in parts] == [
+        ["v_alpha_knife", "v_alpha_grenade"], ["v_beta_knife", "v_beta_grenade"]]
+    assert len(split_zombies(models)) == 1
+
+
+def test_project_build_stages_claws_under_zhands_names(tmp_path: Path) -> None:
+    import configparser
+
+    from valve_qc_merger.project import Build, Project
+    from valve_qc_merger.services.base import CollectingReporter
+    src = tmp_path / "src"
+    _write_model(src, "v_smoker", grenade=False, hand_root="Bone01")  # not v_<z>_knife
+    _write_model(src, "v_alpha_knife", grenade=False, hand_root="Bone01")
+    _write_model(src, "v_alpha_grenade", grenade=True, hand_root="Bone01")
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(src, kind="zhands")
+    project.add_build(Build("zh", "merge-zhands"))
+    reporter = CollectingReporter()
+    result = project.run_build("zh", reporter)
+    assert result.outputs, reporter.lines
+    manifest = configparser.ConfigParser()
+    manifest.read(project.build_dir("zh") / "output" / "models.ini")
+    assert "v_smoker" in manifest and "v_smoker_knife" not in manifest
+    assert any("v_smoker: no grenade" in n or "v_smoker_grenade" in n
+               for n in reporter.lines + result.warnings)

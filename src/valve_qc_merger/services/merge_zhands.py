@@ -11,7 +11,15 @@ from valve_qc_merger.merge_view.discovery import (
     load_model,
     sanitize_model_dir,
 )
-from valve_qc_merger.merge_zhands.merger import ZhandsError, merge_zhands
+from valve_qc_merger.merge_view.merger import write_manifest_data
+from valve_qc_merger.merge_zhands.merger import (
+    BONE_LIMIT,
+    VERTEX_LIMIT,
+    ZhandsError,
+    hands_size,
+    merge_zhands,
+    split_zombies,
+)
 from valve_qc_merger.services.base import (
     EXIT_DISCOVERY,
     EXIT_FAIL,
@@ -20,6 +28,8 @@ from valve_qc_merger.services.base import (
     Reporter,
     ServiceResult,
 )
+from valve_qc_merger.services.standalone import Rejects
+from valve_qc_merger.services.standalone import ship as ship_standalone
 
 
 @dataclass
@@ -31,6 +41,8 @@ class MergeZhandsOptions:
     grenade_prefix: str = "frogbomb"
     grenade_texture: str | None = "frogbomb.bmp"
     manifest_format: str = "ini"
+    # a model the merge cannot take ships as a model of its own (standalone/)
+    standalone_rejects: bool = True
 
 
 def run_merge_zhands(opts: MergeZhandsOptions,
@@ -57,41 +69,76 @@ def run_merge_zhands(opts: MergeZhandsOptions,
             result.exit_code = EXIT_DISCOVERY
             return result
         reporter.log(f"  {model_dir.name:<26} OK    sequences={len(models[-1].anims)}")
+    rejects = Rejects(opts.standalone_rejects, {d.name: d for d in model_dirs})
+    kept = []
+    for model in models:
+        verts, normals = hands_size(model, opts.grenade_prefix)
+        if verts > VERTEX_LIMIT or normals > VERTEX_LIMIT:
+            rejects.reject(result, reporter, model.name,
+                           f"model {model.name!r}: its hands are {verts} vertices / {normals} "
+                           f"normals — over studiomdl's {VERTEX_LIMIT} for one submodel",
+                           "TOO-BIG", "hands over 2048 vertices / normals")
+        else:
+            kept.append(model)
+    models = kept
     if not models:
-        reporter.log("error: no models found")
-        result.exit_code = EXIT_DISCOVERY
+        ship_standalone(rejects, opts.out, opts.manifest_format, result, reporter)
+        result.exit_code = EXIT_FAIL if result.failures else EXIT_OK
+        if not rejects.reasons:
+            reporter.log("error: no models found")
+            result.exit_code = EXIT_DISCOVERY
         return result
     reporter.check()
-    try:
-        report = merge_zhands(
-            models, opts.out, opts.name,
-            grenade_prefix=opts.grenade_prefix,
-            grenade_texture=opts.grenade_texture,
-            manifest_format=opts.manifest_format,
-        )
-    except ZhandsError as exc:
-        reporter.log(f"error: {exc}")
-        result.failures.append(str(exc))
-        result.exit_code = EXIT_FAIL
-        return result
-    for warning in report.warnings:
-        reporter.log(f"  [Warning] {warning}")
-    reporter.log(f"  {opts.name}: bones={report.bones} hands={len(report.hands)} "
-                 f"grenade={report.grenade_from} sequences={report.sequences} "
-                 f"({report.sequences_deduped} shared) textures={report.textures}")
-    reporter.log(f"  hands: {', '.join(report.hands)}")
-    for check, passed, detail in report.gate:
-        reporter.log(f"    verify {check:<20} {'PASS' if passed else 'FAIL'}  {detail}")
-        result.gates.append(GateRow(opts.name, check, passed, detail))
-    reporter.progress(len(model_dirs), len(model_dirs), "done")
-    result.outputs.append(opts.out / f"{opts.name}.qc")
-    result.warnings.extend(report.warnings)
-    result.manifest = {k: dict(v) for k, v in report.manifest.items()}
-    result.data["hands"] = list(report.hands)
-    passed_all = all(passed for _c, passed, _d in report.gate)
-    if not passed_all:
-        result.failures.append(f"{opts.name}: verification gate failed")
-    result.exit_code = EXIT_OK if passed_all else EXIT_FAIL
+    parts = split_zombies(models, opts.grenade_prefix)
+    multi = len(parts) > 1
+    if multi:
+        reporter.log(f"  split: {len(parts)} parts (studiomdl keeps {BONE_LIMIT} bones "
+                     "a model; a zombie's models stay together)")
+    result.data["parts"] = len(parts)
+    result.data["hands"] = []
+    aggregate: dict[str, dict[str, object]] = {}
+    passed_all = True
+    for number, part in enumerate(parts, 1):
+        reporter.check()
+        reporter.progress(number - 1, len(parts), f"part {number}")
+        part_name = f"{opts.name}_p{number}" if multi else opts.name
+        part_out = opts.out / f"p{number}" if multi else opts.out
+        try:
+            report = merge_zhands(
+                part, part_out, part_name,
+                grenade_prefix=opts.grenade_prefix,
+                grenade_texture=opts.grenade_texture,
+                manifest_format=opts.manifest_format,
+            )
+        except ZhandsError as exc:
+            reporter.log(f"error: {exc}")
+            result.failures.append(str(exc))
+            result.exit_code = EXIT_FAIL
+            return result
+        for warning in report.warnings:
+            reporter.log(f"  [Warning] {warning}")
+        reporter.log(f"  {part_name}: bones={report.bones} hands={len(report.hands)} "
+                     f"grenade={report.grenade_from} sequences={report.sequences} "
+                     f"({report.sequences_deduped} shared) textures={report.textures}")
+        reporter.log(f"  hands: {', '.join(report.hands)}")
+        for check, passed, detail in report.gate:
+            reporter.log(f"    verify {check:<20} {'PASS' if passed else 'FAIL'}  {detail}")
+            result.gates.append(GateRow(part_name, check, passed, detail))
+        result.outputs.append(part_out / f"{part_name}.qc")
+        result.warnings.extend(report.warnings)
+        for key, value in report.manifest.items():
+            aggregate[key] = ({"model": f"{part_name}.mdl", **dict(value)} if multi
+                              else dict(value))
+        result.data["hands"] += list(report.hands)
+        if not all(passed for _c, passed, _d in report.gate):
+            passed_all = False
+            result.failures.append(f"{part_name}: verification gate failed")
+    reporter.progress(len(parts), len(parts), "done")
+    if multi:
+        write_manifest_data(opts.out, aggregate, opts.manifest_format)
+    result.manifest = aggregate
+    ship_standalone(rejects, opts.out, opts.manifest_format, result, reporter)
+    result.exit_code = EXIT_OK if passed_all and not result.failures else EXIT_FAIL
     return result
 
 

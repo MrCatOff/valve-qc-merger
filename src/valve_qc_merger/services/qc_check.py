@@ -15,7 +15,8 @@ Errors stop the compile (studiomdl fails, or writes a broken model):
   memory corruption — meshes detach from their bones);
 - a material with a space (the SMD triangle tokenizer splits it) or longer
   than 63 bytes;
-- more than 128 bones in the reference meshes.
+- more than 128 bones in the reference meshes;
+- a submodel of more than 2048 vertices or 2048 normals.
 
 Warnings: non-ASCII labels, paths and materials (they compile only while the
 QC and the files keep the same bytes). Duplicate labels and bodygroup names
@@ -33,6 +34,7 @@ SUBMODEL_LIMIT = 32
 BODYPART_LIMIT = 32
 BONE_LIMIT = 128
 MATERIAL_LIMIT = 63
+VERTEX_LIMIT = 2048  # vertices, and normals, per submodel
 
 # $sequence options and how many values follow each (anything else that is
 # not an ACT_ activity or a number is an animation file, as for studiomdl)
@@ -211,10 +213,15 @@ def _case_match(path: Path) -> Path | None:
     return next((p for p in parent.iterdir() if p.name.lower() == lowered), None)
 
 
-def _smd_facts(path: Path) -> tuple[set[bytes], set[bytes]]:
-    """(bone names, materials) of an SMD."""
+def _smd_facts(path: Path) -> tuple[set[bytes], set[bytes], int, int]:
+    """(bone names, materials, vertices, normals) of an SMD — vertices and
+    normals counted as studiomdl does: a vertex is a (bone, position), a
+    normal a (bone, normal, texture)."""
     bones: set[bytes] = set()
     materials: set[bytes] = set()
+    vertices: set[tuple[bytes, ...]] = set()
+    normals: set[tuple[bytes, ...]] = set()
+    material = b""
     section = b""
     line_no = 0
     for raw in path.read_bytes().splitlines():
@@ -232,10 +239,17 @@ def _smd_facts(path: Path) -> tuple[set[bytes], set[bytes]]:
             if 0 <= first < last:
                 bones.add(line[first + 1:last])
         elif section == b"triangles":
-            if line_no % 4 == 0 and line:
-                materials.add(line)
+            if line_no % 4 == 0:
+                material = line.lower()
+                if line:
+                    materials.add(line)
+            else:
+                fields = line.split()
+                if len(fields) >= 7:
+                    vertices.add((fields[0], *fields[1:4]))
+                    normals.add((fields[0], *fields[4:7], material))
             line_no += 1
-    return bones, materials
+    return bones, materials, len(vertices), len(normals)
 
 
 def check_qc(qc_path: Path) -> list[QcProblem]:
@@ -281,9 +295,13 @@ def check_qc(qc_path: Path) -> list[QcProblem]:
     for group, raw in qc.bodies:
         path = file_exists(raw, f"bodygroup {_show(group)!r} mesh")
         if path is not None:
-            found_bones, found_materials = _smd_facts(path)
+            found_bones, found_materials, verts, norms = _smd_facts(path)
             bones |= found_bones
             materials |= found_materials
+            if verts > VERTEX_LIMIT or norms > VERTEX_LIMIT:
+                error(f"bodygroup {_show(group)!r} mesh {_show(raw)!r} has {verts} vertices / "
+                      f"{norms} normals (studiomdl keeps {VERTEX_LIMIT} of each per submodel: "
+                      "split it into two bodygroups)")
     if len(bones) > BONE_LIMIT:
         error(f"{len(bones)} bones in the meshes > {BONE_LIMIT}")
     for material in sorted(materials):

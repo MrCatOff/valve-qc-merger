@@ -120,3 +120,26 @@ python -m valve_qc_merger zhands-grenade --knife-dir decompiled/v_heavy_knife
 
 Studio: right-click a `zhands` asset ▸ **Retarget…** ▸ *Make grenade (zombie
 hands)* (the default mode for zombie hands) → `v_<zombie>_grenade`.
+
+## Parts, oversized hands
+
+Different zombies rarely share a rig, so their bones add up: a merge closes a
+part (`<name>_p1`, `_p2`…, `output/pN/`) before 127 bones, a zombie's models
+(knife, grenade, variants) always in one part, and the manifest names each
+model's part (`model = …`). A model whose hands entry would exceed studiomdl's
+2048 vertices / normals for one submodel ships as it is (`standalone/`).
+
+## In the Studio (zombie claws)
+
+Zombie hands assets need no particular names in a `merge-zhands` build: one
+not named `v_<zombie>_knife` / `_grenade` (`v_smoker`, `alien_claw`) is staged
+under such a name (`v_smoker_knife`) and the manifest keeps the asset's name.
+Claws without a grenade get the shared frog grenade: the build makes one with
+**Make grenade** (the bundled banshee donor) and keeps it as an asset, so the
+next run reuses it; claws whose hands the retarget cannot find (rigs without
+finger bones) are merged without one (a warning says which). Models already
+holding a bomb (`grenade`, `bomb`, `nade` in the name) get none.
+
+On a live server's 19 zombie claws: 13 grenades made, 6 parts + 1 model on
+its own (hands over 2048 vertices), all compiled with stock studiomdl, the
+pose gate passing on every part.

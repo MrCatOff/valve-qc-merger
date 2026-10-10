@@ -78,3 +78,13 @@ def test_compile_stops_before_studiomdl_on_an_error(tmp_path: Path) -> None:
     assert not result.ok and "missing" in result.failures[0]
     assert "    ran" not in reporter.lines
     assert run_compile(CompileOptions(qc=qc, studiomdl=fake, preflight=False), reporter).ok
+
+
+def test_a_submodel_over_2048_vertices(tmp_path: Path) -> None:
+    tris = b"".join(b"m.bmp\n" + b"".join(f"0 {i}.{k} 0 0 0 0 1 0 0\n".encode()
+                                         for k in range(3))
+                    for i in range(700))
+    smd = (b'version 1\nnodes\n  0 "root" -1\nend\nskeleton\ntime 0\n  0 0 0 0 0 0 0\nend\n'
+           b"triangles\n" + tris + b"end\n")
+    qc = _model(tmp_path, b'$body "studio" "ref"\n$sequence "idle" "ref"\n', {"ref.smd": smd})
+    assert any("2100 vertices" in e for e in _messages(qc))
