@@ -88,8 +88,11 @@ def test_grenade_root_name_clash_with_a_hand_root(tmp_path: Path) -> None:
     grenade = parse_smd_file(tmp_path / "out" / "grenade" / "grenade.smd")
     names = {n.index: n.name for n in grenade.nodes}
     parent = {n.name: names.get(n.parent) for n in grenade.nodes}
-    assert parent["gren_root"] == "Bone_Lefthand"
-    assert parent["Bone_Root"] is None  # beta knife's hand root, untouched
+    # the hand bones are pooled into slots: the frog hangs off the left-hand
+    # slot, under the hand root's slot — never the hand root itself
+    hand = parent["gren_root"]
+    assert hand is not None and not hand.startswith("gren_")
+    assert parent[hand] is not None and parent[parent[hand]] is None
 
 
 def test_split_keeps_a_zombies_models_together(tmp_path: Path) -> None:
