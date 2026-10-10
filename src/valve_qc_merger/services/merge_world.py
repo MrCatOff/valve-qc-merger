@@ -87,6 +87,14 @@ def run_merge_world(opts: MergeWorldOptions,
             rejects.reject(result, reporter, model_dir.name, str(exc), "FAIL",
                            f"not merged: {exc}")
             continue
+        verts, normals = _mesh_size(model)
+        if max(verts, normals) > VERTEX_LIMIT:
+            # its bodyparts become ONE submodel here; studiomdl keeps 2048
+            rejects.reject(result, reporter, model_dir.name,
+                           f"model {model.name!r}: its meshes are {verts} vertices / "
+                           f"{normals} normals as one submodel — over studiomdl's "
+                           f"{VERTEX_LIMIT}", "TOO-BIG", "meshes over 2048 vertices / normals")
+            continue
         loaded.append(model)
         skin_textures[model.name] = skin_texture_files(model.qc_text)
         warnings = model.warnings + plan.warnings
@@ -131,7 +139,7 @@ def run_merge_world(opts: MergeWorldOptions,
     result.data["parts"] = len(parts)
     if multi:
         reporter.log(f"  split: {len(parts)} parts "
-                     f"(studiomdl caps one model at 32 submodels)")
+                     "(submodels, textures and sizes a model keeps)")
     aggregate: dict[str, dict[str, object]] = {}
     for number, part_pairs in enumerate(parts, 1):
         reporter.check()
@@ -189,6 +197,17 @@ def run_merge_world(opts: MergeWorldOptions,
                     make_entry=_entry)
     result.exit_code = EXIT_FAIL if failures else EXIT_OK
     return result
+
+
+VERTEX_LIMIT = 2048  # studiomdl: vertices (and normals) a submodel
+
+
+def _mesh_size(model: ModelInput) -> tuple[int, int]:
+    """(vertices, normals) of the one submodel the model's meshes become —
+    every vertex on the one weapon bone, so told by position alone."""
+    triangles = [t for smd in model.meshes.values() for t in smd.triangles]
+    return (len({v.position for t in triangles for v in t.vertices}),
+            len({(v.normal, t.material.lower()) for t in triangles for v in t.vertices}))
 
 
 def _entry(directory: Path, name: str, reason: str) -> dict[str, object]:

@@ -205,6 +205,12 @@ def run_merge_view(opts: MergeViewOptions, reporter: Reporter | None = None) -> 
                 failures.append(message)
                 reporter.log(f"  {model.name:<20} REJECT  {message}")
                 continue
+            if len(model.bone_names) > BONE_LIMIT:
+                # alone over a merged part's bones: nothing to pool it with
+                reject(model.name, f"model {model.name!r}: {len(model.bone_names)} bones "
+                       f"with the hands — over the {BONE_LIMIT} a merged part keeps",
+                       "TOO-MANY-BONES", f"over {BONE_LIMIT} bones with the hands")
+                continue
             if opts.shared_hands and len(parts.weapon_stems) > 1:
                 # A multi-part weapon needs an extra weapon bodygroup, which
                 # multiplies pev_body past the 255 WRITE_BYTE ceiling once
@@ -448,8 +454,8 @@ def _merge_parts(
     multi = len(resolved) > 1
     result.data["parts"] = len(resolved)
     if multi:
-        reporter.log(f"  split: {len(resolved)} parts "
-                     f"(studiomdl caps one model at 32 submodels)")
+        reporter.log(f"  split: {len(resolved)} parts (bones, submodels, "
+                     "textures and sequence data a model keeps)")
     if opts.plan_only:
         result.data["plan"] = _plan_rows(opts, resolved)
         for row in result.data["plan"]:

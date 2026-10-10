@@ -148,7 +148,7 @@ def run_merge_player(opts: MergePlayerOptions,
     result.data["parts"] = len(parts)
     if multi:
         reporter.log(f"  split: {len(parts)} parts "
-                     f"(studiomdl caps one model at 32 submodels)")
+                     "(submodels, textures and sizes a model keeps)")
     aggregate: dict[str, dict[str, object]] = {}
     for number, part_pairs in enumerate(parts, 1):
         reporter.check()
