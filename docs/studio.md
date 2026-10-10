@@ -181,6 +181,29 @@ Hand`), sound paths and the model's own name are kept. Project ▸ **Normalize
 names** (CLI: `project normalize`) does it for assets imported before. All 163
 models of a 436-model server with such names compiled afterwards.
 
+### What an import takes
+
+Importing a folder (or a server's `cstrike/`) sorts every model by what it is:
+
+- **weapons** (`v_`/`p_`/`w_`) and **players** as before; a view model whose
+  hands are the model (claws) or that has none is marked so (see
+  [merge-v](merge-v.md#models-whose-hands-are-the-model-studio-builds));
+- **props & effects** — effects, projectiles, props, NPCs — come in as `prop`
+  assets for a [merge-props](merge-props.md) build (they used to be left out);
+- **packs** — merges of other models — are told by their content, no marker
+  file needed: submodels named `<source>/<mesh>` of two sources or more, or
+  of one source that is not the file itself (`case32/…` in `base_w_01.mdl`).
+  A pack is **unpacked** into its source models (`project/unpack.py`): each
+  gets its submodels, textures, attachments, hitboxes and sequences back,
+  the skeleton cut to the bones it uses, and the ones not already in the
+  project (or in the same import on their own) become assets
+  (`source = <pack>#<model>`). A merge kept one copy of sequences two models
+  shared, so an unpacked model's notes say its sequences were inferred.
+
+On a live server (540 models, 72 of them packs): 595 assets — 131 models
+unpacked from our earlier packs and player packs (the goldsource packs'
+models were all there on their own), 55 props.
+
 ## GUI shell (M2)
 
 Install the extra and start it:

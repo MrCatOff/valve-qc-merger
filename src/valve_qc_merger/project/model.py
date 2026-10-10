@@ -283,7 +283,8 @@ class _QuietProgress(Reporter):
 class ImportOutcome:
     added: list[Asset] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)  # already in the project
-    ignored: list[str] = field(default_factory=list)  # packs (merges of other models)
+    ignored: list[str] = field(default_factory=list)  # packs whose models are all here
+    unpacked: list[str] = field(default_factory=list)  # "<pack>: N model(s)"
     failed: list[str] = field(default_factory=list)  # "<file>: why"
 
 
@@ -518,10 +519,10 @@ class Project:
                       only_known: bool = True) -> ImportOutcome:
         """Import every ``.mdl`` of ``sources`` (files or folders) one by one:
         names already in the project are skipped, a model that fails is
-        reported and the rest go on, and (``only_known``) packs found in a
-        folder — merges of other models — are left out (a file named on its
-        own is always imported); effects, projectiles and props come in as
-        ``prop`` assets."""
+        reported and the rest go on. (``only_known``) A pack found in a folder
+        — a merge of other models — is unpacked into those models and the ones
+        not here yet are imported (a file named on its own is imported as it
+        is); effects, projectiles and props come in as ``prop`` assets."""
         reporter = reporter or Reporter()
         outcome = ImportOutcome()
         models: list[Path] = []
@@ -533,6 +534,7 @@ class Project:
                 if model not in models:
                     models.append(model)
         taken: set[str] = set()
+        packs: list[Path] = []
         for done, model in enumerate(models):
             reporter.check()
             reporter.progress(done, len(models), model.name)
@@ -541,7 +543,7 @@ class Project:
                 continue
             role = model_role(model)
             if only_known and model not in chosen and role == "pack":
-                outcome.ignored.append(model.stem)
+                packs.append(model)  # after the rest: its models may be here on their own
                 continue
             try:
                 added = self.import_mdl(model, category=category,
@@ -552,7 +554,37 @@ class Project:
                 continue
             outcome.added += added
             taken.update(a.name.lower() for a in added)
+        for pack in packs:
+            reporter.check()
+            self._import_pack(pack, outcome, taken, category, reporter)
         return outcome
+
+    def _import_pack(self, pack: Path, outcome: ImportOutcome, taken: set[str],
+                     category: str | None, reporter: Reporter) -> None:
+        """Unpack a merged model into the models it was built from and import
+        those not here yet (on their own, or from an earlier pack)."""
+        from valve_qc_merger.project.unpack import unpack
+        here = {name.lower() for name in self.assets} | taken
+        staging = self.root / ".unpack"
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            made = unpack(pack, staging, skip=here)
+            if not made:
+                outcome.ignored.append(pack.stem)
+                return
+            for model in made:
+                added = self.import_decompiled(model.folder, category=category)
+                for asset in added:
+                    asset.source = f"{pack.resolve()}#{model.name}"
+                    asset.notes = "\n".join(model.notes)
+                outcome.added += added
+                taken.update(a.name.lower() for a in added)
+            outcome.unpacked.append(f"{pack.stem}: {len(made)} model(s)")
+            self.save()
+        except (ProjectError, OSError, ValueError) as exc:
+            outcome.failed.append(f"{pack.name} (unpacking): {exc}")
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def import_mdl(self, source: Path, *, kind: str | None = None,
                    overwrite: bool = False, category: str | None = None,
@@ -1453,13 +1485,20 @@ def _sources_digest(qc: Path, studiomdl: Path) -> str:
 
 
 def _normalize_quietly(folder: Path) -> None:
-    """Portable names for a model folder just imported; one that cannot be
-    renamed (two names colliding on disk) stays as it was — Compile's QC
-    check then says what to change."""
+    """Portable names for a model folder just imported, and what stock
+    studiomdl needs to compile it (a grey placeholder for a missing texture,
+    an invisible anchor for a model without a mesh — merge-props'
+    ``repair_inputs``). A name that cannot be changed (two colliding on
+    disk) stays as it was — Compile's QC check then says what to change."""
     from valve_qc_merger.project.normalize import normalize_model
+    from valve_qc_merger.services.merge_props import repair_inputs
     try:
         normalize_model(folder)
     except (OSError, ValueError):
+        pass
+    try:
+        repair_inputs(folder)
+    except (OSError, ValueError, StopIteration):
         pass
 
 

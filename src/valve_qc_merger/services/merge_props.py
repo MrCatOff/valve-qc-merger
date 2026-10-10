@@ -138,6 +138,10 @@ def repair_inputs(model_dir: Path) -> list[str]:
     text = qc.read_text(encoding="latin-1")
     notes: list[str] = []
     grey = write_bmp8(Bmp8(8, 8, [(128, 128, 128)] * 256, bytearray(64)))
+    # studiomdl reads textures from $cdtexture (decompiles: ./maps_8bit) only
+    cdtexture = re.search(r'(?im)^\s*\$cdtexture\s+"?([^"\s]+)"?', text)
+    texture_dir = model_dir / cdtexture.group(1) if cdtexture else model_dir
+    texture_dir.mkdir(parents=True, exist_ok=True)
     studio = re.findall(r'(?im)^\s*(?:\$body\s+\S+\s+|studio\s+)"?([^"\s]+)"?', text)
     if not studio:
         seq = re.search(r'(?is)\$sequence\s+\S+\s*\{?\s*"([^"]+)"', text)
@@ -167,7 +171,7 @@ def repair_inputs(model_dir: Path) -> list[str]:
                                 f'"{ANCHOR}"', 1) if "$cliptotextures" in text else (
                 f'$body "{ANCHOR}" "{ANCHOR}"\n' + text)
             qc.write_text(text, encoding="latin-1")
-            (model_dir / f"{ANCHOR}.bmp").write_bytes(grey)
+            (texture_dir / f"{ANCHOR}.bmp").write_bytes(grey)
             notes.append(f"no mesh: an invisible anchor keeps {len(bones)} bone(s)")
     from valve_qc_merger.merge_view.merger import _find_texture
     for smd_path in sorted(model_dir.glob("*.smd")):
@@ -188,7 +192,7 @@ def repair_inputs(model_dir: Path) -> list[str]:
         for material in sorted(materials):
             if _find_texture(model_dir, material) is None:
                 name = material if material.lower().endswith(".bmp") else material + ".bmp"
-                (model_dir / name).write_bytes(grey)
+                (texture_dir / name).write_bytes(grey)
                 notes.append(f"texture {material!r} missing: grey placeholder")
     return notes
 

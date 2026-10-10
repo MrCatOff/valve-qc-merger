@@ -52,7 +52,8 @@ class ServerImport:
     models: list[str] = field(default_factory=list)  # assets added
     skipped: list[str] = field(default_factory=list)  # already in the project
     failed: list[str] = field(default_factory=list)  # "<file>: why"
-    ignored: list[str] = field(default_factory=list)  # map props, effects, NPCs
+    ignored: list[str] = field(default_factory=list)  # packs whose models are all here
+    unpacked: list[str] = field(default_factory=list)  # "<pack>: N model(s)"
     game_dir_set: bool = False  # the folder became the project's game folder
     sounds: list[str] = field(default_factory=list)
     sprites: list[str] = field(default_factory=list)
@@ -83,6 +84,7 @@ def import_server_folder(project: Project, root: Path, *, models: bool = True,
         result.models = [a.name for a in outcome.added]
         result.skipped, result.ignored, result.failed = (outcome.skipped, outcome.ignored,
                                                           outcome.failed)
+        result.unpacked = list(outcome.unpacked)
     sound_root = root / "sound"
     if sounds != "none" and sound_root.is_dir():
         if sounds == "all":
