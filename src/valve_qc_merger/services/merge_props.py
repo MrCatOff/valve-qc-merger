@@ -22,6 +22,7 @@ ships as it is (``standalone/``).
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -322,21 +323,46 @@ def run_merge_props(opts: MergePropsOptions,
                                   body_values=opts.body_values,
                                   blank_first=opts.view_model) if pairs else []
     multi = len(parts_list) > 1
-    result.data["parts"] = len(parts_list)
+    queue = list(parts_list)
     aggregate: dict[str, dict[str, object]] = {}
-    for number, part in enumerate(parts_list, 1):
+    number = 0
+    while queue:
         reporter.check()
-        reporter.progress(number - 1, len(parts_list), f"part {number}")
+        part = queue.pop(0)
+        number += 1
+        reporter.progress(number - 1, number + len(queue), f"part {number}")
         part_name = f"{opts.name}_p{number}" if multi else opts.name
         part_out = opts.out / f"p{number}" if multi else opts.out
         try:
-            report = merge_models(part, part_out, part_name, blank_first=opts.view_model,
+            # copies: a part over 64K is merged again, smaller
+            report = merge_models([(model.clone(), parts) for model, parts in part],
+                                  part_out, part_name, blank_first=opts.view_model,
                                   manifest_format=opts.manifest_format,
                                   write_manifest=not multi)
         except MergeError as exc:
             reporter.log(f"error: merge failed ({part_name}): {exc}")
             result.exit_code = EXIT_FAIL
             return result
+        over = {name for name, _seq in report.oversized}
+        if over and len(part) > 1:
+            # the merged skeleton gave a model's sequence more channels than
+            # studiomdl's 64K holds: it goes to a part of its own
+            rest = [pair for pair in part if pair[0].name not in over]
+            alone = [pair for pair in part if pair[0].name in over]
+            if not rest:
+                rest, alone = alone[:1], alone[1:]
+            reporter.log(f"  {part_name}: {', '.join(sorted(over))} over 64K a sequence "
+                         "with the others — merged again, apart")
+            if multi:
+                shutil.rmtree(part_out, ignore_errors=True)
+                queue[:0] = [rest, *([pair] for pair in alone)]
+                number -= 1
+            else:  # the one part becomes several: name them all _pN
+                for path in opts.out.iterdir():
+                    if path.name != "inventory.json":
+                        shutil.rmtree(path) if path.is_dir() else path.unlink()
+                multi, number, queue = True, 0, [rest, *([pair] for pair in alone)]
+            continue
         result.outputs.append(part_out / f"{part_name}.qc")
         result.warnings.extend(report.warnings)
         reporter.log(f"  {part_name}: {len(part)} models, bones={report.bones} "
@@ -347,6 +373,7 @@ def run_merge_props(opts: MergePropsOptions,
         for model, _parts in part:
             aggregate[model.name] = {"model": f"{part_name}.mdl",
                                      **report.manifest[model.name]}
+    result.data["parts"] = number
     if multi:
         write_manifest_data(opts.out, aggregate, opts.manifest_format)
     result.manifest = aggregate

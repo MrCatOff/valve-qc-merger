@@ -65,6 +65,8 @@ class MergeReport:
     atlas: dict[str, str] = field(default_factory=dict)
     manifest: dict[str, dict[str, int | str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # (model, sequence) whose anim stream is over studiomdl's 64K
+    oversized: list[tuple[str, str]] = field(default_factory=list)
 
 
 def merged_skeleton(models: list[ModelInput]) -> dict[str, str | None]:
@@ -154,6 +156,7 @@ def _sequence_size_warnings(models: list[ModelInput], report: MergeReport) -> No
     """
     for (model_name, seq_name), size in sequence_sizes(models).items():
         if size > SEQ_DATA_LIMIT:
+            report.oversized.append((model_name, seq_name))
             report.warnings.append(
                 f"{model_name}: sequence {seq_name!r} anim data is {size} "
                 f"bytes (studiomdl caps one sequence's stream at 64K); "

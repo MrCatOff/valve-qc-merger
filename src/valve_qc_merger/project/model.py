@@ -1125,11 +1125,20 @@ class Project:
                                    and build.options.get("shared_hands"))):
             return {}
         swapped: dict[str, str] = {}
+        unusable: dict[str, str] = {}  # swap asset -> its origin
         for asset in chosen:
             if asset.derived and asset.derived.get("mode") == "hands":
-                swapped.setdefault(self._origin(asset), asset.name)
-        return {a.name: swapped[self._origin(a)] for a in chosen
-                if self._origin(a) in swapped and a.name != swapped[self._origin(a)]}
+                if _mesh_bones(self.asset_dir(asset.name)) > _STUDIO_BONES:
+                    # more bones on our hands than studiomdl takes: the build
+                    # takes the original (it ships with its own hands)
+                    unusable[asset.name] = self._origin(asset)
+                else:
+                    swapped.setdefault(self._origin(asset), asset.name)
+        names = {a.name for a in chosen}
+        out = {a.name: swapped[self._origin(a)] for a in chosen
+               if self._origin(a) in swapped and a.name != swapped[self._origin(a)]}
+        out.update({name: origin for name, origin in unusable.items() if origin in names})
+        return out
 
     def build_dir(self, name: str) -> Path:
         return self.root / "builds" / name
@@ -1142,7 +1151,11 @@ class Project:
         build = self.builds[name]
         assets = self.build_assets(build)
         for dropped, kept in self.superseded_assets(build, self.chosen_assets(build)).items():
-            reporter.log(f"  {dropped}: left out, {kept} is the same weapon on our hands")
+            if self.assets[kept].derived:
+                reporter.log(f"  {dropped}: left out, {kept} is the same weapon on our hands")
+            else:
+                reporter.log(f"  {dropped}: left out, more bones than studiomdl takes — "
+                             f"the build takes {kept} with its own hands")
         if not assets:
             reporter.log(f"error: build {name!r} has no assets")
             return None
@@ -1477,6 +1490,14 @@ class Project:
                 ready += 1
                 continue
             existing = self.hands_asset(asset.name)
+            bones = _mesh_bones(self.asset_dir(existing.name)) if existing is not None else 0
+            if bones > _STUDIO_BONES and existing.derived.get("options", {}) == wanted:
+                notes.append(f"{asset.name}: on our hands it has {bones} bones (studiomdl "
+                             f"keeps {_STUDIO_BONES}); shipped on its own with its own hands")
+                if build.options.get("standalone_rejects", True):
+                    shutil.copytree(source, retargeted / asset.name)
+                reporter.log(f"  warn: {notes[-1]}")
+                continue
             if existing is not None and existing.derived.get("options", {}) == wanted:
                 shutil.copytree(self.asset_dir(existing.name), retargeted / existing.name)
                 reporter.log(f"  retarget {asset.name}: {existing.name} (made before with "
@@ -1490,6 +1511,12 @@ class Project:
              for asset, existing in pending], "hands", wanted, reporter=reporter)
         for (asset, _existing), (result, made) in zip(pending, outcomes, strict=True):
             source = staged / asset.name
+            if made is not None and _mesh_bones(self.asset_dir(made.name)) > _STUDIO_BONES:
+                # our hands' 41 bones on a big rig: more than studiomdl takes
+                result.failures.append(
+                    f"{_mesh_bones(self.asset_dir(made.name))} bones on our hands "
+                    f"(studiomdl keeps {_STUDIO_BONES})")
+                made = None
             if made is not None:
                 shutil.copytree(self.asset_dir(made.name), retargeted / made.name)
                 reporter.log(f"  retarget {asset.name}: saved as {made.name}")
@@ -1825,6 +1852,21 @@ def _import_task(source: str, out: str, *, reporter: Reporter) -> dict[str, Any]
             hands[folder.name] = hands_are_the_model(folder, source) is not None
     return {"folders": [str(f) for f in folders], "failures": list(result.failures),
             "hands": hands}
+
+
+_STUDIO_BONES = 127  # studiomdl refuses a model using 128 ("used 128, max 128")
+
+
+def _mesh_bones(folder: Path) -> int:
+    """Bones of a decompiled model's fullest mesh (its SMDs beside the QC)."""
+    from valve_qc_merger.parsers.smd import parse_smd_file
+    counts = [0]
+    for smd in folder.glob("*.smd"):
+        try:
+            counts.append(len(parse_smd_file(smd).nodes))
+        except (OSError, ValueError):
+            continue
+    return max(counts)
 
 
 # a retarget failing so: nothing to swap — the model goes, as it is, into
