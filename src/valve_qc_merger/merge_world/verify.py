@@ -18,13 +18,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_player.loading import load_player_model
 from valve_qc_merger.merge_player.merger import parse_texturegroups
 from valve_qc_merger.merge_view.skeleton_ops import fk_worlds
 from valve_qc_merger.merge_view.verify import (
     QC_PATH_LIMIT,
     STOCK_VERT_LIMIT,
-    SUBMODEL_LIMIT,
     TEXTURE_LIMIT,
     GateResult,
 )
@@ -128,8 +128,8 @@ def verify_world_part(
     problems: list[str] = []
     groups = parse_bodygroups(qc_text)
     submodels = sum(len(entries) for entries in groups.values())
-    if submodels > SUBMODEL_LIMIT:
-        problems.append(f"{submodels} submodels > {SUBMODEL_LIMIT}")
+    if submodels > limits.submodels():
+        problems.append(f"{submodels} submodels > {limits.submodels()}")
     for path, smd in meshes.items():
         verts = {v.position for t in smd.triangles for v in t.vertices}
         norms = {v.normal for t in smd.triangles for v in t.vertices}

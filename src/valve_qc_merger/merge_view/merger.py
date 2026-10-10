@@ -326,6 +326,7 @@ def _rewrite_sound_events(
     return tuple(_SOUND_EVENT_RE.sub(replace, event) for event in events)
 
 
+QC_PATH_LIMIT = 60  # studiomdl: 64-byte file names, ".smd" included
 SEQ_NAME_LIMIT = 31  # studiomdl strcpy's labels into char[32] unchecked
 
 
@@ -338,19 +339,32 @@ def _sanitize_label(label: str) -> str:
     return "".join(ch if "!" <= ch <= "~" and ch != '"' else "_" for ch in label) or "seq"
 
 
+def _prefixed(tag: str, label: str, room: int) -> str:
+    """``<model>__<label>`` within ``room`` characters: the model name gives
+    way first (down to 4 characters), so the label stays readable (unpacking
+    a pack reads the full ``<model>__`` prefix back where it fits)."""
+    keep = max(4, room - len(label) - 2)
+    return f"{tag[:keep]}__{label}"[:room]
+
+
 def _unique_sequence_names(models: list[ModelInput]) -> dict[tuple[str, str], str]:
+    """A label per (model, sequence), unique over the merge: the label
+    itself, else ``<model>__<label>`` — within studiomdl's 31 characters
+    and short enough that ``<model>/<label>.smd`` fits its 64-byte paths."""
     taken: set[str] = set()
     out: dict[tuple[str, str], str] = {}
     for model in models:
+        room = max(8, min(SEQ_NAME_LIMIT, QC_PATH_LIMIT - len(model.name) - 1))
+        tag = model.name
         for original in model.anims:
             seq_name = _sanitize_label(original)
-            final = seq_name if seq_name not in taken else f"{model.name}__{seq_name}"
-            final = final[:SEQ_NAME_LIMIT]
+            final = seq_name[:room]
+            if final in taken:
+                final = _prefixed(tag, seq_name, room)
             counter = 2
             while final in taken:
                 suffix = f"_{counter}"
-                final = (f"{model.name}__{seq_name}"[:SEQ_NAME_LIMIT - len(suffix)]
-                         + suffix)
+                final = _prefixed(tag, seq_name, room - len(suffix)) + suffix
                 counter += 1
             taken.add(final)
             out[(model.name, original)] = final

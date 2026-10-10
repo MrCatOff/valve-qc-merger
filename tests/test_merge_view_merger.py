@@ -23,6 +23,15 @@ def test_unique_names_keep_the_original_key() -> None:
     assert names[("v_b", "draw")] == "v_b__draw"
 
 
+def test_repeated_labels_of_a_long_model_name_fit_the_paths() -> None:
+    long = "v_bloodhunter_left_d3a3_hands"
+    models = [SimpleNamespace(name="v_a", anims={"shoot_left_empty": 0}),
+              SimpleNamespace(name=long, anims={"shoot_left_empty": 0})]
+    final = _unique_sequence_names(models)[(long, "shoot_left_empty")]  # type: ignore[arg-type]
+    assert final.endswith("__shoot_left_empty")  # the label stays readable
+    assert len(f"{long}/{final}.smd") <= 64 and len(final) <= 31
+
+
 def test_repeated_labels_keep_every_sequence_in_order() -> None:
     from valve_qc_merger.merge_view.discovery import _unique_names
     from valve_qc_merger.retarget.qc_build import QcSequence
