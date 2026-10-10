@@ -123,8 +123,14 @@ hands)* (the default mode for zombie hands) → `v_<zombie>_grenade`.
 
 ## Parts, oversized hands
 
-Different zombies rarely share a rig, so their bones add up: a merge closes a
-part (`<name>_p1`, `_p2`…, `output/pN/`) before 127 bones, a zombie's models
+Different zombies rarely share a rig, and claws rarely have the 4+ fingers
+the hand matcher looks for — so the rigs are **pooled** (merge-v's bone pool):
+only one zombie's hands draw at a time and every sequence is one zombie's, so
+each rig's bones land on shared slots by structure (parent under parent,
+largest rig first), reparents solved exactly per frame; the grenade's `gren_*`
+bones keep their names. A part closes before 127 bones, 30 models (hands
+entries + the grenade's 2 under 32 submodels) or a sequence over 64K (pooling
+reshapes channels; measured with studiomdl's exact replica), a zombie's models
 (knife, grenade, variants) always in one part, and the manifest names each
 model's part (`model = …`). A model whose hands entry would exceed studiomdl's
 2048 vertices / normals for one submodel ships as it is (`standalone/`).
@@ -140,6 +146,7 @@ next run reuses it; claws whose hands the retarget cannot find (rigs without
 finger bones) are merged without one (a warning says which). Models already
 holding a bomb (`grenade`, `bomb`, `nade` in the name) get none.
 
-On a live server's 19 zombie claws: 13 grenades made, 6 parts + 1 model on
-its own (hands over 2048 vertices), all compiled with stock studiomdl, the
-pose gate passing on every part.
+On a live server's 19 zombie claws and 4 zombie bombs (37 models with the 13
+grenades made): 3 parts (were 10 before pooling) + 1 model on its own (hands
+over 2048 vertices), all compiled with stock studiomdl, the pose gate passing
+on every part.

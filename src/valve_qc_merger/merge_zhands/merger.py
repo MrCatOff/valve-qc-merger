@@ -414,6 +414,7 @@ def _unique_names(models: list[ZombieModel]) -> dict[tuple[str, str], str]:
 
 
 VERTEX_LIMIT = 2048  # studiomdl: vertices, and normals, per submodel
+HANDS_LIMIT = 30  # models a part: hands entries + the grenade's 2 <= 32 submodels
 
 
 def hands_size(model: ModelInput, grenade_prefix: str = "frogbomb") -> tuple[int, int]:
@@ -426,28 +427,80 @@ def hands_size(model: ModelInput, grenade_prefix: str = "frogbomb") -> tuple[int
                  for v in t.vertices}))
 
 
+def pool_bones(models: list[ZombieModel], report: ZhandsReport) -> int:
+    """Share bone slots between the zombies' rigs (merge-v's bone pool): only
+    one zombie's hands draw at a time and every sequence is one zombie's, so a
+    rig whose names match no other (claws rarely have the 4+ fingers the hand
+    matcher looks for) still lands on the slots of the rigs before it, by
+    structure — parent under parent, largest rig first. The grenade's
+    ``gren_*`` bones keep their names (one grenade for all). Reparents are
+    exact per frame. Returns the slots used."""
+    from valve_qc_merger.merge_view.bonepool import apply_pool, plan_pool
+    tables: dict[str, dict[str, str | None]] = {}
+    shared: set[str] = set()
+    for zm in models:
+        fullest = max(zm.model.meshes.values(), key=lambda m: len(m.nodes))
+        name_of = {n.index: n.name for n in fullest.nodes}
+        tables[zm.stem] = {n.name: name_of.get(n.parent) for n in fullest.nodes}
+        shared |= {n.name for smd in zm.model.meshes.values() for n in smd.nodes
+                   if n.name.startswith(GRENADE_PREFIX)}
+    plan = plan_pool(tables, shared, max_slots=BONE_LIMIT - len(shared))
+    for zm in models:
+        assignment = plan.assignments[zm.stem]
+        apply_pool(zm.model, assignment, plan.slot_parent, root="")
+        zm.renames = {orig: assignment.get(cur, cur) for orig, cur in zm.renames.items()}
+        for bone, slot in assignment.items():
+            if bone not in zm.renames.values():
+                zm.renames.setdefault(bone, slot)
+        zm.hands = zm.model.meshes["hands"]
+        zm.grenade = zm.model.meshes.get("grenade")
+    report.warnings.append(f"bones pooled: {plan.size} shared slots for "
+                           f"{len(models)} model(s)")
+    return plan.size
+
+
 def zombie_of(name: str) -> str:
     """The zombie a ``v_<zombie>_<knife|grenade>[_variant]`` model belongs to."""
     match = _NAME_RE.match(name)
     return match.group("zombie").lower() if match else name.lower()
 
 
-def planned_bones(models_in: list[ModelInput], grenade_prefix: str = "frogbomb") -> int:
-    """Bones a merge of ``models_in`` would have (nothing written; the
-    models are left untouched)."""
+def planned(models_in: list[ModelInput], grenade_prefix: str = "frogbomb"
+            ) -> tuple[int, int]:
+    """(bones, largest sequence's anim bytes) a merge of ``models_in`` would
+    have, with the bones pooled (nothing written; the models are left
+    untouched). Pooling reshapes channels, so the bytes are measured with
+    studiomdl's exact quantise+RLE replica."""
     models = [prepare_model(copy.deepcopy(m), grenade_prefix) for m in models_in]
     canonicalize_hands(models, ZhandsReport())
     for zm in models:
         zm.model.meshes = {"hands": zm.hands}
         if zm.grenade is not None:
             zm.model.meshes["grenade"] = zm.grenade
-    return len(merged_skeleton([zm.model for zm in models]))
+    pool_bones(models, ZhandsReport())
+    inputs = [zm.model for zm in models]
+    skeleton = merged_skeleton(inputs)
+    if len(skeleton) > BONE_LIMIT:
+        return len(skeleton), 0
+    unify_skeletons(inputs, skeleton)
+    return len(skeleton), max(sequence_sizes(inputs).values(), default=0)
+
+
+def planned_bones(models_in: list[ModelInput], grenade_prefix: str = "frogbomb") -> int:
+    """Bones a merge of ``models_in`` would have (see :func:`planned`)."""
+    return planned(models_in, grenade_prefix)[0]
+
+
+def _fits(plan: tuple[int, int], limit: int) -> bool:
+    bones, worst = plan
+    return bones <= limit and worst <= SEQ_DATA_LIMIT
 
 
 def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
                   limit: int = BONE_LIMIT) -> list[list[ModelInput]]:
-    """Parts under the bone limit, a zombie's models (knife, grenade,
-    variants) always together, in input order."""
+    """Parts under the bone limit (with the bones pooled) and the submodel
+    limit, a zombie's models (knife, grenade, variants) always together, in
+    input order."""
     zombies: dict[str, list[ModelInput]] = {}
     for model in models:
         zombies.setdefault(zombie_of(model.name), []).append(model)
@@ -455,7 +508,9 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
     current: list[ModelInput] = []
     for group in zombies.values():
         trial = current + group
-        if current and planned_bones(trial, grenade_prefix) > limit:
+        # one hands entry per model at most, plus the grenade group's two
+        if current and (len(trial) > HANDS_LIMIT
+                        or not _fits(planned(trial, grenade_prefix), limit)):
             parts.append(current)
             current = list(group)
         else:
@@ -493,6 +548,7 @@ def merge_zhands(
         zm.model.meshes = {"hands": zm.hands}
         if zm.grenade is not None:
             zm.model.meshes["grenade"] = zm.grenade
+    pool_bones(models, report)
     inputs = [zm.model for zm in models]
     skeleton = merged_skeleton(inputs)
     report.bones = len(skeleton)
