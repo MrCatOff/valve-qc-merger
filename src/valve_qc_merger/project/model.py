@@ -464,7 +464,7 @@ class Project:
                           overwrite: bool = False,
                           category: str | None = None,
                           prepared: dict[str, bool] | None = None,
-                          batch: bool = False) -> list[Asset]:
+                          batch: bool = False, move: bool = False) -> list[Asset]:
         """Copy one decompiled model folder (with a .qc) or every such
         subfolder of ``source`` into ``assets/<kind>/<name>``. ``category``
         files them there; without it a model joins the category of its
@@ -472,7 +472,8 @@ class Project:
 
         ``prepared``: the folders were normalised already (a worker did it);
         maps a model name to whether its hands are the model. ``batch``: leave
-        the kind refinement and the save to :meth:`finish_import`."""
+        the kind refinement and the save to :meth:`finish_import`. ``move``:
+        the folders are ours (staging) — moved in, not copied."""
         if category:
             category = self.add_category(category, save=False)
         source = Path(source)
@@ -491,11 +492,16 @@ class Project:
                 self.remove_asset(name)
             asset_kind = kind or _folder_kind(directory)
             relative = Path("assets") / asset_kind / name
-            shutil.copytree(directory, self.root / relative)
+            source_path = str(directory.resolve())
+            if move:
+                (self.root / relative).parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(directory), str(self.root / relative))
+            else:
+                shutil.copytree(directory, self.root / relative)
             if prepared is None:
                 _normalize_quietly(self.root / relative)
             asset = Asset(name=name, kind=asset_kind, path=relative.as_posix(),
-                          source=str(directory.resolve()),
+                          source=source_path,
                           category=category or self._sibling_category(name))
             if asset_kind == "v":
                 if prepared is not None:
@@ -595,7 +601,8 @@ class Project:
                     for folder in result["folders"]:
                         added = self.import_decompiled(Path(folder), kind=kind,
                                                        category=category,
-                                                       prepared=result["hands"], batch=True)
+                                                       prepared=result["hands"], batch=True,
+                                                       move=True)
                         for asset in added:
                             if asset.name == model.stem:
                                 asset.source = str(model.resolve())
@@ -605,38 +612,53 @@ class Project:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
             self.finish_import()
-        taken = {a.name.lower() for a in outcome.added}
-        for pack in packs:
-            reporter.check()
-            self._import_pack(pack, outcome, taken, category, reporter)
+        if packs:
+            self._import_packs(packs, outcome, category, reporter)
         return outcome
 
-    def _import_pack(self, pack: Path, outcome: ImportOutcome, taken: set[str],
-                     category: str | None, reporter: Reporter) -> None:
-        """Unpack a merged model into the models it was built from and import
-        those not here yet (on their own, or from an earlier pack)."""
-        from valve_qc_merger.project.unpack import unpack
-        here = {name.lower() for name in self.assets} | taken
+    def _import_packs(self, packs: list[Path], outcome: ImportOutcome,
+                      category: str | None, reporter: Reporter) -> None:
+        """Unpack merged models into the models they were built from — in
+        worker processes, each pack also normalised and judged there — and
+        import those not here yet (on their own, or from an earlier pack)."""
+        from valve_qc_merger import workers as pool
+        here = sorted(name.lower() for name in self.assets)
         staging = self.root / ".unpack"
         shutil.rmtree(staging, ignore_errors=True)
         try:
-            made = unpack(pack, staging, skip=here)
-            if not made:
-                outcome.ignored.append(pack.stem)
-                return
-            for model in made:
-                added = self.import_decompiled(model.folder, category=category)
-                for asset in added:
-                    asset.source = f"{pack.resolve()}#{model.name}"
-                    asset.notes = "\n".join(model.notes)
-                outcome.added += added
-                taken.update(a.name.lower() for a in added)
-            outcome.unpacked.append(f"{pack.stem}: {len(made)} model(s)")
-            self.save()
-        except (ProjectError, OSError, ValueError) as exc:
-            outcome.failed.append(f"{pack.name} (unpacking): {exc}")
+            results = pool.processes(
+                [(_unpack_task, (str(pack), str(staging / str(i)), here))
+                 for i, pack in enumerate(packs)],
+                workers=pool.count(self.settings.workers), reporter=_QuietProgress(reporter),
+                label="unpack")
+            for pack, result in zip(packs, results, strict=True):
+                reporter.check()
+                if isinstance(result, BaseException):
+                    outcome.failed.append(f"{pack.name} (unpacking): {result}")
+                    continue
+                count = 0
+                for model in result:
+                    if model["name"] in self.assets:  # from an earlier pack
+                        continue
+                    try:
+                        added = self.import_decompiled(
+                            Path(model["folder"]), category=category, batch=True,
+                            prepared={model["name"]: model["hands"]}, move=True)
+                    except (ProjectError, OSError, ValueError) as exc:
+                        outcome.failed.append(f"{pack.name} ({model['name']}): {exc}")
+                        continue
+                    for asset in added:
+                        asset.source = f"{pack.resolve()}#{model['name']}"
+                        asset.notes = "\n".join(model["notes"])
+                    outcome.added += added
+                    count += len(added)
+                if count:
+                    outcome.unpacked.append(f"{pack.stem}: {count} model(s)")
+                else:
+                    outcome.ignored.append(pack.stem)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+            self.finish_import()
 
     def import_mdl(self, source: Path, *, kind: str | None = None,
                    overwrite: bool = False, category: str | None = None,
@@ -1720,6 +1742,22 @@ def _compile_task(qc: str, studiomdl: str, *, reporter: Reporter) -> ServiceResu
     """One QC through studiomdl (sources normalised already)."""
     return run_compile(CompileOptions(qc=Path(qc), studiomdl=Path(studiomdl),
                                       normalize=False), reporter)
+
+
+def _unpack_task(pack: str, out: str, skip: list[str], *,
+                 reporter: Reporter) -> list[dict[str, Any]]:
+    """In a worker: unpack one merged model into ``out`` (but the models in
+    ``skip``), give each portable names and judge its hands."""
+    from valve_qc_merger.project.handless import hands_are_the_model
+    from valve_qc_merger.project.unpack import unpack
+    made = []
+    for model in unpack(Path(pack), Path(out), skip=set(skip)):
+        _normalize_quietly(model.folder)
+        hands = (classify(model.name) == "v"
+                 and hands_are_the_model(model.folder, pack) is not None)
+        made.append({"name": model.name, "folder": str(model.folder),
+                     "notes": list(model.notes), "hands": hands})
+    return made
 
 
 def _import_task(source: str, out: str, *, reporter: Reporter) -> dict[str, Any]:

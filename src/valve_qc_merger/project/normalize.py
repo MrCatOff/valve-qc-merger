@@ -108,6 +108,23 @@ class NormalizeReport:
             self.renamed[f"{kind}: {old}"] = new
 
 
+# folder -> (exact names, lower-case name -> name): one listing per folder
+# while a model is normalised (a big model names thousands of SMDs: listing
+# the folder for each was quadratic); renames drop the folder's entry
+_LISTINGS: dict[Path, tuple[set[str], dict[str, str]]] = {}
+
+
+def _listing(folder: Path) -> tuple[set[str], dict[str, str]]:
+    cached = _LISTINGS.get(folder)
+    if cached is None:
+        names = [p.name for p in folder.iterdir()] if folder.is_dir() else []
+        lowered: dict[str, str] = {}
+        for name in names:
+            lowered.setdefault(name.lower(), name)
+        cached = _LISTINGS[folder] = (set(names), lowered)
+    return cached
+
+
 def _find_file(folder: Path, relative: str) -> Path | None:
     """``folder/relative`` on disk, matching each part ignoring case."""
     current = folder
@@ -119,18 +136,18 @@ def _find_file(folder: Path, relative: str) -> Path | None:
             return None
         # the name as the disk spells it (a case-insensitive disk also
         # "finds" other spellings)
-        entries = list(current.iterdir())
-        match = next((p for p in entries if p.name == part), None) or next(
-            (p for p in entries if p.name.lower() == part.lower()), None)
-        if match is None:
+        exact, lowered = _listing(current)
+        name = part if part in exact else lowered.get(part.lower())
+        if name is None:
             return None
-        current = match
+        current = current / name
     return current if current.is_file() else None
 
 
 def normalize_model(folder: Path) -> NormalizeReport:
     """Rename what the QC of ``folder`` names (see the module) in place."""
     folder = Path(folder)
+    _LISTINGS.clear()
     qcs = sorted(folder.glob("*.qc"))
     report = NormalizeReport()
     if not qcs:
@@ -355,6 +372,9 @@ def _rename(old: Path, new: Path) -> None:
     temporary = old.with_name(old.name + ".__renaming")
     old.rename(temporary)
     temporary.rename(new)
+    _LISTINGS.pop(old.parent, None)
+    _LISTINGS.pop(new.parent, None)
+    _LISTINGS.pop(old, None)  # a renamed folder
 
 
 __all__ = ["NormalizeReport", "normalize_model", "portable"]

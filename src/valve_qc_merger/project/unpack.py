@@ -161,6 +161,7 @@ def unpack(pack: Path, out: Path, *, skip: set[str] | None = None) -> list[Unpac
                 if (m := re.match(r'^\$hbox\s+-?\d+\s+"([^"]+)"', line))]
 
     made: list[Unpacked] = []
+    anims: dict[Path, Smd] = {}
     for source in sources:
         if source.lower() in skip:
             continue
@@ -226,7 +227,10 @@ def unpack(pack: Path, out: Path, *, skip: set[str] | None = None) -> list[Unpac
             for line in body:
                 match = re.match(r'^(\s*)"\./anims/([^"]+)"\s*$', line)
                 if match:
-                    anim = parse_smd_file(decompiled / "anims" / f"{match.group(2)}.smd")
+                    anim_path = decompiled / "anims" / f"{match.group(2)}.smd"
+                    if anim_path not in anims:  # parsed once per pack, not per source
+                        anims[anim_path] = parse_smd_file(anim_path)
+                    anim = anims[anim_path]
                     file_name = f"{name}" if len(new_body) == 0 else f"{name}_{len(new_body)}"
                     write_smd_file(_prune(anim, keep), target / "anims" / f"{file_name}.smd")
                     new_body.append(f'{match.group(1)}"./anims/{file_name}"')

@@ -531,15 +531,17 @@ The heavy steps run on several cores (`workers.py`; Project ▸ Settings ▸
   conversions and a merge-zhands build's grenades — each model's service in a
   worker process;
 - **Import** — every `.mdl` decompiled, given portable names and judged (hands
-  are the model?) in a worker; the project takes the folders one by one and
-  is saved once at the end;
+  are the model?) in a worker, and every pack unpacked (each animation parsed
+  once a pack), normalised and judged in one; the project moves the finished
+  folders in one by one and is saved once at the end;
 - **Compile** — several studiomdl at once;
 - **Normalize names** — one asset per worker.
 
 Workers only compute and write into their own folders; `project.toml` is
 changed by the one process that owns it. Each task's log lines come out
 together when it ends; Cancel stops what has not started and ends the running
-workers. On 8 cores: 14 retargets 32 s → 10 s.
+workers. On 8 cores: 14 retargets 32 s → 10 s; a 540-model server (72 packs)
+imported in 61 s instead of ~10 minutes, byte for byte the same assets.
 
 ## Incremental compile
 
