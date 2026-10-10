@@ -137,7 +137,9 @@ class JobRunner(QObject):
         self._process_cancel = context.Event()
         self._process = context.Process(
             target=_child, args=(task, kwargs, self._channel, self._process_cancel),
-            daemon=True, name=f"vqm-{task}")
+            # not a daemon: it starts worker processes of its own (workers.py);
+            # Cancel / closing the window terminate it
+            daemon=False, name=f"vqm-{task}")
         self.process_job = True
         self.started.emit(title)
         self._process.start()
@@ -202,6 +204,13 @@ class JobRunner(QObject):
             self._process_cancel.set()
             # a service checks between units; one stuck in a long unit is stopped
             QTimer.singleShot(15_000, self._terminate_if_stuck)
+
+    def terminate(self) -> None:
+        """End a job process now (the window closes: a non-daemon process
+        would keep the app alive until it finished)."""
+        if self._process is not None and self._process.is_alive():
+            self._process.terminate()
+            self._process.join(timeout=5)
 
     def _terminate_if_stuck(self) -> None:
         if self._process is not None and self._process.is_alive():

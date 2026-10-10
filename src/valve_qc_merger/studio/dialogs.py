@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLineEdit,
+    QSpinBox,
     QToolButton,
     QWidget,
 )
@@ -153,6 +154,14 @@ class SettingsDialog(QDialog):
         self.game_edit.setPlaceholderText("e.g. …/Half-Life/cstrike")
         self.deploy_box = QCheckBox("Deploy to the game after every successful compile")
         self.deploy_box.setChecked(settings.deploy_after_compile)
+        from valve_qc_merger.workers import default_workers
+        self.workers_spin = QSpinBox()
+        self.workers_spin.setRange(0, 64)
+        self.workers_spin.setSpecialValueText(f"Auto ({default_workers()})")
+        self.workers_spin.setValue(settings.workers)
+        self.workers_spin.setToolTip(
+            "Processes that retarget, decompile, normalise and compile models at once. "
+            "Auto: this computer's cores minus one.")
         layout = kit.dialog_layout(self)
         layout.addWidget(kit.header("Project settings", "The tools this project uses and "
                                     "where its models go in the game."))
@@ -162,6 +171,7 @@ class SettingsDialog(QDialog):
                                             lambda: self._pick(self.studiomdl_edit)))
         tools.addRow("Model viewer", _path_row(self.hlam_edit,
                                                lambda: self._pick(self.hlam_edit)))
+        tools.addRow("Workers", self.workers_spin)
         layout.addLayout(tools)
         layout.addWidget(kit.hint("studiomdl compiles builds (Compile, Run and compile); "
                                   "the model viewer opens compiled models."))
@@ -196,6 +206,7 @@ class SettingsDialog(QDialog):
         settings.hlam = self.hlam_edit.text().strip() or None
         settings.game_dir = self.game_edit.text().strip() or None
         settings.deploy_after_compile = self.deploy_box.isChecked()
+        settings.workers = self.workers_spin.value()
 
 
 __all__ = ["NewProjectDialog", "SettingsDialog"]

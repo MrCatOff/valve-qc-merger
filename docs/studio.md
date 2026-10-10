@@ -522,6 +522,25 @@ hands only after a run), folded weapons, and every rejection with its reason
 records `plan.json`. On the 56-pistol corpus the plan matched the real run
 for every model (part and `pev_body`).
 
+## Workers
+
+The heavy steps run on several cores (`workers.py`; Project ▸ Settings ▸
+**Workers**, Auto = cores minus one):
+
+- **Retarget** — the Retarget dialog over many assets, a merge-v build's
+  conversions and a merge-zhands build's grenades — each model's service in a
+  worker process;
+- **Import** — every `.mdl` decompiled, given portable names and judged (hands
+  are the model?) in a worker; the project takes the folders one by one and
+  is saved once at the end;
+- **Compile** — several studiomdl at once;
+- **Normalize names** — one asset per worker.
+
+Workers only compute and write into their own folders; `project.toml` is
+changed by the one process that owns it. Each task's log lines come out
+together when it ends; Cancel stops what has not started and ends the running
+workers. On 8 cores: 14 retargets 32 s → 10 s.
+
 ## Incremental compile
 
 Compile skips a model whose sources — every `.qc`/`.qci`/`.smd`/`.bmp` of

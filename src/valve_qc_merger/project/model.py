@@ -171,6 +171,8 @@ class Settings:
     # sound (lower case) -> the sound to play instead (Find similar sounds):
     # applied to the sound events of every model a build stages
     sound_aliases: dict[str, str] = field(default_factory=dict)
+    # worker processes for retarget / import / compile: 0 = cores minus one
+    workers: int = 0
 
 
 # where Deploy puts a build's models, under the game folder
@@ -409,6 +411,7 @@ class Project:
                                str(p)) for p in settings.get("unprecache", [])],
             unprecache_replace=str(settings.get("unprecache_replace", "")),
             count_stock=bool(settings.get("count_stock", True)),
+            workers=int(settings.get("workers", 0)),
             sound_precache={str(k): str(v) for k, v in
                             dict(settings.get("sound_precache", {})).items()},
             sound_aliases={str(k): str(v) for k, v in
@@ -440,6 +443,7 @@ class Project:
                          "unprecache": self.settings.unprecache,
                          "unprecache_replace": self.settings.unprecache_replace,
                          "count_stock": self.settings.count_stock,
+                         "workers": self.settings.workers,
                          "sound_precache": dict(sorted(
                              self.settings.sound_precache.items())),
                          "sound_aliases": dict(sorted(
@@ -458,11 +462,17 @@ class Project:
 
     def import_decompiled(self, source: Path, *, kind: str | None = None,
                           overwrite: bool = False,
-                          category: str | None = None) -> list[Asset]:
+                          category: str | None = None,
+                          prepared: dict[str, bool] | None = None,
+                          batch: bool = False) -> list[Asset]:
         """Copy one decompiled model folder (with a .qc) or every such
         subfolder of ``source`` into ``assets/<kind>/<name>``. ``category``
         files them there; without it a model joins the category of its
-        weapon's other models (``w_deagle`` follows ``v_deagle``)."""
+        weapon's other models (``w_deagle`` follows ``v_deagle``).
+
+        ``prepared``: the folders were normalised already (a worker did it);
+        maps a model name to whether its hands are the model. ``batch``: leave
+        the kind refinement and the save to :meth:`finish_import`."""
         if category:
             category = self.add_category(category, save=False)
         source = Path(source)
@@ -482,36 +492,48 @@ class Project:
             asset_kind = kind or _folder_kind(directory)
             relative = Path("assets") / asset_kind / name
             shutil.copytree(directory, self.root / relative)
-            _normalize_quietly(self.root / relative)
+            if prepared is None:
+                _normalize_quietly(self.root / relative)
             asset = Asset(name=name, kind=asset_kind, path=relative.as_posix(),
                           source=str(directory.resolve()),
                           category=category or self._sibling_category(name))
             if asset_kind == "v":
-                from valve_qc_merger.project.handless import hands_are_the_model
-                asset.hands_model = hands_are_the_model(self.root / relative,
-                                                        str(directory)) is not None
+                if prepared is not None:
+                    asset.hands_model = prepared.get(name, False)
+                else:
+                    from valve_qc_merger.project.handless import hands_are_the_model
+                    asset.hands_model = hands_are_the_model(self.root / relative,
+                                                            str(directory)) is not None
             self.assets[name] = asset
             added.append(asset)
-        if kind is None:
+        if not batch:
+            self.finish_import(refine=kind is None)
+        return added
+
+    def finish_import(self, *, refine: bool = True) -> None:
+        """After imports: CSO zombie hands found among the view models
+        (:func:`refine_kinds`), folders moved to their kind, the project saved."""
+        if refine:
             refine_kinds(list(self.assets.values()), self.root)
             for asset in list(self.assets.values()):
                 self._move_to_kind_folder(asset)
         self.save()
-        return added
 
     def normalize_assets(self, names: list[str] | None = None) -> dict[str, int]:
         """Give the assets' sequences, bodygroups, SMD files and textures
         portable ``[A-Za-z0-9_]`` names (:mod:`.normalize`; imports do it
         already). Returns ``{asset: names changed}`` for the changed ones."""
-        from valve_qc_merger.project.normalize import normalize_model
+        from valve_qc_merger import workers as pool
+        chosen = names if names is not None else sorted(self.assets)
+        counts = pool.processes([(_normalize_task, (str(self.asset_dir(n)),)) for n in chosen],
+                                workers=pool.count(self.settings.workers),
+                                reporter=Reporter(), label="normalize")
         changed: dict[str, int] = {}
-        for name in names if names is not None else sorted(self.assets):
-            try:
-                report = normalize_model(self.asset_dir(name))
-            except (OSError, ValueError) as exc:
-                raise ProjectError(f"{name}: {exc}") from exc
-            if report.renamed:
-                changed[name] = len(report.renamed)
+        for name, count in zip(chosen, counts, strict=True):
+            if isinstance(count, BaseException):
+                raise ProjectError(f"{name}: {count}")
+            if count:
+                changed[name] = count
         return changed
 
     def import_models(self, sources: list[Path], *, category: str | None = None,
@@ -533,33 +555,57 @@ class Project:
             for model in find_models(Path(source)):
                 if model not in models:
                     models.append(model)
+        from valve_qc_merger import workers as pool
+        from valve_qc_merger.project.handless import is_claw_path
         taken: set[str] = set()
         packs: list[Path] = []
-        for done, model in enumerate(models):
-            reporter.check()
-            reporter.progress(done, len(models), model.name)
+        todo: list[tuple[Path, str | None]] = []  # (model, kind)
+        for model in models:
             if model.stem in self.assets or model.stem.lower() in taken:
                 outcome.skipped.append(model.stem)
                 continue
+            taken.add(model.stem.lower())
             role = model_role(model)
             if only_known and model not in chosen and role == "pack":
                 packs.append(model)  # after the rest: its models may be here on their own
                 continue
-            from valve_qc_merger.project.handless import is_claw_path
             # zombie claws (.../claws/, v_smoker, alien_claw) are Zombie hands
             # — merged with a shared grenade by merge-zhands — not props
             claws = (role in ("weapon", "other") and is_claw_path(model)
                      and not re.match(r"(?i)[pw]_", model.stem))
-            try:
-                added = self.import_mdl(model, category=category,
-                                        kind="zhands" if claws else
-                                        "prop" if role == "other" else None,
-                                        reporter=_QuietProgress(reporter))
-            except (ProjectError, OSError, ValueError) as exc:
-                outcome.failed.append(f"{model.name}: {exc}")
-                continue
-            outcome.added += added
-            taken.update(a.name.lower() for a in added)
+            todo.append((model, "zhands" if claws else "prop" if role == "other" else None))
+        # decompile, normalise and judge every model in worker processes; the
+        # project itself is changed here, one model after the other
+        staging = self.root / ".import"
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            results = pool.processes(
+                [(_import_task, (str(model), str(staging / str(i))))
+                 for i, (model, _kind) in enumerate(todo)],
+                workers=pool.count(self.settings.workers), reporter=_QuietProgress(reporter),
+                label="decompile")
+            for (model, kind), result in zip(todo, results, strict=True):
+                reporter.check()
+                if isinstance(result, BaseException) or not result.get("folders"):
+                    why = (str(result) if isinstance(result, BaseException)
+                           else "; ".join(result.get("failures", [])) or "nothing decompiled")
+                    outcome.failed.append(f"{model.name}: {why}")
+                    continue
+                try:
+                    for folder in result["folders"]:
+                        added = self.import_decompiled(Path(folder), kind=kind,
+                                                       category=category,
+                                                       prepared=result["hands"], batch=True)
+                        for asset in added:
+                            if asset.name == model.stem:
+                                asset.source = str(model.resolve())
+                        outcome.added += added
+                except (ProjectError, OSError, ValueError) as exc:
+                    outcome.failed.append(f"{model.name}: {exc}")
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+            self.finish_import()
+        taken = {a.name.lower() for a in outcome.added}
         for pack in packs:
             reporter.check()
             self._import_pack(pack, outcome, taken, category, reporter)
@@ -744,61 +790,102 @@ class Project:
         """Run ``mode`` (a :data:`DERIVE_MODES` key) over asset ``source`` and
         store the result as a new asset (default name ``<source><suffix>``).
         Re-deriving an existing derived asset replaces it (undo-able)."""
+        return self.derive_many([(source, name)], mode, options, reporter=reporter,
+                                workers=1, strict=True)[0]
+
+    def derive_many(self, jobs: list[tuple[str, str | None]], mode: str,
+                    options: dict[str, Any] | None = None, *,
+                    reporter: Reporter | None = None, workers: int | None = None,
+                    strict: bool = False) -> list[tuple[ServiceResult, Asset | None]]:
+        """:meth:`derive_asset` for every ``(source, name)`` of ``jobs``, the
+        services running in worker processes (``workers``: the project's
+        setting by default); the assets are stored here, one by one. Returns
+        ``(result, asset or None)`` per job, in order; a job that cannot start
+        (bad name, unknown source) is a failed result — or (``strict``) raises
+        ProjectError before any runs."""
+        from valve_qc_merger import workers as pool
         reporter = reporter or Reporter()
-        if source not in self.assets:
-            raise ProjectError(f"no asset {source!r}")
         spec = DERIVE_MODES.get(mode)
         if spec is None:
             raise ProjectError(f"unknown derive mode {mode!r}")
-        name = (name or spec.default_name(source)).strip()
-        if not name or "/" in name or "\\" in name or name in {".", ".."}:
-            raise ProjectError(f"invalid asset name {name!r}")
-        if name == source:
-            raise ProjectError("a derived asset needs a name of its own")
-        existing = self.assets.get(name)
-        if existing is not None and existing.derived is None:
-            raise ProjectError(f"asset {name!r} already exists (imported, not derived)")
         stored = {k: v for k, v in (options or {}).items() if k not in _DERIVE_FIXED}
         options_from_dict(spec.options, {**stored, spec.input_field: ".", "out": "."})
-
-        staging = self.root / ".derive" / name
-        shutil.rmtree(staging, ignore_errors=True)
-        try:
+        prepared: list[tuple[str, str, Path, dict[str, Any]]] = []
+        refused: dict[int, str] = {}  # job index -> why it cannot start
+        for index, (source, wanted) in enumerate(jobs):
+            name = (wanted or spec.default_name(source)).strip()
+            existing = self.assets.get(name)
+            why = (f"no asset {source!r}" if source not in self.assets
+                   else f"invalid asset name {name!r}"
+                   if not name or "/" in name or "\\" in name or name in {".", ".."}
+                   else "a derived asset needs a name of its own" if name == source
+                   else f"asset {name!r} already exists (imported, not derived)"
+                   if existing is not None and existing.derived is None else None)
+            if why is not None:
+                if strict:
+                    raise ProjectError(why)
+                refused[index] = why
+                continue
+            staging = self.root / ".derive" / name
+            shutil.rmtree(staging, ignore_errors=True)
             # services sanitise their input in place: work on a copy, named
             # like the source (retarget keys grip_tuning.json by folder name)
             staged = staging / "input" / source
             shutil.copytree(self.asset_dir(source), staged)
-            opts = options_from_dict(spec.options, {
-                **stored, spec.input_field: str(staged),
-                "out": str(staging / "output" / name),
-            })
-            reporter.log(f"{spec.title}: {source} -> {name}")
-            result = spec.run(opts, reporter)
-            produced = staging / "output" / name  # named like the asset ($modelname)
-            if not result.ok or not any(produced.glob("*.qc")):
-                if result.ok:
-                    result.exit_code = EXIT_FAIL
-                return result, None
-            kind = self.assets[source].kind
-            relative = Path("assets") / kind / name
-            if existing is not None:
-                self.snapshot_asset(name)
-                shutil.rmtree(self.root / existing.path, ignore_errors=True)
-            target = self.root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(produced), str(target))
-            asset = Asset(name=name, kind=kind, path=relative.as_posix(),
-                          notes=existing.notes if existing is not None else "",
-                          derived={"from": source, "mode": mode, "options": stored,
-                                   "at": round(time.time(), 3)},
-                          category=self.assets[source].category)
-            self.assets[name] = asset
-            self.save()
-            return result, asset
+            prepared.append((source, name, staging, {
+                **stored, spec.input_field: str(staged), "out": str(staging / "output" / name),
+            }))
+        try:
+            tasks = [(_derive_task, (mode, opts)) for _s, _n, _st, opts in prepared]
+            for source, name, _staging, _opts in prepared:
+                reporter.log(f"{spec.title}: {source} -> {name}")
+            results = pool.processes(tasks, workers=pool.count(
+                workers if workers is not None else self.settings.workers),
+                reporter=reporter, label=spec.title.lower())
+            ran = iter(zip(prepared, results, strict=True))
+            out: list[tuple[ServiceResult, Asset | None]] = []
+            for index in range(len(jobs)):
+                if index in refused:
+                    out.append((ServiceResult(exit_code=EXIT_DISCOVERY,
+                                              failures=[refused[index]]), None))
+                    continue
+                (source, name, staging, _opts), result = next(ran)
+                if isinstance(result, BaseException):
+                    result = ServiceResult(exit_code=EXIT_FAIL, failures=[str(result)])
+                out.append((result, self._store_derived(source, name, mode, stored,
+                                                        staging, result)))
+            return out
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            for _source, _name, staging, _opts in prepared:
+                shutil.rmtree(staging, ignore_errors=True)
             if (self.root / ".derive").is_dir() and not any((self.root / ".derive").iterdir()):
                 (self.root / ".derive").rmdir()
+
+    def _store_derived(self, source: str, name: str, mode: str, stored: dict[str, Any],
+                       staging: Path, result: ServiceResult) -> Asset | None:
+        """Make the derived asset from a finished service run (or None)."""
+        produced = staging / "output" / name  # named like the asset ($modelname)
+        if not result.ok or not any(produced.glob("*.qc")):
+            if result.ok:
+                result.exit_code = EXIT_FAIL
+            return None
+        existing = self.assets.get(name)
+        kind = self.assets[source].kind
+        relative = Path("assets") / kind / name
+        if existing is not None:
+            self.snapshot_asset(name)
+            shutil.rmtree(self.root / existing.path, ignore_errors=True)
+        target = self.root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(produced), str(target))
+        asset = Asset(name=name, kind=kind, path=relative.as_posix(),
+                      notes=existing.notes if existing is not None else "",
+                      derived={"from": source, "mode": mode, "options": stored,
+                               "at": round(time.time(), 3)},
+                      category=self.assets[source].category)
+        self.assets[name] = asset
+        self.save()
+        return asset
 
     def rederive_asset(self, name: str, options: dict[str, Any] | None = None,
                        reporter: Reporter | None = None) -> tuple[ServiceResult, Asset | None]:
@@ -1163,6 +1250,14 @@ class Project:
 
         grenade_of = {a.derived["from"]: a for a in self.assets.values()
                       if a.derived and a.derived.get("mode") == "grenade"}
+        to_make: list[tuple[Asset, str]] = []
+
+        def stage_grenade(grenade: Asset, zombie: str) -> None:
+            if (staged / grenade.name).exists():
+                (staged / grenade.name).rename(staged / f"v_{zombie}_grenade")
+                names[f"v_{zombie}_grenade"] = grenade.name
+            else:
+                stage_as(grenade.name, f"v_{zombie}_grenade", self.asset_dir(grenade.name))
         for asset in assets:
             if asset.derived and asset.derived.get("mode") == "grenade":
                 continue  # staged with its claws below
@@ -1182,23 +1277,20 @@ class Project:
             grenade = grenade_of.get(asset.name)
             if grenade is None:
                 reporter.log(f"  {asset.name}: no grenade yet — making one (donor frog bomb)")
-                try:
-                    result, grenade = self.derive_asset(asset.name, "grenade", {},
-                                                        reporter=reporter)
-                except ProjectError as exc:
-                    result, grenade = ServiceResult(exit_code=EXIT_FAIL,
-                                                    failures=[str(exc)]), None
-                if grenade is None:
-                    why = result.failures[-1] if result.failures else f"exit {result.exit_code}"
-                    notes.append(f"{asset.name}: no grenade could be made ({why}); "
-                                 "its claws are merged without one")
-                    reporter.log(f"  warn: {notes[-1]}")
-                    continue
-            if (staged / grenade.name).exists():
-                (staged / grenade.name).rename(staged / f"v_{zombie}_grenade")
-                names[f"v_{zombie}_grenade"] = grenade.name
-            else:
-                stage_as(grenade.name, f"v_{zombie}_grenade", self.asset_dir(grenade.name))
+                to_make.append((asset, zombie))
+                continue
+            stage_grenade(grenade, zombie)
+        # the grenades are made in worker processes (Settings ▸ workers)
+        outcomes = self.derive_many([(asset.name, None) for asset, _z in to_make], "grenade",
+                                    {}, reporter=reporter)
+        for (asset, zombie), (result, grenade) in zip(to_make, outcomes, strict=True):
+            if grenade is None:
+                why = result.failures[-1] if result.failures else f"exit {result.exit_code}"
+                notes.append(f"{asset.name}: no grenade could be made ({why}); "
+                             "its claws are merged without one")
+                reporter.log(f"  warn: {notes[-1]}")
+                continue
+            stage_grenade(grenade, zombie)
         for staged_name, asset_name in list(names.items()):
             if staged_name == asset_name:
                 del names[staged_name]
@@ -1303,6 +1395,7 @@ class Project:
         notes: list[str] = []
         ready = converted = reused = 0
 
+        pending: list[tuple[Asset, Asset | None]] = []  # (asset, its swap asset to remake)
         for done, asset in enumerate(assets):
             reporter.check()
             reporter.progress(done, len(assets), f"retarget {asset.name}")
@@ -1320,12 +1413,13 @@ class Project:
                              "these settings) reused")
                 reused += 1
                 continue
-            try:
-                result, made = self.derive_asset(
-                    asset.name, "hands", wanted,
-                    name=existing.name if existing is not None else None, reporter=reporter)
-            except ProjectError as exc:  # e.g. <name>_hands is an imported asset
-                result, made = ServiceResult(exit_code=EXIT_FAIL, failures=[str(exc)]), None
+            pending.append((asset, existing))
+        # the conversions themselves run in worker processes (Settings ▸ workers)
+        outcomes = self.derive_many(
+            [(asset.name, existing.name if existing is not None else None)
+             for asset, existing in pending], "hands", wanted, reporter=reporter)
+        for (asset, _existing), (result, made) in zip(pending, outcomes, strict=True):
+            source = staged / asset.name
             if made is not None:
                 shutil.copytree(self.asset_dir(made.name), retargeted / made.name)
                 reporter.log(f"  retarget {asset.name}: saved as {made.name}")
@@ -1539,10 +1633,11 @@ class Project:
         studiomdl = Path(self.settings.studiomdl)
         total = ServiceResult()
         reused = 0
+        from valve_qc_merger import workers as pool
         try:
-            for done, relative in enumerate(record["outputs"]):
+            todo: list[tuple[str, Path, str | None]] = []  # (relative, qc, digest)
+            for relative in record["outputs"]:
                 reporter.check()
-                reporter.progress(done, len(record["outputs"]), relative)
                 qc = self.root / relative
                 digest = None
                 if qc.is_file():
@@ -1556,7 +1651,15 @@ class Project:
                         reused += 1
                         continue
                 cache.pop(relative, None)
-                one = run_compile(CompileOptions(qc=qc, studiomdl=studiomdl), reporter)
+                todo.append((relative, qc, digest))
+            # several studiomdl at once (each is a process; threads wait on them)
+            results = pool.threads(
+                [(_compile_task, (str(qc), str(studiomdl))) for _r, qc, _d in todo],
+                workers=pool.count(self.settings.workers), reporter=reporter,
+                label="compile")
+            for (relative, _qc, digest), one in zip(todo, results, strict=True):
+                if isinstance(one, BaseException):
+                    one = ServiceResult(exit_code=EXIT_FAIL, failures=[f"{relative}: {one}"])
                 total.outputs.extend(one.outputs)
                 total.failures.extend(one.failures)
                 if one.ok and digest is not None:
@@ -1605,6 +1708,41 @@ def _sources_digest(qc: Path, studiomdl: Path) -> str:
                 digest.update(chunk)
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _normalize_task(folder: str, *, reporter: Reporter) -> int:
+    """Portable names for one asset folder; the number of names changed."""
+    from valve_qc_merger.project.normalize import normalize_model
+    return len(normalize_model(Path(folder)).renamed)
+
+
+def _compile_task(qc: str, studiomdl: str, *, reporter: Reporter) -> ServiceResult:
+    """One QC through studiomdl (sources normalised already)."""
+    return run_compile(CompileOptions(qc=Path(qc), studiomdl=Path(studiomdl),
+                                      normalize=False), reporter)
+
+
+def _import_task(source: str, out: str, *, reporter: Reporter) -> dict[str, Any]:
+    """In a worker: decompile one .mdl into ``out``, give it portable names
+    and judge its hands. Returns the folders made, failures and
+    ``{name: hands are the model}``."""
+    from valve_qc_merger.project.handless import hands_are_the_model
+    result = run_decompile(DecompileOptions(source=Path(source), out=Path(out)), reporter)
+    folders = sorted(d for d in Path(out).iterdir()
+                     if d.is_dir() and any(d.glob("*.qc"))) if Path(out).is_dir() else []
+    hands: dict[str, bool] = {}
+    for folder in folders:
+        _normalize_quietly(folder)
+        if classify(folder.name) == "v":
+            hands[folder.name] = hands_are_the_model(folder, source) is not None
+    return {"folders": [str(f) for f in folders], "failures": list(result.failures),
+            "hands": hands}
+
+
+def _derive_task(mode: str, options: dict[str, Any], *, reporter: Reporter) -> ServiceResult:
+    """A derive service run, in a worker process (:meth:`Project.derive_many`)."""
+    spec = DERIVE_MODES[mode]
+    return spec.run(options_from_dict(spec.options, options), reporter)
 
 
 def _normalize_quietly(folder: Path) -> None:

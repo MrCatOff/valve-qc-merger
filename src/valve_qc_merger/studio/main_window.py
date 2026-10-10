@@ -1797,6 +1797,7 @@ class MainWindow(QMainWindow):
                 return
             self.jobs.cancel()
             self.jobs.wait(30_000)
+            self.jobs.terminate()
         self.settings.setValue("window/geometry", self.saveGeometry())
         self.settings.setValue("window/state", self.saveState())
         self.viewport.viewport.release_gl()

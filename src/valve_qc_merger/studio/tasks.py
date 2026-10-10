@@ -60,23 +60,16 @@ def derive(root: str, jobs: list[tuple[str, str | None]], mode: str,
     project = Project.open(Path(root))
     made: list[str] = []
     failed: list[str] = []
-    for done, (source, name) in enumerate(jobs):
-        reporter.check()
-        reporter.progress(done, len(jobs), source)
-        try:
-            result, asset = project.derive_asset(source, mode, options, name=name,
-                                                 reporter=reporter)
-        except ProjectError as exc:
-            reporter.log(f"  {source}: {exc}")
-            failed.append(source)
-            continue
+    # every job's service in a worker process (Settings ▸ workers)
+    outcomes = project.derive_many(list(jobs), mode, options, reporter=reporter)
+    for (source, _name), (result, asset) in zip(jobs, outcomes, strict=True):
         if asset is None:
-            reporter.log(f"  {source}: FAILED (exit {result.exit_code})")
+            why = result.failures[-1] if result.failures else f"exit {result.exit_code}"
+            reporter.log(f"  {source}: FAILED ({why})")
             failed.append(source)
         else:
             reporter.log(f"  + {asset.name}")
             made.append(asset.name)
-    reporter.progress(len(jobs), len(jobs), "done")
     if failed:
         reporter.log(f"retarget: {len(failed)} of {len(jobs)} failed: {', '.join(failed)}")
     return {"made": made, "failed": failed}
