@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build a GoldSrc model decompiler natively on macOS (arm64/x86_64).
 #
-# This is the counterpart to build_studiomdl.sh: studiomdl compiles a QC + SMDs
+# This is the counterpart to build_studiomdl.py: studiomdl compiles a QC + SMDs
 # into a .mdl; this decompiles a .mdl back into a QC, reference SMDs, animation
 # SMDs and BMP textures. The source is Toodles2You/halflife-tools ("DecompMDL"),
 # a clean C rewrite that already targets Linux, so it needs almost no porting:

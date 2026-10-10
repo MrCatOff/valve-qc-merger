@@ -4,6 +4,8 @@ name: build-exe
 # dispatch and on version tags. Artifacts:
 #   valve-qc-merger-<os>  the CLI (one file)
 #   valve-qc-studio-<os>  the GUI (a folder, zipped; macOS: the .app)
+#   studiomdl-<os>        HLSDK studiomdl with 1024 submodels, $texrendermode,
+#                         64-bit fixes and a 16 MB output check
 
 on:
   workflow_dispatch:
@@ -82,4 +84,41 @@ jobs:
         with:
           name: valve-qc-studio-${{ runner.os }}
           path: valve-qc-studio-*
+          if-no-files-found: error
+
+  studiomdl:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: mingw-w64 (Windows build)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: Build
+        run: |
+          python tools/build_studiomdl.py --out out/native
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            python tools/build_studiomdl.py --target windows --out out/windows
+          fi
+      - name: Smoke test (compile a model)
+        run: |
+          pip install -e .
+          out/native/studiomdl | grep "MAXSTUDIOMODELS 1024"
+          valve-qc-merger decompile tests/examples/mdl/mini.mdl --out smoke
+          cd smoke/mini && ../../out/native/studiomdl mini.qc && test -s mini.mdl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: studiomdl-${{ runner.os }}
+          path: out/native/studiomdl
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Linux'
+        with:
+          name: studiomdl-Windows
+          path: out/windows/studiomdl.exe
           if-no-files-found: error

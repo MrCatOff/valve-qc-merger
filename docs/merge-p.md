@@ -34,7 +34,7 @@ out/
 ```
 
 Compile each part from inside its directory (`studiomdl p_<name>_pN.qc`; on
-macOS convert QC backslashes first — `tools/build_studiomdl.sh` builds a
+macOS convert QC backslashes first — `tools/build_studiomdl.py` builds a
 native compiler with the `$texrendermode` extension).
 
 ## How the skeleton is reduced

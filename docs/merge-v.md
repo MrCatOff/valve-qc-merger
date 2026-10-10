@@ -61,7 +61,7 @@ are only hands (zombie claws) are still rejected — they are not weapons.
 
 Compile each part from inside its directory (`studiomdl v_<name>_pN.qc`). QC
 studio paths use forward slashes, so the native macOS compiler (see
-`tools/build_studiomdl.sh` for one with the `$texrendermode` extension)
+`tools/build_studiomdl.py` for one with the `$texrendermode` extension and 1024 submodels)
 resolves them directly.
 
 ## How a weapon is selected at runtime
