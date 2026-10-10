@@ -168,6 +168,19 @@ external decompiler.
   attachments, hitboxes and bones intact, animation within studiomdl's
   quantisation.
 
+### Portable names
+
+Every imported model (an `.mdl` or a decompiled folder) gets portable names
+(`project/normalize.py`): sequence labels (≤ 31), bodygroup names, the SMD
+files the QC reads (and their folders) and every texture — the BMP files, the
+SMD materials, `$texrendermode` and `$texturegroup` — become `[A-Za-z0-9_]`,
+each run of other characters one `_` (`"äëÿ KakTycà"` → `_KakTyc_`,
+`Star - Glow.bmp` → `Star_Glow.bmp`), unique ignoring case, and the files are
+renamed to match: the same on Windows, macOS and Linux. Bone names (`Bip01 R
+Hand`), sound paths and the model's own name are kept. Project ▸ **Normalize
+names** (CLI: `project normalize`) does it for assets imported before. All 163
+models of a 436-model server with such names compiled afterwards.
+
 ## GUI shell (M2)
 
 Install the extra and start it:

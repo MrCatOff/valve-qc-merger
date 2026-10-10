@@ -141,6 +141,16 @@ def import_server(root: str, folder: str, options: dict[str, Any], *,
     return summary
 
 
+def normalize(root: str, *, reporter: Reporter) -> dict[str, int]:
+    """Portable names for every asset (Project ▸ Normalize names)."""
+    project = Project.open(Path(root))
+    changed = project.normalize_assets()
+    for name, count in sorted(changed.items()):
+        reporter.log(f"  {name}: {count} name(s) made portable")
+    reporter.log(f"  {len(changed)} of {len(project.assets)} asset(s) changed")
+    return changed
+
+
 def ping(root: str, seconds: float = 0.0, *, reporter: Reporter) -> str:
     """Prove a job process starts and talks back (the build's selftest);
     ``seconds`` keeps it busy (checking for Cancel) that long."""
@@ -157,6 +167,7 @@ def ping(root: str, seconds: float = 0.0, *, reporter: Reporter) -> str:
 TASKS: dict[str, Callable[..., Any]] = {
     "ping": ping, "build": build, "plan": plan, "compile": compile_build, "deploy": deploy,
     "derive": derive, "import_models": import_models, "import_server": import_server,
+    "normalize": normalize,
 }
 
 

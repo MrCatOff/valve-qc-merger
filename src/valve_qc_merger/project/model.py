@@ -428,6 +428,7 @@ class Project:
             asset_kind = kind or classify(name)
             relative = Path("assets") / asset_kind / name
             shutil.copytree(directory, self.root / relative)
+            _normalize_quietly(self.root / relative)
             asset = Asset(name=name, kind=asset_kind, path=relative.as_posix(),
                           source=str(directory.resolve()),
                           category=category or self._sibling_category(name))
@@ -439,6 +440,21 @@ class Project:
                 self._move_to_kind_folder(asset)
         self.save()
         return added
+
+    def normalize_assets(self, names: list[str] | None = None) -> dict[str, int]:
+        """Give the assets' sequences, bodygroups, SMD files and textures
+        portable ``[A-Za-z0-9_]`` names (:mod:`.normalize`; imports do it
+        already). Returns ``{asset: names changed}`` for the changed ones."""
+        from valve_qc_merger.project.normalize import normalize_model
+        changed: dict[str, int] = {}
+        for name in names if names is not None else sorted(self.assets):
+            try:
+                report = normalize_model(self.asset_dir(name))
+            except (OSError, ValueError) as exc:
+                raise ProjectError(f"{name}: {exc}") from exc
+            if report.renamed:
+                changed[name] = len(report.renamed)
+        return changed
 
     def import_models(self, sources: list[Path], *, category: str | None = None,
                       reporter: Reporter | None = None,
@@ -1310,6 +1326,17 @@ def _sources_digest(qc: Path, studiomdl: Path) -> str:
                 digest.update(chunk)
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _normalize_quietly(folder: Path) -> None:
+    """Portable names for a model folder just imported; one that cannot be
+    renamed (two names colliding on disk) stays as it was — Compile's QC
+    check then says what to change."""
+    from valve_qc_merger.project.normalize import normalize_model
+    try:
+        normalize_model(folder)
+    except (OSError, ValueError):
+        pass
 
 
 def _asset_dict(asset: Asset) -> dict[str, Any]:

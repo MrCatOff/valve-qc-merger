@@ -2,6 +2,7 @@
 run, compile, deploy and package its builds from a script, CI or a server.
 
     valve-qc-merger project info    PROJECT
+    valve-qc-merger project normalize PROJECT
     valve-qc-merger project build   PROJECT [BUILD ...] [--compile] [--deploy]
     valve-qc-merger project compile PROJECT [BUILD ...] [--deploy]
     valve-qc-merger project deploy  PROJECT [BUILD ...]
@@ -77,6 +78,9 @@ class ProjectCommand(Command):
             return sub
 
         action("info", "list the project's assets and builds with their state", builds=False)
+        action("normalize", "portable [A-Za-z0-9_] names for the assets' sequences, "
+                            "bodygroups, SMD files and textures (imports do it already)",
+               builds=False)
         build = action("build", "run builds (merge), optionally compile and deploy them")
         build.add_argument("--compile", action="store_true", help="compile after the run")
         build.add_argument("--deploy", action="store_true",
@@ -186,6 +190,12 @@ class ProjectCommand(Command):
         project = _open(args)
         import_models(str(project.root), [str(s) for s in args.sources], args.category,
                       not args.decompiled, reporter=Reporter())
+        return EXIT_OK
+
+    def _normalize(self, args: argparse.Namespace) -> int:
+        from valve_qc_merger.studio.tasks import normalize
+        project = _open(args)
+        normalize(str(project.root), reporter=Reporter())
         return EXIT_OK
 
     def _import_server(self, args: argparse.Namespace) -> int:

@@ -281,6 +281,10 @@ class MainWindow(QMainWindow):
                                                            self.import_sound_folder)
         self.act_similar_sounds = project_menu.addAction("Find similar sounds…",
                                                          self.find_similar_sounds)
+        self.act_normalize = project_menu.addAction("Normalize names", self.normalize_names)
+        self.act_normalize.setToolTip(
+            "Sequences, bodygroups, SMD files and textures of every asset as "
+            "[A-Za-z0-9_] — the same on Windows, macOS and Linux (imports do it already)")
         project_menu.addSeparator()
         self.act_previews = project_menu.addAction("Weapon previews…", self.make_previews)
         self.act_server = project_menu.addAction("Server tools…", self.show_server,
@@ -502,6 +506,13 @@ class MainWindow(QMainWindow):
             self.explorer.select("sound", names[0])
             self.toast.show_message("success", f"{len(names)} sound(s) imported",
                                     "named by their path after sound/")
+
+    def normalize_names(self) -> None:
+        """Project ▸ Normalize names: portable names for the assets imported
+        before imports did it."""
+        if self.project is None or self.jobs.busy:
+            return
+        self._start_task("Normalize names", "normalize")
 
     def find_similar_sounds(self) -> None:
         """Project ▸ Find similar sounds: share one file between sounds that
@@ -816,7 +827,7 @@ class MainWindow(QMainWindow):
                        self.act_new_category, self.act_new_build, self.act_server,
                        self.act_previews,
                        self.act_import_sounds, self.act_import_sound_dir,
-                       self.act_similar_sounds,
+                       self.act_similar_sounds, self.act_normalize,
                        self.act_export_package, self.act_import_sprites,
                        self.act_new_sprite, self.act_new_hud, self.act_import_server):
             action.setEnabled(has and idle)
