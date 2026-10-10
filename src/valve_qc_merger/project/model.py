@@ -546,18 +546,15 @@ class Project:
                 packs.append(model)  # after the rest: its models may be here on their own
                 continue
             from valve_qc_merger.project.handless import is_claw_path
-            # zombie claws without a v_ name (alien_claw, headcrab_t_knife in
-            # .../claws/) are view models whose hands are the model, not props
-            claws = role == "other" and is_claw_path(model)
+            # zombie claws (.../claws/, v_smoker, alien_claw) are Zombie hands
+            # — merged with a shared grenade by merge-zhands — not props
+            claws = (role in ("weapon", "other") and is_claw_path(model)
+                     and not re.match(r"(?i)[pw]_", model.stem))
             try:
                 added = self.import_mdl(model, category=category,
-                                        kind="v" if claws else
+                                        kind="zhands" if claws else
                                         "prop" if role == "other" else None,
                                         reporter=_QuietProgress(reporter))
-                for asset in added if claws else []:
-                    asset.hands_model = True
-                if claws:
-                    self.save()
             except (ProjectError, OSError, ValueError) as exc:
                 outcome.failed.append(f"{model.name}: {exc}")
                 continue

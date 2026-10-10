@@ -135,8 +135,9 @@ Zombie claws, a gauntlet, or a view model with no hands at all (a floating
 gun) have nothing a hand swap can apply to. Their asset carries **Hands are
 the model** (Inspector ▸ Overview; set on import when it is clear: no hands
 found and nothing named hand / arm, under 5 % of the geometry off the hands,
-or `claw` in the name — Project ▸ Normalize names marks older assets). A
-merge-v build:
+or `claw` in the name — Project ▸ Normalize names marks older assets;
+models imported from a `…/claws/` folder become **Zombie hands** instead, for
+[merge-zhands](merge-zhands.md) with the shared grenade). A merge-v build:
 
 - never retargets them;
 - merges them as they are with [merge-props](merge-props.md) into a part of

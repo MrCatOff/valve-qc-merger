@@ -11,8 +11,9 @@ without loading animations):
   model without hands;
 - under 5 % of the vertices off the hands and the arms holding them: the
   hands are the model (claws);
-- ``claw`` in the model's name or its source's path (``zhh/claws/``; a
-  model there without a ``v_`` name is imported as a view model too).
+- ``claw`` in the model's name or its source's path. (An import from a
+  ``…/claws/`` folder makes the models Zombie hands instead — merge-zhands,
+  with the shared grenade.)
 
 Claws with a "weapon" of their own (a tongue, a blade on the arm) look like
 any knife here; the Inspector's *Hands are the model* box sets them.
