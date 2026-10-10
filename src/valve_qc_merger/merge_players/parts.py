@@ -1,13 +1,16 @@
 """Split one merge group into compile-safe parts.
 
 Each output part is one ``.mdl``: a skin bodygroup of body submodels sharing the
-donor rig and animations. The binding limits are the per-bodypart submodel cap
-(``--submodel-limit``, default 32 for stock studiomdl; raise it for a patched
-compiler) and the texture budget. Bones are always the donor's (~55 < 127).
+donor rig and animations. The binding limits are the compiler's submodels
+(``--submodel-limit``; by default the run's ``limits.submodels()``: 32 for
+stock studiomdl, 1024 for ours), the texture budget (count) and ~14 MB of
+texture data (a .mdl stays under 16 MB). Bones are always the donor's (~55 <
+127).
 """
 
 from __future__ import annotations
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_players.discovery import PlayerModel
 
 DEFAULT_SUBMODEL_LIMIT = 32  # stock studiomdl MAXSTUDIOMODELS per bodypart
@@ -18,10 +21,20 @@ def _materials(model: PlayerModel) -> set[str]:
     return {t.material.lower() for smd in model.body_meshes for t in smd.triangles}
 
 
+def _texture_sizes(model: PlayerModel) -> dict[str, int]:
+    from valve_qc_merger.merge_view.merger import _find_texture
+    out: dict[str, int] = {}
+    for material in _materials(model):
+        found = _find_texture(model.directory, material)
+        if found is not None:
+            out[material] = limits.texture_bytes(found)
+    return out
+
+
 def split_parts(
     models: list[PlayerModel],
     *,
-    submodel_limit: int = DEFAULT_SUBMODEL_LIMIT,
+    submodel_limit: int | None = None,
     texture_budget: int = TEXTURE_BUDGET,
     max_skins: int | None = None,
     reserve_submodels: int = 0,
@@ -32,9 +45,12 @@ def split_parts(
     part slot, ``1 (blank) + skins that own a part there``. ``reserve_submodels``
     (1 with ``--include-base``) counts the single-part donor skin in body0.
     """
+    if submodel_limit is None:
+        submodel_limit = limits.submodels()
     parts: list[list[PlayerModel]] = []
     current: list[PlayerModel] = []
     textures: set[str] = set()
+    sizes: dict[str, int] = {}  # material (lower) -> bytes in the .mdl
     for model in models:
         reserve = reserve_submodels if not parts else 0
         cand = [*current, model]
@@ -44,8 +60,11 @@ def split_parts(
             for k in range(1, slots)
         )
         mats = _materials(model)
+        sizes.update(_texture_sizes(model))
         over_sub = bool(current) and submodels > submodel_limit
-        over_tex = bool(current) and len(textures | mats) > texture_budget
+        over_tex = bool(current) and (
+            len(textures | mats) > texture_budget
+            or sum(sizes.get(m, 0) for m in textures | mats) > limits.PART_TEXTURE_BYTES)
         over_skins = bool(current) and max_skins is not None and len(cand) > max_skins
         if current and (over_sub or over_tex or over_skins):
             parts.append(current)

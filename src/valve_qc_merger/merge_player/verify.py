@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_player.analyze import is_shared
 from valve_qc_merger.merge_player.merger import parse_texturegroups
 from valve_qc_merger.merge_view.discovery import load_model
@@ -30,7 +31,6 @@ from valve_qc_merger.merge_view.skeleton_ops import fk_worlds
 from valve_qc_merger.merge_view.verify import (
     QC_PATH_LIMIT,
     STOCK_VERT_LIMIT,
-    SUBMODEL_LIMIT,
     TEXTURE_LIMIT,
     GateResult,
 )
@@ -247,8 +247,8 @@ def verify_player_part(
         budget_problems.append(f"{len(reference_table)} bones > {BONE_LIMIT}")
     groups = parse_bodygroups(qc_text)
     submodels = sum(len(entries) for entries in groups.values())
-    if submodels > SUBMODEL_LIMIT:
-        budget_problems.append(f"{submodels} submodels > {SUBMODEL_LIMIT}")
+    if submodels > limits.submodels():
+        budget_problems.append(f"{submodels} submodels > {limits.submodels()}")
     for path, smd in meshes.items():
         verts = {(v.position, v.bone) for t in smd.triangles for v in t.vertices}
         norms = {(v.normal, v.bone, t.material.lower())  # per texture, as studiomdl counts

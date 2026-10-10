@@ -142,8 +142,9 @@ def test_compile_skips_unchanged_models_also_across_a_run(project: Project,
                                                           tmp_path: Path) -> None:
     count = tmp_path / "count"
     fake = tmp_path / "studiomdl"
-    fake.write_text(f"#!/bin/sh\necho x >> {count}\nprintf 'IDST' > v_zhands.mdl\n"
-                    "printf 'T' > v_zhandsT.mdl\n")
+    # run without a QC (the limits check) it does nothing
+    fake.write_text(f"#!/bin/sh\n[ -n \"$1\" ] || exit 1\necho x >> {count}\n"
+                    "printf 'IDST' > v_zhands.mdl\nprintf 'T' > v_zhandsT.mdl\n")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     project.settings.studiomdl = str(fake)
 

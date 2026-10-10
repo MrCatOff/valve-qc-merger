@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.skeleton_ops import fk_worlds
@@ -222,8 +223,8 @@ def verify_part(
         problems.append(f"{len(reference_table)} bones > {BONE_LIMIT}")
     groups = parse_bodygroups(qc_text)
     submodels = sum(len(entries) for entries in groups.values())
-    if submodels > SUBMODEL_LIMIT:
-        problems.append(f"{submodels} submodels > {SUBMODEL_LIMIT}")
+    if submodels > limits.submodels():
+        problems.append(f"{submodels} submodels > {limits.submodels()}")
     if len(groups) > BODYPART_LIMIT:
         problems.append(f"{len(groups)} bodyparts > {BODYPART_LIMIT}")
     for path, smd in meshes.items():

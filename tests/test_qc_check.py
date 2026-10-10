@@ -30,6 +30,10 @@ def _messages(qc: Path, level: str = "error") -> list[str]:
     return [p.message for p in check_qc(qc) if p.level == level]
 
 
+def _messages_with(qc: Path, submodels: int) -> list[str]:
+    return [p.message for p in check_qc(qc, submodels) if p.level == "error"]
+
+
 def test_a_clean_qc_has_no_problems(tmp_path: Path) -> None:
     qc = _model(tmp_path, b'$modelname "m.mdl"\n$cd "."\n$body "studio" "ref"\n'
                 b'// $sequence "commented" "nope"\n'
@@ -56,7 +60,9 @@ def test_limits_and_materials(tmp_path: Path) -> None:
                 b'$sequence "' + b"x" * 32 + b'" "ref"\n',
                 {"ref.smd": _SMD % b"king cobra.bmp"})
     errors = _messages(qc)
-    assert any("34 submodels > 32" in e for e in errors)
+    assert any("34 submodels in the model" in e for e in errors)  # stock: 32 a model
+    assert not any("submodels in the model" in e
+                   for e in _messages_with(qc, submodels=1024))  # our studiomdl
     assert any("has a space" in e for e in errors)
     assert any("32 bytes > 31" in e for e in errors)
 

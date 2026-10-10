@@ -15,8 +15,9 @@ stay inside the budget. Models are packed greedily in input order.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_view.attachments import attachment_slots
 from valve_qc_merger.merge_view.bodygroups import ModelParts
 from valve_qc_merger.merge_view.bonepool import plan_pool
@@ -42,7 +43,7 @@ Pair = tuple[ModelInput, ModelParts]
 class PartBudget:
     """Per-part ceilings; submodels is a hard compiler limit."""
 
-    submodels: int = SUBMODEL_LIMIT
+    submodels: int = field(default_factory=lambda: limits.submodels())
     textures: int = TEXTURE_BUDGET
     bones: int = BONE_BUDGET
     sequences: int = SEQUENCE_BUDGET
@@ -53,17 +54,27 @@ def _texture_keys(model: ModelInput, parts: ModelParts) -> set[tuple[str, str]]:
     stems = [stem for group in parts.weapon_stems for stem in group]
     if parts.hands_stem is not None:
         stems.append(parts.hands_stem)
+    from valve_qc_merger.merge_view.merger import _find_texture
     keys: set[tuple[str, str]] = set()
     for stem in stems:
         for material in {t.material for t in model.meshes[stem].triangles}:
-            wanted = {material.lower(), (material + ".bmp").lower()}
             digest = ""
-            for candidate in sorted(model.directory.iterdir()):
-                if candidate.is_file() and candidate.name.lower() in wanted:
-                    digest = hashlib.md5(candidate.read_bytes()).hexdigest()
-                    break
+            found = _find_texture(model.directory, material)  # also in maps_8bit/
+            if found is not None:
+                data = found.read_bytes()
+                digest = hashlib.md5(data).hexdigest()
+                TEXTURE_SIZES[(material.lower(), digest)] = limits.texture_bytes(found)
             keys.add((material.lower(), digest))
     return keys
+
+
+# (material, digest) -> bytes in a compiled .mdl, filled by _texture_keys
+TEXTURE_SIZES: dict[tuple[str, str], int] = {}
+
+
+def texture_bytes(keys: set[tuple[str, str]]) -> int:
+    """What the textures ``keys`` add to a compiled model (pixels + palette)."""
+    return sum(TEXTURE_SIZES.get(key, 0) for key in keys)
 
 
 def _sequence_keys(model: ModelInput) -> list[tuple[str, float | None, tuple[str, ...]]]:
@@ -118,6 +129,30 @@ def _part_counts(
     return submodels, len(materials), len(sequences)
 
 
+def _part_texture_bytes(part: list[Pair], textures: dict[str, set[tuple[str, str]]]) -> int:
+    keys: set[tuple[str, str]] = set()
+    for model, _parts in part:
+        keys |= textures[model.name]
+    return texture_bytes(keys)
+
+
+def view_body_range(part: list[Pair], *, shared_hands: bool = False) -> int:
+    """pev_body values a merged view model of ``part`` spans (merge-v's
+    layout): the weapon group, each extra weapon group (blank + the weapons
+    with that many submodels), and the hands — shared (male/female) or one per
+    weapon, aligned with it. A view model's body is ONE byte: 256 values."""
+    weapons = len(part)
+    total = weapons
+    groups = max(len(parts.weapon_stems) for _m, parts in part)
+    for k in range(1, groups):
+        total *= 1 + sum(1 for _m, parts in part if len(parts.weapon_stems) > k)
+    if shared_hands:
+        total *= max(len(part[0][1].hand_variants), 1)
+    elif any(parts.hands_stem is not None for _m, parts in part):
+        total *= weapons
+    return total
+
+
 def split_parts(
     pairs: list[Pair],
     budget: PartBudget | None = None,
@@ -165,6 +200,9 @@ def split_parts(
         if current and (submodels > budget.submodels
                         or texcount > budget.textures
                         or seqcount > budget.sequences
+                        or _part_texture_bytes(trial, textures) > limits.PART_TEXTURE_BYTES
+                        or view_body_range(trial, shared_hands=shared_hands)
+                        > limits.VIEW_BODY_VALUES
                         or not bones_fit(trial)):
             out.append(current)
             current = [pair]
@@ -175,6 +213,6 @@ def split_parts(
     return out
 
 
-__all__ = ["PartBudget", "SEQUENCE_BUDGET", "SHARED_HANDS_SEQUENCE_BUDGET",
-           "SUBMODEL_LIMIT",
-           "TEXTURE_BUDGET", "split_parts"]
+__all__ = ["PartBudget", "SEQUENCE_BUDGET", "SHARED_HANDS_SEQUENCE_BUDGET", "SUBMODEL_LIMIT",
+           "TEXTURE_BUDGET", "TEXTURE_SIZES", "split_parts", "texture_bytes",
+           "view_body_range"]

@@ -15,7 +15,6 @@ from valve_qc_merger.merge_players.discovery import (
 from valve_qc_merger.merge_players.grouping import group_models
 from valve_qc_merger.merge_players.merger import merge_players_part
 from valve_qc_merger.merge_players.parts import (
-    DEFAULT_SUBMODEL_LIMIT,
     TEXTURE_BUDGET,
     split_parts,
 )
@@ -55,7 +54,7 @@ class MergePlayersOptions:
     placeholder_seq: list[str] = field(default_factory=list)
     include_base: bool = False
     max_skins: int | None = None
-    submodel_limit: int = DEFAULT_SUBMODEL_LIMIT
+    submodel_limit: int | None = None  # None: the compiler's (limits.submodels())
     exclude: list[str] = field(default_factory=list)
     manifest_format: str = "ini"
     texture_budget: int = TEXTURE_BUDGET

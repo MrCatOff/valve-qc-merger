@@ -20,6 +20,7 @@ import re
 from fnmatch import fnmatch
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_players.discovery import Donor
 from valve_qc_merger.merge_players.sequences import (
     DEFAULT_PLACEHOLDER_GLOBS,
@@ -78,7 +79,7 @@ def verify_players_part(
     skins: list[tuple[str, Path, list[str]]],
     *,
     placeholder_globs: tuple[str, ...] = DEFAULT_PLACEHOLDER_GLOBS,
-    submodel_limit: int = 32,
+    submodel_limit: int | None = None,
     texture_count: int = 0,
 ) -> list[GateResult]:
     """Run every gate check for one emitted part; one row per check."""
@@ -167,6 +168,8 @@ def verify_players_part(
     # budgets — total submodels include the leading blank of every bodygroup
     n_sub = len(re.findall(r"^\s*studio\s", qc_text, re.M)) + \
         len(re.findall(r"^\s*blank\s*$", qc_text, re.M))
+    if submodel_limit is None:
+        submodel_limit = limits.submodels()
     ok = (len(all_names) <= BONE_LIMIT and n_sub <= submodel_limit
           and texture_count <= TEXTURE_LIMIT)
     results.append(GateResult(

@@ -138,6 +138,39 @@ plugin names is shown ("your plugin names it") so you can point the plugin at
 the kept one. Sounds the game DLL precaches (stock) are never counted for the
 models: they cost nothing.
 
+## pev_body and delta.lst
+
+A view model's body goes out in one byte (`SVC_WEAPONANIM`): 0–255 on any
+server. Every other entity's body is sent with the bits the server's
+`cstrike/delta.lst` gives it — `entity_state_player_t` for players (and so their
+p_ model, drawn with the player's body), `entity_state_t` for w_ and props.
+Valve's file gives 8 bits, ReGameDLL's 9 for players and 18 for entities; the
+field holds up to 32: `DEFINE_DELTA( body, DT_INTEGER, 32, 1.0 )`. The server
+sends every client the descriptions it reads (ReHLDS
+`SV_WriteDeltaDescriptionsToClient`), so only the server's file counts.
+
+Merges assume 32 bits for players and entities (view models: 256 values).
+Server ▸ Budget shows an **INFO** line with what the server's delta.lst
+allows and the largest pev_body the built players/p_ and w_/props use — a
+warning when a build needs more bits than the file gives.
+
+## Submodels and file size
+
+Stock HLSDK studiomdl keeps **32 submodels for the whole model** (one global
+array, blanks included) and writes past it silently — the compiled meshes
+detach from their bones. The engine and ReHLDS read the count from the file
+and have no such cap. `tools/build_studiomdl.py` builds studiomdl for macOS,
+Linux and Windows (mingw) with 1024 (an error at the limit), `$texrendermode`
+and a 16 MB output check; CI ships it as `studiomdl-<os>`. It prints
+`MAXSTUDIOMODELS 1024` when run without arguments: builds read that from the
+project's studiomdl and split their parts by it (any other compiler: 32). The
+QC check counts the model's submodels against the same limit.
+
+Whatever the compiler, a compiled .mdl stays under 16 MB (bigger files risk
+the client): merges close a part when its textures near 14 MB, and our
+studiomdl refuses a bigger file. Textures (count 80 by default, 100 at most,
+and size) are then what binds most parts — pack them into atlases.
+
 ## Server package
 
 Build ▸ **Export server package…** (Ctrl+Shift+E) writes

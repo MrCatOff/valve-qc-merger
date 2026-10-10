@@ -25,6 +25,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_view.attachments import attachment_slots
 from valve_qc_merger.merge_view.bodygroups import VERTEX_BUDGET, ModelParts
 from valve_qc_merger.merge_view.decimate import unique_vertices
@@ -44,11 +45,11 @@ from valve_qc_merger.merge_view.merger import (
 )
 from valve_qc_merger.merge_view.parts import (
     SHARED_HANDS_SEQUENCE_BUDGET,
-    SUBMODEL_LIMIT,
     TEXTURE_BUDGET,
     _part_counts,
     _sequence_keys,
     _texture_keys,
+    texture_bytes,
 )
 from valve_qc_merger.services.base import (
     EXIT_DISCOVERY,
@@ -61,8 +62,6 @@ from valve_qc_merger.services.standalone import Rejects
 from valve_qc_merger.services.standalone import entry as standalone_entry
 from valve_qc_merger.services.standalone import ship as ship_standalone
 
-BODY_LIMIT = 256  # entity_state_t.body and SVC_WEAPONANIM: 8 bits
-
 
 @dataclass
 class MergePropsOptions:
@@ -74,6 +73,9 @@ class MergePropsOptions:
     texture_budget: int = TEXTURE_BUDGET
     sequence_budget: int = SHARED_HANDS_SEQUENCE_BUDGET
     dry_run: bool = False
+    # pev_body values a part may span: None = an entity's (limits.body_values,
+    # the server's delta.lst); a view model's part (merge-v's no-hands) 256
+    body_values: int | None = None
     # a model that fits no part on its own ships as it is (standalone/)
     standalone_rejects: bool = True
 
@@ -209,7 +211,8 @@ def body_range(part: list[Pair]) -> int:
 
 
 def split_prop_parts(pairs: list[Pair], *, textures: int = TEXTURE_BUDGET,
-                     sequences: int = SHARED_HANDS_SEQUENCE_BUDGET) -> list[list[Pair]]:
+                     sequences: int = SHARED_HANDS_SEQUENCE_BUDGET,
+                     body_values: int | None = None) -> list[list[Pair]]:
     """Greedy parts within every budget (see the module). A model that is
     over a budget on its own still gets a part of its own; the caller
     decides whether to ship it."""
@@ -218,9 +221,12 @@ def split_prop_parts(pairs: list[Pair], *, textures: int = TEXTURE_BUDGET,
 
     def fits(part: list[Pair]) -> bool:
         submodels, texcount, seqcount = _part_counts(part, texture_keys, seq_keys)
-        if submodels > SUBMODEL_LIMIT or texcount > textures or seqcount > sequences:
+        if submodels > limits.submodels() or texcount > textures or seqcount > sequences:
             return False
-        if body_range(part) > BODY_LIMIT:
+        if body_range(part) > (body_values or limits.body_values()):
+            return False
+        keys = set().union(*(texture_keys[m.name] for m, _p in part))
+        if texture_bytes(keys) > limits.PART_TEXTURE_BYTES:
             return False
         models = [m for m, _p in part]
         return len(merged_skeleton(models)) + attachment_slots(models) <= BONE_LIMIT
@@ -244,7 +250,7 @@ def alone_problem(pair: Pair, opts: MergePropsOptions) -> str | None:
     model, parts = pair
     if not parts.weapon_stems:
         return "no mesh"
-    if len(parts.weapon_stems) > SUBMODEL_LIMIT:
+    if len(parts.weapon_stems) > limits.submodels():
         return f"{len(parts.weapon_stems)} submodels"
     bones = len(merged_skeleton([model])) + attachment_slots([model])
     if bones > BONE_LIMIT:
@@ -306,7 +312,8 @@ def run_merge_props(opts: MergePropsOptions,
         return result
 
     parts_list = split_prop_parts(pairs, textures=opts.texture_budget,
-                                  sequences=opts.sequence_budget) if pairs else []
+                                  sequences=opts.sequence_budget,
+                                  body_values=opts.body_values) if pairs else []
     multi = len(parts_list) > 1
     result.data["parts"] = len(parts_list)
     aggregate: dict[str, dict[str, object]] = {}

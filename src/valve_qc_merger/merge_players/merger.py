@@ -14,6 +14,7 @@ import dataclasses
 import re
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_players.discovery import (
     Donor,
     PlayerModel,
@@ -130,7 +131,7 @@ def merge_players_part(
     *,
     include_base: bool = False,
     placeholder_globs: tuple[str, ...] = ("*shield*",),
-    submodel_limit: int = 32,
+    submodel_limit: int | None = None,
     textures: TextureOptions | None = None,
     manifest_format: str = "ini",
     write_manifest: bool = True,
@@ -170,6 +171,8 @@ def merge_players_part(
         1 + sum(1 for s in skins if len(kept[s.name]) > k)
         for k in range(1, part_slots)
     )
+    if submodel_limit is None:
+        submodel_limit = limits.submodels()
     if total_submodels > submodel_limit:
         raise MergeError(
             f"{total_submodels} submodels exceed the {submodel_limit} limit; split "

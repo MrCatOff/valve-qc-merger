@@ -19,6 +19,7 @@ import dataclasses
 import re
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_player.analyze import PlayerPlan
 from valve_qc_merger.merge_view.atlas import (
     TextureOptions,
@@ -29,7 +30,6 @@ from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.merger import (
     BONE_LIMIT,
     STOCK_VERT_LIMIT,
-    SUBMODEL_LIMIT,
     SUBMODEL_TRI_WARN,
     TEXTURE_WARN,
     MergeError,
@@ -210,10 +210,10 @@ def merge_player_models(
     # --- geometry files ----------------------------------------------------
     report.bodyparts = 1
     submodels = 1 + len(models)  # leading blank
-    if submodels > SUBMODEL_LIMIT:
+    if submodels > limits.submodels():
         raise MergeError(
             f"{submodels} submodels in one model exceed studiomdl's hard "
-            f"{SUBMODEL_LIMIT}-entry arrays (silent memory corruption); "
+            f"{limits.submodels()}-entry arrays (silent memory corruption); "
             "split into more parts"
         )
     for model in models:

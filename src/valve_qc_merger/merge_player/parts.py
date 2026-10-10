@@ -7,13 +7,13 @@ The binding budget is studiomdl's hard 32-submodel array (one leading
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_player.analyze import PlayerPlan
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.merger import (
     BONE_LIMIT,
-    SUBMODEL_LIMIT,
     _sanitize_material,
 )
 
@@ -24,7 +24,7 @@ TEXTURE_BUDGET = 80  # soft default; the hard engine cap is 100
 class PlayerBudget:
     """Per-part budgets (submodel count includes the leading blank)."""
 
-    submodels: int = SUBMODEL_LIMIT
+    submodels: int = field(default_factory=lambda: limits.submodels())
     textures: int = TEXTURE_BUDGET
     bones: int = BONE_LIMIT
 
@@ -36,6 +36,18 @@ def _model_textures(model: ModelInput, extra: set[str]) -> set[str]:
         for t in smd.triangles
     }
     return materials | extra
+
+
+def _texture_sizes(model: ModelInput) -> dict[str, int]:
+    """Staged texture name -> what it adds to a compiled .mdl."""
+    from valve_qc_merger.merge_view.merger import _find_texture
+    out: dict[str, int] = {}
+    for smd in model.meshes.values():
+        for material in {t.material for t in smd.triangles}:
+            found = _find_texture(model.directory, material)
+            if found is not None:
+                out[_sanitize_material(material)] = limits.texture_bytes(found)
+    return out
 
 
 def split_player_parts(
@@ -53,15 +65,19 @@ def split_player_parts(
     current: list[tuple[ModelInput, PlayerPlan]] = []
     bones: set[str] = set()
     textures: set[str] = set()
+    sizes: dict[str, int] = {}  # staged texture name -> bytes in the .mdl
     for model, plan in pairs:
         model_bones = set(plan.shared) | {b.final for b in plan.bones}
         model_tex = _model_textures(
             model, (skin_textures or {}).get(model.name, set())
         )
+        sizes.update(_texture_sizes(model))
         fits = (
             len(current) + 1 + 1 <= budget.submodels  # weapons + leading blank
             and len(bones | model_bones) <= budget.bones
             and len(textures | model_tex) <= budget.textures
+            and sum(sizes.get(t, 0) for t in textures | model_tex)
+            <= limits.PART_TEXTURE_BYTES  # a .mdl stays under 16 MB
         )
         if current and not fits:
             parts.append(current)

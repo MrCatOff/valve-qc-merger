@@ -11,8 +11,10 @@ Errors stop the compile (studiomdl fails, or writes a broken model):
 - a ``$body`` / ``studio`` / ``$sequence`` SMD that is not on disk under that
   exact name (another case only matches on Windows);
 - a sequence label longer than 31 bytes (strcpy into ``char[32]``);
-- more than 32 submodels in one bodygroup, or 32 bodygroups (fixed arrays:
-  memory corruption — meshes detach from their bones);
+- more submodels in the model than the compiler keeps (blanks included;
+  stock studiomdl: 32 for the whole model — past them it corrupts memory and
+  meshes detach from their bones), or 32 bodygroups;
+- textures adding up to more than 16 MB (the .mdl would risk the client);
 - a material with a space (the SMD triangle tokenizer splits it) or longer
   than 63 bytes;
 - more than 128 bones in the reference meshes;
@@ -28,6 +30,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from valve_qc_merger import limits
 
 SEQ_LABEL_LIMIT = 31
 SUBMODEL_LIMIT = 32
@@ -252,8 +256,10 @@ def _smd_facts(path: Path) -> tuple[set[bytes], set[bytes], int, int]:
     return bones, materials, len(vertices), len(normals)
 
 
-def check_qc(qc_path: Path) -> list[QcProblem]:
-    """Everything studiomdl would trip over in ``qc_path`` (see the module)."""
+def check_qc(qc_path: Path, submodels: int = SUBMODEL_LIMIT) -> list[QcProblem]:
+    """Everything studiomdl would trip over in ``qc_path`` (see the module);
+    ``submodels``: the compiler's MAXSTUDIOMODELS (stock 32 — for the whole
+    model, blanks included)."""
     qc_path = Path(qc_path)
     qc = _parse(qc_path.read_bytes())
     folder = qc_path.parent
@@ -285,10 +291,11 @@ def check_qc(qc_path: Path) -> list[QcProblem]:
     if len(qc.groups) > BODYPART_LIMIT:
         error(f"{len(qc.groups)} bodygroups > {BODYPART_LIMIT} (studiomdl overruns its "
               "array: a broken model)")
-    for name, count in qc.groups:
-        if count > SUBMODEL_LIMIT:
-            error(f"bodygroup {_show(name)!r} has {count} submodels > {SUBMODEL_LIMIT} "
-                  "(meshes detach from their bones in game)")
+    total = sum(count for _name, count in qc.groups)
+    if total > submodels:
+        error(f"{total} submodels in the model (blanks included) > {submodels}, this "
+              "studiomdl's MAXSTUDIOMODELS (stock studiomdl keeps 32 for the whole "
+              "model and writes past them: meshes detach from their bones in game)")
 
     bones: set[bytes] = set()
     materials: set[bytes] = set()
@@ -304,6 +311,16 @@ def check_qc(qc_path: Path) -> list[QcProblem]:
                       "split it into two bodygroups)")
     if len(bones) > BONE_LIMIT:
         error(f"{len(bones)} bones in the meshes > {BONE_LIMIT}")
+    texture_total = 0
+    files = {p.name.lower(): p for p in folder.rglob("*") if p.suffix.lower() == ".bmp"}
+    for material in materials:
+        name = _show(material).lower()
+        found = files.get(name) or files.get(name + ".bmp")
+        if found is not None:
+            texture_total += limits.texture_bytes(found)
+    if texture_total > limits.MAX_MDL_BYTES:
+        error(f"the textures alone are {texture_total / 1048576:.1f} MB: a .mdl over 16 MB "
+              "risks the client — pack them into atlases or split the model")
     for material in sorted(materials):
         if b" " in material or b"\t" in material:
             error(f"material {_show(material)!r} has a space: studiomdl splits it and "

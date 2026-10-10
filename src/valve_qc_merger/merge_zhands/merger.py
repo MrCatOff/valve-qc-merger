@@ -28,6 +28,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.hands import collision_guard, match_hands, rig_bones_from_smd
@@ -45,7 +46,6 @@ from valve_qc_merger.retarget.correspondence import CorrespondenceError
 from valve_qc_merger.writers.smd import write_smd_text
 
 BONE_LIMIT = 127
-SUBMODEL_LIMIT = 32
 SEQUENCE_LIMIT = 255  # the game selects a viewmodel animation by a byte
 TEXTURE_LIMIT = 100
 NAME_LIMIT = 31  # studiomdl strcpy's bone/sequence names into char[32]
@@ -414,7 +414,11 @@ def _unique_names(models: list[ZombieModel]) -> dict[tuple[str, str], str]:
 
 
 VERTEX_LIMIT = 2048  # studiomdl: vertices, and normals, per submodel
-HANDS_LIMIT = 30  # models a part: hands entries + the grenade's 2 <= 32 submodels
+def hands_limit() -> int:
+    """Models a part: hands entries + the grenade's 2 within the compiler's
+    submodels, and pev_body (grenade + 2 x hands) within a view model's
+    byte."""
+    return min(limits.submodels() - 2, limits.VIEW_BODY_VALUES // 2)
 
 
 def hands_size(model: ModelInput, grenade_prefix: str = "frogbomb") -> tuple[int, int]:
@@ -509,7 +513,7 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
     for group in zombies.values():
         trial = current + group
         # one hands entry per model at most, plus the grenade group's two
-        if current and (len(trial) > HANDS_LIMIT
+        if current and (len(trial) > hands_limit()
                         or not _fits(planned(trial, grenade_prefix), limit)):
             parts.append(current)
             current = list(group)
@@ -657,8 +661,8 @@ def merge_zhands(
 
     # Budgets.
     submodels = len(hand_entries) + (2 if grenade_path else 0)
-    if submodels > SUBMODEL_LIMIT:
-        raise ZhandsError(f"{submodels} submodels exceed studiomdl's {SUBMODEL_LIMIT}")
+    if submodels > limits.submodels():
+        raise ZhandsError(f"{submodels} submodels exceed studiomdl's {limits.submodels()}")
     if report.sequences > SEQUENCE_LIMIT:
         report.warnings.append(
             f"{report.sequences} sequences (> {SEQUENCE_LIMIT}: the game "

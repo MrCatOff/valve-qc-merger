@@ -65,7 +65,8 @@ def run_compile(opts: CompileOptions, reporter: Reporter | None = None) -> Servi
     if opts.preflight:
         from valve_qc_merger.services.qc_check import check_qc
         try:
-            problems = check_qc(opts.qc)
+            from valve_qc_merger import limits
+            problems = check_qc(opts.qc, limits.studiomdl_submodels(opts.studiomdl))
         except (OSError, ValueError) as exc:  # the check never blocks on itself
             reporter.log(f"  warn: QC check skipped: {exc}")
             problems = []

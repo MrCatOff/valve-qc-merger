@@ -231,6 +231,13 @@ class ServerWindow(QDialog):
         theme.set_role(self.saved_label, "success")
         self.saved_label.setWordWrap(True)
         layout.addWidget(self.saved_label)
+        self.body_label = QLabel()  # INFO: pev_body against the server's delta.lst
+        self.body_label.setWordWrap(True)
+        self.body_label.setToolTip(
+            "The server sends every client the delta.lst it reads (cstrike/delta.lst), so "
+            "only the server's file counts. A view model's body is one byte (255) "
+            "whatever the file says.")
+        layout.addWidget(self.body_label)
 
         self.budget_tabs = QTabWidget()
         self.merge_table = QTableWidget(0, 5)
@@ -373,6 +380,16 @@ class ServerWindow(QDialog):
                     "Pick a map: brush models often take 100–300.", "muted")
             self.verdict.setText(text)
         self._fill_merge_table()
+        self._show_body_limits()
+
+    def _show_body_limits(self) -> None:
+        from valve_qc_merger.server.delta import body_report
+        try:
+            report = body_report(self.project)
+        except OSError:
+            return
+        self.body_label.setText(("INFO  " if report.ok else "Warning  ") + report.text())
+        theme.set_role(self.body_label, "muted" if report.ok else "warning")
 
     @staticmethod
     def _coloured(text: str, token: str) -> str:

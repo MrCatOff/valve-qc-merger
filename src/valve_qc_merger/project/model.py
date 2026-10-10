@@ -1077,7 +1077,8 @@ class Project:
                 **options, "models_dir": str(models_dir), "out": str(work / "out"),
                 "plan_only": True,
             })
-            result = BUILD_KINDS[build.kind].run(opts, reporter)
+            with self.compiler_limits(reporter):
+                result = BUILD_KINDS[build.kind].run(opts, reporter)
         finally:
             shutil.rmtree(work, ignore_errors=True)
         self._fold_notes(result, notes)
@@ -1108,13 +1109,14 @@ class Project:
             **options, "models_dir": str(models_dir), "out": str(output),
         })
         nohands = base / NOHANDS_INPUT
-        if build.kind == "merge-v" and nohands.is_dir() and not any(
-                d.is_dir() for d in Path(models_dir).iterdir()):
-            result = ServiceResult()  # every model is a no-hands one
-        else:
-            result = kind.run(opts, reporter)
-        if build.kind == "merge-v" and nohands.is_dir() and any(nohands.iterdir()):
-            self._merge_nohands(nohands, output, opts, result, reporter)
+        with self.compiler_limits(reporter):
+            if build.kind == "merge-v" and nohands.is_dir() and not any(
+                    d.is_dir() for d in Path(models_dir).iterdir()):
+                result = ServiceResult()  # every model is a no-hands one
+            else:
+                result = kind.run(opts, reporter)
+            if build.kind == "merge-v" and nohands.is_dir() and any(nohands.iterdir()):
+                self._merge_nohands(nohands, output, opts, result, reporter)
         if build.kind == "merge-zhands":
             self._rename_manifest(base, output, opts, result)
         self._fold_notes(result, notes)
@@ -1223,6 +1225,18 @@ class Project:
         if result.manifest:
             result.manifest = {names.get(k, k): v for k, v in result.manifest.items()}
 
+    def compiler_limits(self, reporter: Reporter | None = None) -> Any:
+        """The limits merges split by, for this project's studiomdl
+        (``limits.use``): its MAXSTUDIOMODELS (32 for a stock compiler)."""
+        from valve_qc_merger import limits
+        submodels = limits.studiomdl_submodels(self.settings.studiomdl)
+        if reporter is not None:
+            which = ("stock studiomdl" if submodels == limits.STOCK_SUBMODELS
+                     else "this studiomdl")
+            reporter.log(f"  limits: {submodels} submodels a model ({which}), pev_body: "
+                         "view models 256, others 32 bits (delta.lst), .mdl under 16 MB")
+        return limits.use(submodels=submodels)
+
     def _merge_nohands(self, models_dir: Path, output: Path, opts: Any,
                        result: ServiceResult, reporter: Reporter) -> None:
         """merge-v's no-hands part: the models whose hands are the model (and
@@ -1234,8 +1248,10 @@ class Project:
         from valve_qc_merger.server.package import _manifest
         from valve_qc_merger.services.merge_props import MergePropsOptions, run_merge_props
         reporter.log(f"no-hands part: {len(list(models_dir.iterdir()))} model(s)")
+        from valve_qc_merger.limits import VIEW_BODY_VALUES
         part = run_merge_props(MergePropsOptions(
             models_dir=models_dir, out=output / "nohands", name=f"{opts.name}_nohands",
+            body_values=VIEW_BODY_VALUES,  # a view model: one byte
             manifest_format=opts.manifest_format,
             standalone_rejects=getattr(opts, "standalone_rejects", True)), reporter)
         result.outputs.extend(part.outputs)

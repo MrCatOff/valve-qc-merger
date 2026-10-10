@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from valve_qc_merger import limits
 from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
 from valve_qc_merger.merge_view.atlas import (
     TextureOptions,
@@ -563,10 +564,10 @@ def merge_models(
             f"{report.bodyparts} bodyparts (limit {BODYPART_LIMIT})"
         )
     submodels = sum(len(entries) for _name, entries in groups)
-    if submodels > SUBMODEL_LIMIT:
+    if submodels > limits.submodels():
         raise MergeError(
             f"{submodels} submodels in one model exceed studiomdl's hard "
-            f"{SUBMODEL_LIMIT}-entry arrays (silent memory corruption: "
+            f"{limits.submodels()}-entry arrays (silent memory corruption: "
             "compiled meshes detach from bones); split into more parts"
         )
     if report.textures > TEXTURE_WARN:
