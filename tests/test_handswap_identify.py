@@ -17,6 +17,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from valve_qc_merger.handswap import build as buildmod
+import numpy as np
+
 from valve_qc_merger.handswap.identify import HandInfo, _resolve_sides
 
 
@@ -46,6 +48,34 @@ def test_sides_split_by_mesh_name_stock_style() -> None:
     hl = _hand("BoneB", {"lhand"})
     _resolve_sides(None, [hr, hl], {}, log=lambda *a: None)
     assert (hr.side, hl.side) == ("right", "left")
+
+
+def _posed_hand(prefix: str, mirror: float, bind: dict) -> HandInfo:
+    """A hand at the origin, fingers along +X, palm down (fingertips curled
+    to -Z), thumb on +Y for a right hand; ``mirror=-1`` makes the left one.
+    Bone names say nothing about the side."""
+    def place(name: str, x: float, y: float, z: float) -> str:
+        m = np.eye(4)
+        m[:3, 3] = (x, mirror * y, z)
+        bind[prefix + name] = m
+        return prefix + name
+    wrist = place("w", 0, 0, 0)
+    chains = []
+    for i, y in enumerate((1.0, 0.3, -0.3, -0.9)):  # index .. pinky knuckles
+        chains.append([place(f"f{i}a", 3, y, 0), place(f"f{i}b", 4, y, -1)])
+    chains.append([place("ta", 1.0, 1.8, -0.3), place("tb", 2.2, 2.0, -1.0)])  # thumb
+    return HandInfo(side="?", wrist=wrist, fan=wrist, chains=chains, tip_dirs={},
+                    core=set(), source_meshes={"hand_mesh"})
+
+
+def test_sides_from_the_hands_own_chirality() -> None:
+    # unnamed rigs (CSO Bone02/Bone25): the hand's own shape decides — the
+    # old palm-toward-the-weapon test swapped v_fiveseven, v_elite, v_ump45…
+    bind: dict = {}
+    first, second = _posed_hand("A", -1.0, bind), _posed_hand("B", 1.0, bind)
+    _resolve_sides(SimpleNamespace(bind_world=bind), [first, second], {},
+                   log=lambda *a: None)
+    assert (first.side, second.side) == ("left", "right")
 
 
 # --- mesh classification --------------------------------------------------- #

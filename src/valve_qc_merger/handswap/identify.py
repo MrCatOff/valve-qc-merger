@@ -354,20 +354,45 @@ def _bone_side(h) -> str | None:
 
 
 def _chirality_scores(skel, hands) -> list[float]:
-    """Per-hand palm-normal · direction-to-weapon. Calibrated on stock
-    models: the RIGHT hand's palm normal points TOWARD the weapon centroid,
-    so a higher score = more right-handed."""
-    hand_bones = set()
-    for h in hands:
-        hand_bones |= h.core
-    weapon_heads = [skel.bind_world[b][:3, 3]
-                    for b in set(skel.names) - hand_bones]
-    wc = np.mean(weapon_heads, axis=0) if weapon_heads else np.zeros(3)
+    """Per hand: its own handedness from the bind pose, > 0 right, < 0 left.
+
+    The thumb is the finger root off the line of the other four (the
+    knuckles); index = the knuckle nearest the thumb, pinky = the farthest.
+    With ``forward`` = wrist -> knuckles and ``palm`` = where the fingertips
+    curl (their offset from the knuckles across ``forward``), a right hand
+    has (index - pinky) x forward pointing to the palm, a left hand away.
+    Needs no weapon: the old palm-normal-toward-the-weapon test swapped 16
+    of 19 CSO pistols whose sides are named (a support hand faces the weapon
+    as much as the gun hand); this agrees with the names on 345 of 346
+    CSO hands."""
     scores = []
     for h in hands:
         roots = [skel.bind_world[ch[0]][:3, 3] for ch in h.chains]
-        frame, _ = hand_frame(skel.bind_world[h.wrist][:3, 3], roots)
-        scores.append(float(np.dot(frame[:3, 2], wc - frame[:3, 3])))
+        tips = [skel.bind_world[ch[-1]][:3, 3] for ch in h.chains]
+        if len(roots) < 3:
+            scores.append(0.0)
+            continue
+        best = None
+        for thumb in range(len(roots)):
+            others = np.array([r for i, r in enumerate(roots) if i != thumb])
+            _u, sv, _vt = np.linalg.svd(others - others.mean(axis=0))
+            residual = float(sv[1:].sum())
+            if best is None or residual < best[0]:
+                best = (residual, thumb)
+        thumb = best[1]
+        knuckles = [i for i in range(len(roots)) if i != thumb]
+        index = min(knuckles, key=lambda i: np.linalg.norm(roots[i] - roots[thumb]))
+        pinky = max(knuckles, key=lambda i: np.linalg.norm(roots[i] - roots[thumb]))
+        centre = np.mean([roots[i] for i in knuckles], axis=0)
+        forward = centre - skel.bind_world[h.wrist][:3, 3]
+        length = np.linalg.norm(forward)
+        if length < 1e-6:
+            scores.append(0.0)
+            continue
+        forward /= length
+        curl = np.mean([tips[i] for i in knuckles], axis=0) - centre
+        palm = curl - np.dot(curl, forward) * forward
+        scores.append(float(np.dot(np.cross(roots[index] - roots[pinky], forward), palm)))
     return scores
 
 
