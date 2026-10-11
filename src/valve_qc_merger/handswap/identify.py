@@ -300,6 +300,29 @@ def _descendant_fans(skel, fan, fan_names):
     return (skel.subtree(fan) - {fan}) & fan_names
 
 
+WORN_SHARE = 0.05  # of a weapon mesh's weight on finger bones: worn, not held
+
+
+def worn_meshes(hands: list[HandInfo], weights_by_mesh: dict[str, dict[str, float]],
+                hand_labeled: set[str]) -> dict[str, float]:
+    """Meshes outside the QC's hands group that ride the FINGER bones: a
+    gauntlet, a claw glove, a fist weapon (v_balrog9, v_crow9, v_spknife,
+    v_laserfist). A held weapon puts none of its weight there (0.0 on every
+    one of ~500 CSO weapons); a worn one 15-60 %. Swapping the hands would
+    throw the weapon away with them: such a model's hands are the model.
+    Returns mesh -> share of its weight on finger bones, for the worn ones."""
+    fingers = {b for h in hands for chain in h.chains for b in chain}
+    worn: dict[str, float] = {}
+    for mesh, weights in weights_by_mesh.items():
+        total = sum(weights.values())
+        if mesh in hand_labeled or total <= 0:
+            continue
+        share = sum(w for b, w in weights.items() if b in fingers) / total
+        if share > WORN_SHARE:
+            worn[mesh] = share
+    return worn
+
+
 def _tip_directions(skel, refs, chains):
     """Leaf phalanx direction = skinned-vertex centroid - bone head (the
     only reliable direction for a chain's last bone: SMD tails are stubs

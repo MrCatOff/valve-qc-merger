@@ -25,7 +25,7 @@ import numpy as np
 from . import qc as qcmod
 from . import smd as smdmod
 from .asset import HandsAsset
-from .identify import (HandInfo, OrigSkeleton, find_hands,
+from .identify import (HandInfo, OrigSkeleton, find_hands, worn_meshes,
                        mesh_bone_weights, merge_skeleton)
 from .math3d import inv_rigid, local_matrix, mat3_to_euler, orthonormalize
 from .retarget import RetargetPlan, build_plan, solve_frame
@@ -59,7 +59,8 @@ class Assembly:
     survivors: set[str] = field(default_factory=set)
 
 
-def load_weapon(weapon_dir: str, qc_path: str | None, log=print) -> WeaponModel:
+def load_weapon(weapon_dir: str, qc_path: str | None, log=print,
+                allow_worn: bool = False) -> WeaponModel:
     if qc_path is None:
         qcs = [f for f in os.listdir(weapon_dir) if f.lower().endswith(".qc")]
         if len(qcs) != 1:
@@ -97,6 +98,12 @@ def load_weapon(weapon_dir: str, qc_path: str | None, log=print) -> WeaponModel:
     hands = find_hands(skel, refs, weights, hand_labeled, log=log)
     if not hands:
         raise RuntimeError("no hands found in the original model")
+    # (zombie hands lend their claws as they are: allow_worn)
+    worn = {} if allow_worn else worn_meshes(hands, weights, hand_labeled)
+    if worn:
+        raise RuntimeError(
+            "weapon worn on the hands (%s on the finger bones) — the hands are the "
+            "model" % ", ".join("%s %.0f%%" % (m, 100 * x) for m, x in sorted(worn.items())))
     return WeaponModel(qc=qc, refs=refs, anims=anims, skel=skel,
                        weights=weights, hands=hands)
 

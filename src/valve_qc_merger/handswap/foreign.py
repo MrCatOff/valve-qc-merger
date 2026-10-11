@@ -70,7 +70,7 @@ def asset_from_weapon(weapon_dir: str, *, prefer: str = "male", keep_materials: 
     several — skin, claws, effects) instead of the single ``hands.bmp`` slot;
     the asset then lists each material's file and render mode, and the
     engine copies them and writes the ``$texrendermode`` lines."""
-    model = buildmod.load_weapon(weapon_dir, None, log=log)
+    model = buildmod.load_weapon(weapon_dir, None, log=log, allow_worn=True)
     hand_bones = buildmod.hand_bone_set(model, log=log)
     hand_mats = buildmod.hand_materials(model, hand_bones)
     dropped, _kept = buildmod.classify_meshes(model, hand_bones, hand_mats, log=log)

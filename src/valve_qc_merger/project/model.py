@@ -1871,7 +1871,8 @@ def _mesh_bones(folder: Path) -> int:
 
 # a retarget failing so: nothing to swap — the model goes, as it is, into
 # merge-v's no-hands part
-_HANDS_ARE_THE_MODEL = ("no hands found", "hand detection ate the whole model")
+_HANDS_ARE_THE_MODEL = ("no hands found", "hand detection ate the whole model",
+                        "the hands are the model")
 
 
 def folder_categories(root: Path, models: list[Path]) -> dict[Path, str]:

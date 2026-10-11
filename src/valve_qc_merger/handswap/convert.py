@@ -90,7 +90,8 @@ def convert(args, log=log) -> dict:
         % (len(asset.bones), len(asset.triangles)))
 
     qc_path = os.path.join(weapon_dir, args.qc) if args.qc else None
-    model = buildmod.load_weapon(weapon_dir, qc_path, log=log)
+    model = buildmod.load_weapon(weapon_dir, qc_path, log=log,
+                                 allow_worn=getattr(args, "allow_worn", False))
 
     # bones / meshes owned by the original hands
     hand_bones = buildmod.hand_bone_set(model, log=log)

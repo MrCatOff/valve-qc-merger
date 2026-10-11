@@ -97,7 +97,8 @@ def run_zhands_grenade(opts: ZhandsGrenadeOptions,
             hands_texture=None, modelname=opts.modelname or f"{out.name}.mdl",
             studiomdl=convertmod.DEFAULT_STUDIOMDL, compile=False, verify=True, snug=True,
             snug_max_deg=opts.snug_max_deg, curl=list(opts.curl),
-            grip_offset=list(opts.grip_offset), weapon_offset=list(opts.weapon_offset) or None)
+            grip_offset=list(opts.grip_offset), weapon_offset=list(opts.weapon_offset) or None,
+            allow_worn=True)  # zombie claws ride the fingers: kept, not a gauntlet
         try:
             info = convertmod.convert(args, log=log)
         except (RuntimeError, FileNotFoundError, ValueError) as exc:

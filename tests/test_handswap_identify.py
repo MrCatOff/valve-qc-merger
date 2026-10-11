@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from valve_qc_merger.handswap import build as buildmod
 import numpy as np
 
-from valve_qc_merger.handswap.identify import HandInfo, _resolve_sides
+from valve_qc_merger.handswap.identify import HandInfo, _resolve_sides, worn_meshes
 
 
 def _model(weights, refs):
@@ -76,6 +76,17 @@ def test_sides_from_the_hands_own_chirality() -> None:
     _resolve_sides(SimpleNamespace(bind_world=bind), [first, second], {},
                    log=lambda *a: None)
     assert (first.side, second.side) == ("left", "right")
+
+
+def test_a_weapon_on_the_finger_bones_is_worn() -> None:
+    # v_balrog9 / v_crow9: the gauntlet rides the fingers — swapping the hands
+    # would throw it away; a held gun puts nothing on them
+    hand = HandInfo(side="left", wrist="W", fan="W", chains=[["F1", "F2"], ["T1"]],
+                    tip_dirs={}, core=set(), source_meshes=set())
+    weights = {"hands": {"W": 5.0, "F1": 5.0},
+               "gauntlet": {"W": 6.0, "F1": 3.0, "F2": 1.0},
+               "gun": {"Gun": 9.0, "W": 1.0}}
+    assert set(worn_meshes([hand], weights, {"hands"})) == {"gauntlet"}
 
 
 # --- mesh classification --------------------------------------------------- #
