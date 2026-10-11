@@ -24,6 +24,7 @@ import dataclasses
 import hashlib
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -540,7 +541,10 @@ def _fits(plan: tuple[int, int], limit: int) -> bool:
 
 
 def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
-                  limit: int = BONE_LIMIT) -> list[list[ModelInput]]:
+                  limit: int = BONE_LIMIT,
+                  log: Callable[[str], None] | None = None,
+                  progress: Callable[[int, int], None] | None = None,
+                  ) -> list[list[ModelInput]]:
     """Parts under the bone limit (with the bones pooled), the 64K a sequence
     and the submodel limit, a zombie's models (knife, grenade, variants)
     always together, in input order.
@@ -550,7 +554,9 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
     galloping then halving; the run is then measured exactly
     (:func:`planned`) — halved while a sequence is over 64K, else grown by a
     few zombies while it fits — a few exact runs a part, not one after every
-    zombie (quadratic: most of an hour on 241 models)."""
+    zombie (quadratic: most of an hour on 241 models). ``log`` hears each
+    exact check, ``progress`` (zombies placed, zombies) each part."""
+    log = log or (lambda _message: None)
     zombies: dict[str, list[ModelInput]] = {}
     for model in models:
         zombies.setdefault(zombie_of(model.name), []).append(model)
@@ -566,7 +572,14 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
         return len(trial) <= hands_limit() and pool_bones_of(trial) <= limit
 
     def fits(start: int, end: int) -> bool:
-        return _fits(planned(run(start, end), grenade_prefix), limit)
+        trial = run(start, end)
+        bones, worst = planned(trial, grenade_prefix)
+        verdict = _fits((bones, worst), limit)
+        log(f"    part {len(parts) + 1}: {len(trial)} model(s) "
+            f"({', '.join(zombie_of(g[0].name) for g in groups[start:end])}) — "
+            f"{bones} bones, largest sequence {worst // 1024} KB: "
+            f"{'fits' if verdict else 'too big'}")
+        return verdict
 
     def longest(start: int, good: int, end: int, test) -> int:
         """The last end in (good, end] that passes ``test`` (good passes or
@@ -600,6 +613,8 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
             end = longest(start, end, min(len(groups), end + 4), fits)
         parts.append(run(start, end))
         start = end
+        if progress is not None:
+            progress(start, len(groups))
     return parts
 
 

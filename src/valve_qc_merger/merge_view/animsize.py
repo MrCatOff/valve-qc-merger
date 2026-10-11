@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from valve_qc_merger.merge_view.discovery import ModelInput
 
 SEQ_DATA_LIMIT = 65535  # u16 offset reach; studiomdl Errors past this
@@ -53,6 +55,30 @@ def _wrap(v: float) -> float:
     return v
 
 
+def _channels(anim, defaults: dict[str, tuple[float, ...]]) -> dict[str, np.ndarray]:
+    """Bone name -> (frames, 6) deltas from the bone's default, rotations
+    wrapped once into [-pi, pi) — as studiomdl takes them."""
+    names = {n.index: n.name for n in anim.nodes}
+    rows: dict[str, list[tuple[float, ...]]] = {}
+    for frame in anim.frames:
+        for pose in frame.poses:
+            p, r = pose.position, pose.rotation
+            rows.setdefault(names[pose.bone], []).append((p.x, p.y, p.z, r.x, r.y, r.z))
+    out: dict[str, np.ndarray] = {}
+    for name, values in rows.items():
+        delta = np.asarray(values, dtype=np.float64) - np.asarray(
+            defaults.get(name, _ZERO), dtype=np.float64)
+        rot = delta[:, 3:]
+        rot[rot >= math.pi] -= 2.0 * math.pi
+        rot[rot < -math.pi] += 2.0 * math.pi
+        out[name] = delta
+    return out
+
+
+_ZERO = (0.0,) * 6
+_FLOORS = np.array([_POS_FLOOR] * 3 + [_ROT_FLOOR] * 3)
+
+
 def sequence_sizes(models: list[ModelInput]) -> dict[tuple[str, str], int]:
     """(model name, sequence name) -> compiled anim stream bytes.
 
@@ -72,70 +98,30 @@ def sequence_sizes(models: list[ModelInput]) -> dict[tuple[str, str], int]:
                 pose.rotation.x, pose.rotation.y, pose.rotation.z,
             ))
     nbones = len(defaults)
-    zero = (0.0,) * 6
 
-    # Pass 1: per bone-channel min/max delta over every sequence.
-    minv: dict[tuple[str, int], float] = {}
-    maxv: dict[tuple[str, int], float] = {}
-    for model in models:
-        for anim in model.anims.values():
-            names = {n.index: n.name for n in anim.nodes}
-            for frame in anim.frames:
-                for pose in frame.poses:
-                    name = names[pose.bone]
-                    dflt = defaults.get(name, zero)
-                    for c, value in enumerate((
-                        pose.position.x, pose.position.y, pose.position.z,
-                        pose.rotation.x, pose.rotation.y, pose.rotation.z,
-                    )):
-                        v = value - dflt[c]
-                        if c >= 3:
-                            v = _wrap(v)
-                        key = (name, c)
-                        floor = _POS_FLOOR if c < 3 else _ROT_FLOOR
-                        if v < minv.get(key, -floor):
-                            minv[key] = v
-                        elif v > maxv.get(key, floor):
-                            maxv[key] = v
+    # Pass 1: per bone-channel min/max delta over every sequence (floored).
+    deltas = [((model.name, seq), _channels(anim, defaults))
+              for model in models for seq, anim in model.anims.items()]
+    low: dict[str, np.ndarray] = {}
+    high: dict[str, np.ndarray] = {}
+    for _key, channels in deltas:
+        for name, delta in channels.items():
+            low[name] = np.minimum(low.get(name, -_FLOORS), delta.min(axis=0))
+            high[name] = np.maximum(high.get(name, _FLOORS), delta.max(axis=0))
+    scales = {name: np.where(-low[name] > high[name], low[name] / -32768.0,
+                             high[name] / 32767.0) for name in low}
 
-    scales: dict[tuple[str, int], float] = {}
-
-    def scale(name: str, c: int) -> float:
-        key = (name, c)
-        cached = scales.get(key)
-        if cached is None:
-            floor = _POS_FLOOR if c < 3 else _ROT_FLOOR
-            lo = minv.get(key, -floor)
-            hi = maxv.get(key, floor)
-            cached = lo / -32768.0 if -lo > hi else hi / 32767.0
-            scales[key] = cached
-        return cached
-
-    # Pass 2: quantize each sequence's channels and sum RLE sizes.
+    # Pass 2: quantize (C truncation toward zero) and sum the RLE sizes.
     sizes: dict[tuple[str, str], int] = {}
-    for model in models:
-        for seq_name, anim in model.anims.items():
-            names = {n.index: n.name for n in anim.nodes}
-            channels: dict[tuple[str, int], list[int]] = {}
-            for frame in anim.frames:
-                for pose in frame.poses:
-                    name = names[pose.bone]
-                    dflt = defaults.get(name, zero)
-                    for c, value in enumerate((
-                        pose.position.x, pose.position.y, pose.position.z,
-                        pose.rotation.x, pose.rotation.y, pose.rotation.z,
-                    )):
-                        v = value - dflt[c]
-                        if c >= 3:
-                            v = _wrap(v)
-                        channels.setdefault((name, c), []).append(
-                            int(v / scale(name, c))
-                        )
-            total = 12 * nbones
-            for values in channels.values():
-                total += rle_bytes(values)
-            sizes[(model.name, seq_name)] = total
+    for key, channels in deltas:
+        total = 12 * nbones
+        for name, delta in channels.items():
+            quantized = np.trunc(delta / scales[name]).astype(np.int64)
+            for c in range(6):
+                column = quantized[:, c]
+                if len(column) <= 255 and (column == column[0]).all():
+                    total += 0 if column[0] == 0 else 4  # one run: header + value
+                else:
+                    total += rle_bytes(column.tolist())
+        sizes[key] = total
     return sizes
-
-
-__all__ = ["SEQ_DATA_LIMIT", "rle_bytes", "sequence_sizes"]

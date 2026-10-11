@@ -123,6 +123,13 @@ def reparent_bone(smd: Smd, bone: str, new_parent: str | None) -> None:
     reparent_bones(smd, {bone: new_parent})
 
 
+def _depth(index: int, parent_of: dict[int, int]) -> int:
+    depth = 0
+    while parent_of[index] >= 0:
+        index, depth = parent_of[index], depth + 1
+    return depth
+
+
 def reparent_bones(smd: Smd, moves: dict[str, str | None]) -> None:
     """Move each bone of ``moves`` under its new parent (None: a root),
     keeping every world pose, per frame — one forward pass a frame for all
@@ -144,9 +151,26 @@ def reparent_bones(smd: Smd, moves: dict[str, str | None]) -> None:
                 raise ValueError(f"reparenting {name!r} under its own descendant")
             cursor, steps = parent_of[cursor], steps + 1
 
+    # the worlds needed: the moved bones' and their new parents' chains only
+    # (a full FK pass a frame was most of a pooled merge's time)
+    old_parent = {n.index: n.parent for n in smd.nodes}
+    needed: set[int] = set()
+    for index, parent_index in moved.items():
+        for start in (index, parent_index):
+            while start >= 0 and start not in needed:
+                needed.add(start)
+                start = old_parent[start]
+    order = [n.index for n in smd.nodes if n.index in needed]
+    order.sort(key=lambda i: _depth(i, old_parent))
     new_frames: list[Frame] = []
     for frame in smd.frames:
-        worlds = fk_worlds(smd, frame)
+        pose_of = {p.bone: p for p in frame.poses}
+        worlds: dict[int, Transform] = {}
+        for i in order:
+            pose = pose_of[i]
+            local = Transform.from_pos_euler(pose.position, pose.rotation)
+            parent = old_parent[i]
+            worlds[i] = local if parent < 0 else worlds[parent].compose(local)
         locals_: dict[int, BonePose] = {}
         for index, parent_index in moved.items():
             parent_world = worlds[parent_index] if parent_index >= 0 else _IDENTITY
@@ -260,6 +284,10 @@ def conform_to_table(
     desynchronise) and skinning breaks when reference tables differ.
     """
     present = {n.name for n in smd.nodes}
+    index_of = {n.name: n.index for n in smd.nodes}
+    next_index = max(index_of.values(), default=-1) + 1
+    grafted: list[Node] = []
+    poses: list[BonePose] = []
     for name, parent in table:
         if name in present:
             continue
@@ -267,38 +295,27 @@ def conform_to_table(
             raise ValueError(f"cannot graft {name!r}: parent {parent!r} missing")
         # A parentless bone is grafted as one more root (rigs with several
         # roots, e.g. merged zombie hands); its bind local is its world.
-        parent_index = (next(n.index for n in smd.nodes if n.name == parent)
-                        if parent is not None else -1)
-        index = max((n.index for n in smd.nodes), default=-1) + 1
-        smd.nodes = [*smd.nodes, Node(index, name, parent_index)]
+        grafted.append(Node(next_index, name, index_of[parent] if parent is not None else -1))
         pos, rot = bind_locals[name]
-        smd.frames = [
-            Frame(f.time, (*f.poses, BonePose(index, pos, rot)))
-            for f in smd.frames
-        ]
+        poses.append(BonePose(next_index, pos, rot))
+        index_of[name] = next_index
+        next_index += 1
         present.add(name)
+    if grafted:  # one pass over the frames for all of them
+        smd.nodes = [*smd.nodes, *grafted]
+        extra = tuple(poses)
+        smd.frames = [Frame(f.time, (*f.poses, *extra)) for f in smd.frames]
 
     # Enforce the table's parentage EXACTLY (per-frame re-solve) before the
     # reorder below stamps it structurally: pooling may hand a model a slot
     # whose canonical parent the model never carried (prior-art rule; the
-    # parent was just grafted above). Rooting first breaks any transient
-    # cycle; both moves preserve every world transform.
-    current_parent = {
-        n.name: next((p.name for p in smd.nodes if p.index == n.parent), None)
-        for n in smd.nodes
-    }
-    for name, parent in table:
-        if current_parent.get(name) == parent:
-            continue
-        try:
-            reparent_bone(smd, name, parent)
-        except ValueError:
-            reparent_bone(smd, name, None)
-            reparent_bone(smd, name, parent)
-        current_parent = {
-            n.name: next((p.name for p in smd.nodes if p.index == n.parent), None)
-            for n in smd.nodes
-        }
+    # parent was just grafted above). All moves at once, one forward pass a
+    # frame: every world transform is kept, and the result is the table's
+    # own tree, so no cycle can remain.
+    name_of = {n.index: n.name for n in smd.nodes}
+    current_parent = {n.name: name_of.get(n.parent) for n in smd.nodes}
+    reparent_bones(smd, {name: parent for name, parent in table
+                         if current_parent.get(name) != parent})
 
     # Reorder to the exact global table.
     order = [name for name, _ in table]

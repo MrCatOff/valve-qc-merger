@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from valve_qc_merger import workers
 from valve_qc_merger.merge_view.discovery import (
     MergeViewError,
     discover_models,
@@ -15,10 +16,11 @@ from valve_qc_merger.merge_view.merger import write_manifest_data
 from valve_qc_merger.merge_zhands.merger import (
     BONE_LIMIT,
     VERTEX_LIMIT,
-    ZhandsError,
+    ZhandsReport,
     hands_size,
     merge_zhands,
     split_zombies,
+    zombie_of,
 )
 from valve_qc_merger.services.base import (
     EXIT_DISCOVERY,
@@ -89,7 +91,17 @@ def run_merge_zhands(opts: MergeZhandsOptions,
             result.exit_code = EXIT_DISCOVERY
         return result
     reporter.check()
-    parts = split_zombies(models, opts.grenade_prefix)
+    zombies = len({zombie_of(m.name) for m in models})
+    reporter.log(f"  splitting {len(models)} model(s) of {zombies} zombie(s) into parts "
+                 "(bones pooled, 64K a sequence: each check merges the run on trial)")
+
+    def split_log(message: str) -> None:
+        reporter.check()
+        reporter.log(message)
+
+    parts = split_zombies(
+        models, opts.grenade_prefix, log=split_log,
+        progress=lambda done, total: reporter.progress(done, total, "splitting into parts"))
     multi = len(parts) > 1
     if multi:
         reporter.log(f"  split: {len(parts)} parts (studiomdl keeps {BONE_LIMIT} bones "
@@ -98,21 +110,20 @@ def run_merge_zhands(opts: MergeZhandsOptions,
     result.data["hands"] = []
     aggregate: dict[str, dict[str, object]] = {}
     passed_all = True
+    names = [(f"{opts.name}_p{n}" if multi else opts.name,
+              opts.out / f"p{n}" if multi else opts.out) for n in range(1, len(parts) + 1)]
     for number, part in enumerate(parts, 1):
-        reporter.check()
-        reporter.progress(number - 1, len(parts), f"part {number}")
-        part_name = f"{opts.name}_p{number}" if multi else opts.name
-        part_out = opts.out / f"p{number}" if multi else opts.out
-        try:
-            report = merge_zhands(
-                part, part_out, part_name,
-                grenade_prefix=opts.grenade_prefix,
-                grenade_texture=opts.grenade_texture,
-                manifest_format=opts.manifest_format,
-            )
-        except ZhandsError as exc:
-            reporter.log(f"error: {exc}")
-            result.failures.append(str(exc))
+        reporter.log(f"  part {number}/{len(parts)}: {len(part)} model(s)")
+    # the parts are independent: merged side by side, one a worker
+    reports = workers.processes(
+        [(_merge_part, (part, part_out, part_name, opts.grenade_prefix,
+                        opts.grenade_texture, opts.manifest_format))
+         for part, (part_name, part_out) in zip(parts, names, strict=True)],
+        workers=workers.count(None), reporter=reporter, label="merging parts")
+    for (part_name, part_out), report in zip(names, reports, strict=True):
+        if isinstance(report, Exception):
+            reporter.log(f"error: {report}")
+            result.failures.append(str(report))
             result.exit_code = EXIT_FAIL
             return result
         for warning in report.warnings:
@@ -140,6 +151,14 @@ def run_merge_zhands(opts: MergeZhandsOptions,
     ship_standalone(rejects, opts.out, opts.manifest_format, result, reporter)
     result.exit_code = EXIT_OK if passed_all and not result.failures else EXIT_FAIL
     return result
+
+
+def _merge_part(part: list, part_out: Path, part_name: str, grenade_prefix: str,
+                grenade_texture: str | None, manifest_format: str, *,
+                reporter: object = None) -> ZhandsReport:
+    """One part's merge, in a worker process."""
+    return merge_zhands(part, part_out, part_name, grenade_prefix=grenade_prefix,
+                        grenade_texture=grenade_texture, manifest_format=manifest_format)
 
 
 __all__ = ["MergeZhandsOptions", "run_merge_zhands"]
