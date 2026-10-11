@@ -49,6 +49,8 @@ FALLBACK_ARM_DIR = np.array([0.0, 8.0, -6.0])  # behind and below the view
 # forearm (elbow) moves.
 WRIST_KEEP = 0.5
 NATURAL_WRIST = True
+# keep the shoulder off screen (see _hidden_shoulder)
+HIDE_SHOULDERS = True
 WRIST_NATIVE = {  # side: ((pitch median, lo, hi), (yaw median, lo, hi))
     "left": ((-1.1, -32.3, 21.9), (-0.4, -28.6, 26.3)),
     "right": ((12.3, -46.5, 38.2), (-6.3, -29.9, 51.1)),
@@ -471,6 +473,86 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                            for o, c, k in sp.finger_k]
 
 
+# The view in SMD space: eye at the origin, forward -Y, up +Z (studiomdl
+# turns SMD data +90 deg about Z into the engine's +X-forward model space).
+# A shoulder must stay out of it: widescreen Hor+ shows ~106 deg across.
+VIEW_NEAR = 4.0  # the engine's near clip
+VIEW_TAN_H = float(np.tan(np.radians(56.0)))
+VIEW_TAN_V = float(np.tan(np.radians(41.0)))
+SHOULDER_RADIUS = 3.0  # the upper arm's thickness, and the cap past its head
+SHOULDER_ANCHOR = np.array([8.0, 3.0, -10.0])  # the player's shoulder (x mirrored a side)
+MAX_SHOULDER_BEND = float(np.radians(60.0))  # sharper folds the elbow's skin over
+
+
+def _on_screen(point: np.ndarray) -> bool:
+    depth = -point[1]
+    return bool(depth > VIEW_NEAR and abs(point[0]) < depth * VIEW_TAN_H
+                and abs(point[2]) < depth * VIEW_TAN_V)
+
+
+def _shoulder_seen(shoulder: np.ndarray, up_dir: np.ndarray) -> bool:
+    """Any of the shoulder's cap (head, past it, around it) on screen."""
+    helper = np.array([0.0, 0.0, 1.0]) if abs(up_dir[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    a = normalized(np.cross(up_dir, helper))
+    b = np.cross(up_dir, a)
+    points = [shoulder, shoulder + up_dir * SHOULDER_RADIUS]
+    points += [shoulder + SHOULDER_RADIUS * v for v in (a, -a, b, -b)]
+    return any(_on_screen(p) for p in points)
+
+
+def _slerp_dir(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
+    angle = float(np.arccos(np.clip(np.dot(a, b), -1.0, 1.0)))
+    if angle < 1e-6:
+        return a
+    return normalized((np.sin((1 - t) * angle) * a + np.sin(t * angle) * b)
+                      / np.sin(angle))
+
+
+def _hidden_shoulder(elbow: np.ndarray, d: np.ndarray, upper_len: float) -> np.ndarray:
+    """The shoulder for an elbow: straight on along the forearm line ``d``
+    (elbow -> shoulder) when that is off screen — else the upper arm bends at
+    the elbow just as far as it takes to leave the view: the least bend of
+    those toward the player's own shoulder (behind the eye, below, on the
+    arm's side), straight down, outward and back. Bone lengths stay (hand
+    bones only rotate); the forearm and hand — the grip — do not move."""
+    shoulder = elbow + d * upper_len
+    if not _shoulder_seen(shoulder, d):
+        return shoulder
+    side = 1.0 if elbow[0] >= 0 else -1.0
+    targets = [SHOULDER_ANCHOR * np.array([side, 1.0, 1.0]) - elbow,
+               np.array([0.0, 0.0, -1.0]), np.array([side, 0.0, 0.0]),
+               np.array([0.0, 1.0, 0.0]), np.array([side, 0.0, -1.0])]
+    best: tuple[float, np.ndarray] | None = None
+    fallback = None
+    for target in targets:
+        if np.linalg.norm(target) < 1e-6:
+            continue
+        toward = normalized(target)
+        span = float(np.arccos(np.clip(np.dot(d, toward), -1.0, 1.0)))
+        limit = 1.0 if span <= MAX_SHOULDER_BEND else MAX_SHOULDER_BEND / span
+        toward = _slerp_dir(d, toward, limit)  # no further than the elbow folds
+        fallback = fallback if fallback is not None else toward
+        if _shoulder_seen(elbow + toward * upper_len, toward):
+            continue
+        low, high = 0.0, 1.0  # least bend toward this that hides it
+        for _ in range(16):
+            mid = (low + high) / 2
+            u = _slerp_dir(d, toward, mid)
+            if _shoulder_seen(elbow + u * upper_len, u):
+                low = mid
+            else:
+                high = mid
+        u = _slerp_dir(d, toward, high)
+        angle = float(np.arccos(np.clip(np.dot(u, d), -1.0, 1.0)))
+        if best is None or angle < best[0]:
+            best = (angle, u)
+    if best is not None:
+        return elbow + best[1] * upper_len
+    # nothing within the fold hides it: as far toward the player's shoulder
+    # as the elbow folds (most of the cap leaves the view)
+    return elbow + (fallback if fallback is not None else d) * upper_len
+
+
 def solve_frame(plan: RetargetPlan,
                 world: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """World matrices for every driven CSO bone at one frame.
@@ -509,7 +591,8 @@ def solve_frame(plan: RetargetPlan,
         upper_len = float(np.linalg.norm(e_rest - s_rest))
 
         elbow = w_target + d * fore_chord
-        shoulder = w_target + d * (fore_chord + upper_len)
+        shoulder = (_hidden_shoulder(elbow, d, upper_len) if HIDE_SHOULDERS
+                    else w_target + d * (fore_chord + upper_len))
 
         # forearm assembly: aim the elbow->wrist chord, then take the
         # twist of the desired hand rotation about the chord
