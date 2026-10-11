@@ -23,7 +23,7 @@ def _tri(material: str, bone: int, x: float) -> Triangle:
 
 
 def _write_model(root: Path, name: str, *, grenade: bool, hand_root: str,
-                 render: str = "") -> None:
+                 render: str = "", mouth: float | None = None) -> None:
     # Hands: <hand_root> -> Bone_Lefthand; grenade rig Bone_Root under the hand.
     directory = root / name
     (directory / "anims").mkdir(parents=True)
@@ -34,6 +34,10 @@ def _write_model(root: Path, name: str, *, grenade: bool, hand_root: str,
         nodes.append(Node(2, "Bone_Root", 1))
         poses.append(BonePose(2, Vector3(1.0, 0.0, 0.0), ZERO))
         triangles.append(_tri("frogbomb.bmp", 2, 20.0))
+        if mouth is not None:  # a second grenade bone: where it sits is the rig
+            nodes.append(Node(3, "Bone_Mouth", 2))
+            poses.append(BonePose(3, Vector3(mouth, 0.0, 0.0), ZERO))
+            triangles.append(_tri("frogbomb.bmp", 3, 30.0))
     mesh = Smd(nodes=nodes, frames=[Frame(0, tuple(poses))], triangles=triangles)
     (directory / "ref.smd").write_text(write_smd_text(mesh), encoding="latin-1")
     moved = [BonePose(p.bone, Vector3(p.position.x, p.position.y + 1.0, 0.0), ZERO)
@@ -134,3 +138,24 @@ def test_project_build_stages_claws_under_zhands_names(tmp_path: Path) -> None:
     assert "v_smoker" in manifest and "v_smoker_knife" not in manifest
     assert any("v_smoker: no grenade" in n or "v_smoker_grenade" in n
                for n in reporter.lines + result.warnings)
+
+
+def test_grenades_of_different_rigs_get_an_entry_each(tmp_path: Path) -> None:
+    # v_boomer_grenade: the shared frog mesh drawn by another rig's animation
+    # was torn apart — each grenade rig is its own entry of the grenade group
+    src = tmp_path / "in"
+    _write_model(src, "v_alpha_grenade", grenade=True, hand_root="Bone01", mouth=1.0)
+    _write_model(src, "v_beta_grenade", grenade=True, hand_root="Bone01", mouth=3.0)
+    _write_model(src, "v_gamma_grenade", grenade=True, hand_root="Bone01", mouth=1.0)
+    models = [load_model(d) for d in sorted(src.iterdir())]
+    out = tmp_path / "out"
+    report = merge_zhands(models, out, "v_zh")
+    assert all(passed for _c, passed, _d in report.gate), report.gate
+    qc = (out / "v_zh.qc").read_text(encoding="latin-1")
+    assert '\tstudio "grenade/grenade"' in qc and '\tstudio "grenade/grenade2"' in qc
+    assert '\tstudio "grenade/grenade3"' not in qc  # alpha and gamma share a rig
+    # grenade group {blank, rig 1, rig 2} is the low digit: stride 3
+    hands = {stem: (body // 3) - 1 for stem, body in report.pev_body.items()}
+    grenade = {stem: body % 3 for stem, body in report.pev_body.items()}
+    assert grenade == {"v_alpha_grenade": 1, "v_beta_grenade": 2, "v_gamma_grenade": 1}
+    assert min(hands.values()) >= 0

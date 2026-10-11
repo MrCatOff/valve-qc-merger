@@ -43,6 +43,7 @@ from valve_qc_merger.merge_view.skeleton_ops import fk_worlds, rename_bones
 from valve_qc_merger.models.smd import Frame, Smd, Triangle
 from valve_qc_merger.parsers.smd import parse_smd_file
 from valve_qc_merger.retarget.correspondence import CorrespondenceError
+from valve_qc_merger.transform import Transform
 from valve_qc_merger.writers.smd import write_smd_text
 
 BONE_LIMIT = 127
@@ -387,6 +388,40 @@ def _restage(smd: Smd, zm: ZombieModel, stage: _TextureStage) -> Smd:
     ])
 
 
+RIG_TOLERANCE = 0.05  # units / radians-ish: decompiled re-exports differ by ~1e-4
+
+
+def _grenade_rig(zm: ZombieModel) -> dict[str, Transform]:
+    """The grenade's bones in its root's frame, at the mesh's bind."""
+    smd = zm.grenade
+    worlds = fk_worlds(smd, smd.frames[0])
+    name_of = {n.index: n.name for n in smd.nodes}
+    parent_of = {n.index: n.parent for n in smd.nodes}
+    gren = [i for i, n in name_of.items() if n.startswith(GRENADE_PREFIX)]
+    roots = [i for i in gren if parent_of[i] not in gren]
+    if not roots:
+        return {}
+    inverse = worlds[min(roots, key=lambda i: name_of[i])].inverse()
+    return {name_of[i]: inverse.compose(worlds[i]) for i in gren}
+
+
+def _same_grenade_rig(a: ZombieModel, b: ZombieModel) -> bool:
+    """Can ``b``'s grenade animation draw ``a``'s grenade mesh untorn: the
+    same grenade bones, placed alike relative to the grenade's root."""
+    ra, rb = _grenade_rig(a), _grenade_rig(b)
+    if set(ra) != set(rb):
+        return False
+    for name, xa in ra.items():
+        xb = rb[name]
+        ta, tb = xa.translation, xb.translation
+        if max(abs(ta.x - tb.x), abs(ta.y - tb.y), abs(ta.z - tb.z)) > RIG_TOLERANCE:
+            return False
+        if max(abs(x - y) for row_a, row_b in zip(xa.rotation, xb.rotation, strict=True)
+               for x, y in zip(row_a, row_b, strict=True)) > RIG_TOLERANCE:
+            return False
+    return True
+
+
 def _hands_label(members: list[ZombieModel]) -> str:
     zombies = {m.zombie for m in members}
     roles = {m.role for m in members}
@@ -514,9 +549,24 @@ class _PoolBones:
     def __init__(self, models_in: list[ModelInput], grenade_prefix: str) -> None:
         self.tables: dict[str, dict[str, str | None]] = {}
         self.shared: dict[str, set[str]] = {}
+        self.rig: dict[str, int] = {}  # model -> its grenade rig (-1: none)
+        rigs: list[ZombieModel] = []
         for model_in, zm in zip(models_in, _prepared(models_in, grenade_prefix),
                                 strict=True):
             self.tables[model_in.name], self.shared[model_in.name] = _pool_table(zm)
+            if zm.grenade is None:
+                self.rig[model_in.name] = -1
+                continue
+            home = next((i for i, r in enumerate(rigs) if _same_grenade_rig(r, zm)), None)
+            if home is None:
+                rigs.append(zm)
+                home = len(rigs) - 1
+            self.rig[model_in.name] = home
+
+    def body_fits(self, models_in: list[ModelInput]) -> bool:
+        """pev_body (grenade rigs + 1) x (hands + 1) within a view model's byte."""
+        grenades = len({self.rig[m.name] for m in models_in} - {-1})
+        return (grenades + 1) * (len(models_in) + 1) <= limits.VIEW_BODY_VALUES
 
     def __call__(self, models_in: list[ModelInput]) -> int:
         from valve_qc_merger.merge_view.bonepool import plan_pool
@@ -569,7 +619,8 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
     def fits_bones(start: int, end: int) -> bool:
         trial = run(start, end)
         # one hands entry per model at most, plus the grenade group's two
-        return len(trial) <= hands_limit() and pool_bones_of(trial) <= limit
+        return (len(trial) <= hands_limit() and pool_bones_of.body_fits(trial)
+                and pool_bones_of(trial) <= limit)
 
     def fits(start: int, end: int) -> bool:
         trial = run(start, end)
@@ -698,34 +749,52 @@ def merge_zhands(
         hand_entries.append((label, mesh))
     report.hands = [label for label, _ in hand_entries]
 
-    # Grenade: ONE mesh for everyone (the requested texture, else the most
-    # common grenade geometry).
+    # Grenades: one mesh for every model with the same grenade RIG (the
+    # requested texture, else the most common geometry among them). A mesh
+    # drawn by another rig's animation is torn apart (CSO zombie bombs share
+    # the frog mesh on 13 differently placed skeletons), so each rig of the
+    # part is one more entry of the grenade group.
     carriers = [zm for zm in models if zm.grenade is not None]
-    grenade_path: str | None = None
-    if carriers:
+    variants: list[list[ZombieModel]] = []
+    for zm in carriers:
+        home = next((v for v in variants if _same_grenade_rig(v[0], zm)), None)
+        if home is None:
+            variants.append([zm])
+        else:
+            home.append(zm)
+    grenade_paths: list[str] = []
+    grenade_index: dict[str, int] = {}
+    chosen_from: list[str] = []
+    for number, members in enumerate(variants, 1):
         chosen = None
         if grenade_texture is not None:
-            chosen = next((zm for zm in carriers if any(
+            chosen = next((zm for zm in members if any(
                 t.material.lower() == grenade_texture.lower()
                 for t in zm.grenade.triangles)), None)
-            if chosen is None:
-                report.warnings.append(
-                    f"no grenade uses texture {grenade_texture!r}; "
-                    "using the most common grenade")
         if chosen is None:
-            chosen = max(carriers, key=lambda c: sum(
-                _same_mesh(c.grenade, other.grenade, {}, {}) for other in carriers))
-        report.grenade_from = chosen.stem
+            chosen = max(members, key=lambda c: sum(
+                _same_mesh(c.grenade, other.grenade, {}, {}) for other in members))
+        chosen_from.append(chosen.stem)
         mesh = _restage(chosen.grenade, chosen, stage)
+        stem = "grenade" if number == 1 else f"grenade{number}"
         (out_dir / "grenade").mkdir(exist_ok=True)
-        (out_dir / "grenade" / "grenade.smd").write_text(
+        (out_dir / "grenade" / f"{stem}.smd").write_text(
             write_smd_text(mesh), encoding="latin-1")
-        grenade_path = "grenade/grenade"
-        for zm in carriers:
+        grenade_paths.append(f"grenade/{stem}")
+        for zm in members:
+            grenade_index[zm.stem] = number
             if not _same_mesh(chosen.grenade, zm.grenade, {}, {}):
                 report.warnings.append(
                     f"{zm.stem}: its own grenade mesh is replaced by "
-                    f"{chosen.stem}'s shared grenade")
+                    f"{chosen.stem}'s (the same grenade rig)")
+    if grenade_texture is not None and carriers and not any(
+            t.material.lower() == grenade_texture.lower()
+            for zm in carriers for t in zm.grenade.triangles):
+        report.warnings.append(f"no grenade uses texture {grenade_texture!r}; "
+                               "using the most common grenade of each rig")
+    if len(variants) > 1:
+        report.warnings.append(f"{len(variants)} grenade rigs: one grenade entry each")
+    report.grenade_from = ", ".join(chosen_from) if chosen_from else None
     report.textures = len(stage.taken)
 
     # Sequences (deduped by content + fps + events + loop).
@@ -754,7 +823,8 @@ def merge_zhands(
     report.sequences = len(order)
 
     # Budgets.
-    submodels = 1 + len(hand_entries) + (2 if grenade_path else 0)  # hands lead blank
+    grenades = len(grenade_paths)
+    submodels = 1 + len(hand_entries) + (1 + grenades if grenades else 0)  # blanks lead
     if submodels > limits.submodels():
         raise ZhandsError(f"{submodels} submodels exceed studiomdl's {limits.submodels()}")
     if report.sequences > SEQUENCE_LIMIT:
@@ -764,19 +834,24 @@ def merge_zhands(
     if report.textures > TEXTURE_LIMIT:
         report.warnings.append(f"{report.textures} textures (> {TEXTURE_LIMIT})")
 
-    # The 2-entry grenade group comes FIRST, so it is the low bit:
-    # pev_body = grenade_on + 2 * (hands + 1) (knife and grenade of one zombie are
-    # n and n | 1, the same convention as merge-v --shared-hands).
-    grenade_stride = 2 if grenade_path else 1
+    # The grenade group (blank + one entry a grenade rig) comes FIRST, so it
+    # is the low digit: pev_body = grenade + (grenades + 1) * (hands + 1) —
+    # with one rig grenade_on + 2 * (hands + 1): a zombie's knife and grenade
+    # are n and n | 1, the same convention as merge-v --shared-hands.
+    grenade_stride = grenades + 1
+    if grenade_stride * (len(hand_entries) + 1) > limits.VIEW_BODY_VALUES:
+        raise ZhandsError(
+            f"{grenades} grenade rigs x {len(hand_entries)} hands need pev_body up to "
+            f"{grenade_stride * (len(hand_entries) + 1) - 1} (a view model's body is a byte)")
     for zm in models:
-        grenade_on = 1 if (zm.role == "grenade" and grenade_path) else 0
+        grenade = grenade_index.get(zm.stem, 0) if zm.role == "grenade" else 0
         # +1: the hands group leads with a blank (pev_body 0 draws nothing:
         # the client prediction shows nothing until the plugin sets the body)
-        report.pev_body[zm.stem] = grenade_on + grenade_stride * (hand_index[zm.stem] + 1)
+        report.pev_body[zm.stem] = grenade + grenade_stride * (hand_index[zm.stem] + 1)
 
     lines = [
         "// Generated by valve-qc-merger merge-zhands: zombie hands + one",
-        "// shared grenade; pev_body = grenade_on + 2 * (hands + 1); 0 draws nothing.",
+        "// grenade a rig; pev_body = grenade + (grenades + 1) * (hands + 1); 0 draws nothing.",
         "",
         f'$modelname "{name}.mdl"',
         '$cd "."',
@@ -789,9 +864,9 @@ def merge_zhands(
         lines.append(f'$texrendermode "{texture}" {mode}')
     if stage.modes:
         lines.append("")
-    if grenade_path:
+    if grenade_paths:
         lines += ['$bodygroup "grenade"', "{", "\tblank",
-                  f'\tstudio "{grenade_path}"', "}"]
+                  *(f'\tstudio "{path}"' for path in grenade_paths), "}"]
     lines += ['$bodygroup "hands"', "{", "\tblank"]
     lines += [f'\tstudio "hands/{label}"' for label, _ in hand_entries]
     lines += ["}"]

@@ -1,8 +1,9 @@
 # merge-zhands
 
 Merge CSO zombie hand view models into ONE model: every zombie's claws as a
-`hands` bodygroup and the frog grenade as a single shared `grenade`
-bodygroup.
+`hands` bodygroup and the frog grenade as a `grenade` bodygroup — one entry
+for every grenade rig of the part (models whose grenade bones sit alike share
+one mesh; a mesh drawn by another rig's animation is torn apart).
 
 ```sh
 # 1. decompile the .mdl files yourself (the command never calls a decompiler)
@@ -32,15 +33,18 @@ into `maps_8bit/` under the name the SMDs use before merging.
 
 ```
 out/zhands/
-  v_zhands.qc      $bodygroup "grenade" { blank, grenade } + $bodygroup "hands" { ... }
+  v_zhands.qc      $bodygroup "grenade" { blank, grenade, grenade2 … } + $bodygroup "hands" { ... }
   hands/<entry>.smd   one per distinct hand mesh
-  grenade/grenade.smd the shared grenade
+  grenade/grenade*.smd one per grenade rig
   v_<zombie>_<role>/  that model's sequences
   *.bmp, models.ini
 ```
 
-`pev_body = grenade_on + 2 * (hands_index + 1)`: the grenade group comes first,
-so it is the low bit — a zombie's knife and grenade are `n` and `n | 1`; the
+`pev_body = grenade + (grenades + 1) * (hands_index + 1)`, `grenade` = 0 for a
+knife, the model's grenade entry (1…) for a grenade; with one grenade rig that
+is `grenade_on + 2 * (hands_index + 1)` — a zombie's knife and grenade are `n`
+and `n | 1`. Parts are split so this stays under 256 (a view model's body is
+a byte). The
 hands group (like the grenade group) leads with a `blank`, so `pev_body 0`
 draws nothing (the client's prediction shows nothing until the plugin sets
 the body). `models.ini` gives each
