@@ -60,6 +60,7 @@ def test_derive_swap_with_weapon_offset_then_rerun(project: Project) -> None:
     reopened = Project.open(project.root)
     derived = dict(reopened.assets[base.name].derived)
     assert derived.pop("at") > 0  # when it was made (staleness)
+    assert derived.pop("revision") >= 2  # which retarget made it
     assert derived == {"from": "v_anaconda", "mode": "hands",
                        "options": {"weapon_offset": [0.0, 0.0, 1.0]}}
 
