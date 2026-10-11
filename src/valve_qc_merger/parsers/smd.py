@@ -74,6 +74,30 @@ def parse_smd_file(path: str | Path) -> Smd:
     return parse_smd_text(Path(path).read_text(encoding="latin-1"))
 
 
+def parse_smd_head(path: str | Path, triangles: int = 0) -> Smd:
+    """The nodes, skeleton and first ``triangles`` triangles of an SMD file,
+    reading no further (a mesh's bones, or a quick look at its first
+    vertices, without parsing its thousands of triangles)."""
+    kept: list[str] = []
+    with open(path, encoding="latin-1") as handle:
+        inside, count = False, 0
+        for line in handle:
+            if inside:
+                text = line.strip()
+                if text == "end" or count >= triangles * 4:
+                    break
+                if text:
+                    count += 1
+            elif line.strip() == "triangles":
+                if not triangles:
+                    break
+                inside = True
+            kept.append(line)
+    if inside:
+        kept.append("end\n")
+    return parse_smd_text("".join(kept))
+
+
 def _parse_nodes(lines: list[str], index: int) -> tuple[list[Node], int]:
     nodes: list[Node] = []
     total = len(lines)
@@ -195,4 +219,4 @@ def _parse_vertex_line(raw: str) -> Vertex:
     )
 
 
-__all__ = ["SmdParseError", "parse_smd_file", "parse_smd_text"]
+__all__ = ["parse_smd_head", "SmdParseError", "parse_smd_file", "parse_smd_text"]

@@ -1859,11 +1859,11 @@ _STUDIO_BONES = 127  # studiomdl refuses a model using 128 ("used 128, max 128")
 
 def _mesh_bones(folder: Path) -> int:
     """Bones of a decompiled model's fullest mesh (its SMDs beside the QC)."""
-    from valve_qc_merger.parsers.smd import parse_smd_file
+    from valve_qc_merger.parsers.smd import parse_smd_head
     counts = [0]
     for smd in folder.glob("*.smd"):
         try:
-            counts.append(len(parse_smd_file(smd).nodes))
+            counts.append(len(parse_smd_head(smd).nodes))  # the nodes block only
         except (OSError, ValueError):
             continue
     return max(counts)

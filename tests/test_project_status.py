@@ -155,3 +155,20 @@ def test_long_plan_lists_do_not_stretch_the_panel() -> None:
     panel.failures.setText(long)
     assert panel.plan_rejected.text() == long
     assert panel.minimumSizeHint().height() <= before + 320  # two capped lists at most
+
+
+def test_hand_verdicts_are_remembered_until_the_meshes_change(project: Project,
+                                                              monkeypatch) -> None:
+    from valve_qc_merger.project import status as statusmod
+    project_status(project)  # fills .cache/hands.json
+    assert (project.root / statusmod.HANDS_CACHE).exists()
+    calls: list[Path] = []
+    monkeypatch.setattr(statusmod, "wears_our_hands",
+                        lambda d: calls.append(d) or False)
+    assert project_status(project)["v_anaconda_hands"].hands == "ours"  # cached
+    assert calls == []
+    smd = project.asset_dir("v_anaconda_hands") / "hands.smd"
+    later = time.time() + 20
+    os.utime(smd, (later, later))  # a changed mesh is checked again
+    assert project_status(project)["v_anaconda_hands"].hands == "own"
+    assert calls == [project.asset_dir("v_anaconda_hands")]

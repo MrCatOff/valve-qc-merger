@@ -132,6 +132,24 @@ def _reference_shape(reference: Path) -> HandShape:
     return _REFERENCES[key]
 
 
+HEAD_TRIANGLES = 24  # compared before anything else is read
+
+
+def _head_matches(path: Path, want: HandShape, tol: float) -> bool:
+    """The first triangles of ``path`` sit where the reference's do: a CSO
+    hand mesh with the reference's triangle count but its own rig (most of
+    a CSO corpus) is told apart without parsing the whole file."""
+    from valve_qc_merger.parsers.smd import parse_smd_head
+    try:
+        head = hand_shape(parse_smd_head(path, HEAD_TRIANGLES))
+    except Exception:  # noqa: BLE001 - unreadable: the full check decides
+        return True
+    count = len(head.local)
+    if not count or count > len(want.local):
+        return False
+    return float(np.abs(head.local - want.local[:count]).max()) <= tol
+
+
 def smd_is_reference(path: Path, reference: Path, tol: float = TOLERANCE) -> bool:
     """Is the SMD at ``path`` the ``reference`` hand mesh (bone-local, names
     ignored)? Cached by file time and size; files with another triangle
@@ -145,7 +163,7 @@ def smd_is_reference(path: Path, reference: Path, tol: float = TOLERANCE) -> boo
     if key not in _VERDICTS:
         want = _reference_shape(reference)
         verdict = False
-        if triangle_count(path) * 3 == len(want.local):
+        if _head_matches(path, want, tol) and triangle_count(path) * 3 == len(want.local):
             try:
                 verdict = local_distance(hand_shape(parse_smd_file(path)), want) <= tol
             except Exception:  # noqa: BLE001 - an unreadable mesh is not our hands
