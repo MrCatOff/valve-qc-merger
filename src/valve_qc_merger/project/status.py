@@ -26,6 +26,7 @@ class AssetStatus:
     hands: str | None = None  # "ours" | "own" (view models only)
     stale: bool = False  # derived, and the source changed since
     outdated: bool = False  # swap hands made by an older retarget
+    checks: list[str] = field(default_factory=list)  # the retarget check's warnings
     builds: list[str] = field(default_factory=list)  # builds that take it
     problems: list[str] = field(default_factory=list)  # "<build>: <failure>"
     replaced: list[str] = field(default_factory=list)  # "<build>: by <asset>"
@@ -49,6 +50,7 @@ class AssetStatus:
             out.append("source changed since this was made: Re-run retarget")
         if self.outdated:
             out.append("made by an older retarget: Re-run retarget (builds re-make it)")
+        out += [f"▲ {c}" for c in self.checks]
         out += [f"✗ {p}" for p in self.problems]
         out.append(f"in builds: {', '.join(self.builds)}" if self.builds else "in no build")
         out += [f"left out of {r} (same weapon on our hands)" for r in self.replaced]
@@ -181,6 +183,9 @@ def project_status(project: Project) -> dict[str, AssetStatus]:
         if asset.kind == "v":
             status.hands = "ours" if ours[name] else "own"
         status.outdated = outdated_swap(asset)
+        audit = (asset.derived or {}).get("audit") or {}
+        status.problems += [f"retarget check: {p}" for p in audit.get("problems", [])]
+        status.checks = list(audit.get("warnings", []))
         derived = asset.derived
         if derived and derived.get("from") in project.assets:
             made = float(derived.get("at") or 0.0) or edited(name)

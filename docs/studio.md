@@ -580,6 +580,31 @@ successful compile* checked, Compile (and Run and compile) deploys by itself.
 the include, `.res`, ReChecker rules and versioned names (see
 [server.md](server.md)).
 
+### Retarget check
+
+Every swap-hands result is checked against its original as it is made, every
+frame of every sequence, the way the player sees it (eye at the origin, a
+widescreen view) — `handswap/audit.py`, no GPU:
+
+- **weapon** — the kept weapon geometry must not move (✕ if it strays);
+- **jumps** — an arm bone that suddenly moves much more than in the frames
+  around it while the original wrist does not (✕: an elbow flipping, a
+  shoulder hopping);
+- **fit** — our hand's skin against the original hand's surface (▲ over
+  0.45 u on average; arms are excluded, ours are longer by design);
+- **shoulder** — frames with our upper arm's end in view (▲).
+
+The verdict is kept in the asset (`derived.audit`) and shown in its status:
+✕ lines make the dot red, ▲ lines are listed in the tooltip. **Asset ▸ Check
+retargets** re-checks the selected swap-hands results (all of them when
+none is selected) in the background; **Asset ▸ Compare with original…** shows
+a swap-hands result (or the source's) beside its original, frame by frame —
+the original on top, ours below. `project audit MyPack` does the same check
+from the command line (exit code 2 when any result has a ✕ problem).
+
+Swap-hands assets also carry the retarget's `revision`: one made by an older
+retarget shows ▲ *made by an older retarget* and builds re-make it.
+
 ## Command line (project)
 
 Everything the window does with builds also runs without it — from a script,
@@ -593,6 +618,7 @@ valve-qc-merger project build   MyPack [view ...] --compile --deploy
 valve-qc-merger project compile MyPack view
 valve-qc-merger project deploy  MyPack                 # builds/<name>/cstrike -> game folder
 valve-qc-merger project package MyPack --out pkg/      # like Build ▸ Export server package
+valve-qc-merger project audit   MyPack [v_x_hands ...] # check swap-hands results (--json FILE)
 ```
 
 No build names: every build. `--studiomdl` and `--game-dir` override the
@@ -607,7 +633,7 @@ Inspector ▸ Overview ▸ Status):
 
 | dot | meaning |
 |---|---|
-| red | its last build run failed or rejected it (multi-part, other hands, failed retarget) |
+| red | its last build run failed or rejected it (multi-part, other hands, failed retarget), or the retarget check found a problem |
 | orange | derived, and its source changed since (re-run it) |
 | green | a view model on our hands (ready for shared-hands merges) |
 | grey | a view model with its own hands (not retargeted yet) |

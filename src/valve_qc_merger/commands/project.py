@@ -3,6 +3,7 @@ run, compile, deploy and package its builds from a script, CI or a server.
 
     valve-qc-merger project info    PROJECT
     valve-qc-merger project normalize PROJECT
+    valve-qc-merger project audit   PROJECT [ASSET ...] [--json FILE]
     valve-qc-merger project build   PROJECT [BUILD ...] [--compile] [--deploy]
     valve-qc-merger project compile PROJECT [BUILD ...] [--deploy]
     valve-qc-merger project deploy  PROJECT [BUILD ...]
@@ -64,7 +65,7 @@ class ProjectCommand(Command):
 
     name = "project"
     help = ("a Studio project without the window: info, build, compile, deploy, package, "
-            "import")
+            "import, audit")
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
         actions = parser.add_subparsers(dest="action", metavar="<action>", required=True)
@@ -81,6 +82,12 @@ class ProjectCommand(Command):
         action("normalize", "portable [A-Za-z0-9_] names for the assets' sequences, "
                             "bodygroups, SMD files and textures (imports do it already)",
                builds=False)
+        audit = action("audit", "check swap-hands results against their originals, every "
+                                "frame: weapon moved, hands off the grip, arms jumping, "
+                                "shoulder in view (kept in each asset's status)", builds=False)
+        audit.add_argument("assets", nargs="*", metavar="ASSET",
+                           help="swap-hands assets (default: all of them)")
+        audit.add_argument("--json", type=Path, help="write every result here as JSON")
         build = action("build", "run builds (merge), optionally compile and deploy them")
         build.add_argument("--compile", action="store_true", help="compile after the run")
         build.add_argument("--deploy", action="store_true",
@@ -197,6 +204,23 @@ class ProjectCommand(Command):
         project = _open(args)
         normalize(str(project.root), reporter=Reporter())
         return EXIT_OK
+
+    def _audit(self, args: argparse.Namespace) -> int:
+        project = _open(args)
+        results = project.audit_swaps(args.assets or None, reporter=Reporter())
+        if args.json:
+            args.json.write_text(json.dumps(results, indent=1), encoding="utf-8")
+        flagged = {n: r for n, r in results.items() if r.get("problems") or r.get("warnings")}
+        for name, result in sorted(flagged.items(),
+                                   key=lambda item: (not item[1].get("problems"), item[0])):
+            for line in result.get("problems", []):
+                print(f"  ✕ {name}: {line}")
+            for line in result.get("warnings", []):
+                print(f"  ▲ {name}: {line}")
+        bad = sum(1 for r in results.values() if r.get("problems"))
+        print(f"{len(results)} swap-hands result(s) checked: {bad} with problems, "
+              f"{len(flagged) - bad} with warnings")
+        return EXIT_FAIL if bad else EXIT_OK
 
     def _import_server(self, args: argparse.Namespace) -> int:
         from valve_qc_merger.studio.tasks import import_server

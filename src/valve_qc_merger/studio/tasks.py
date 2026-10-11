@@ -162,6 +162,22 @@ def normalize(root: str, *, reporter: Reporter) -> dict[str, int]:
     return changed
 
 
+def audit(root: str, names: list[str] | None = None, *, reporter: Reporter) -> dict[str, int]:
+    """Asset ▸ Check retargets: every swap-hands result against its original,
+    frame by frame; the verdicts land in the assets' status."""
+    project = Project.open(Path(root))
+    results = project.audit_swaps(names, reporter=reporter)
+    bad = 0
+    for name, result in sorted(results.items()):
+        for line in result.get("problems", []):
+            reporter.log(f"  ✕ {name}: {line}")
+        for line in result.get("warnings", []):
+            reporter.log(f"  ▲ {name}: {line}")
+        bad += bool(result.get("problems"))
+    reporter.log(f"  {len(results)} swap-hands result(s) checked: {bad} with problems")
+    return {"checked": len(results), "problems": bad}
+
+
 def ping(root: str, seconds: float = 0.0, *, reporter: Reporter) -> str:
     """Prove a job process starts and talks back (the build's selftest);
     ``seconds`` keeps it busy (checking for Cancel) that long."""
@@ -178,7 +194,7 @@ def ping(root: str, seconds: float = 0.0, *, reporter: Reporter) -> str:
 TASKS: dict[str, Callable[..., Any]] = {
     "ping": ping, "build": build, "plan": plan, "compile": compile_build, "deploy": deploy,
     "derive": derive, "import_models": import_models, "import_server": import_server,
-    "normalize": normalize,
+    "normalize": normalize, "audit": audit,
 }
 
 

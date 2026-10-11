@@ -953,11 +953,39 @@ class Project:
                       derived={"from": source, "mode": mode, "options": stored,
                                "at": round(time.time(), 3),
                                **({"revision": _retarget_revision()} if mode == "hands"
-                                  else {})},
+                                  else {}),
+                               **({"audit": result.data["audit"]}
+                                  if "audit" in result.data else {})},
                       category=self.assets[source].category)
         self.assets[name] = asset
         self.save()
         return asset
+
+    def audit_swaps(self, names: list[str] | None = None, *,
+                    reporter: Reporter | None = None) -> dict[str, dict[str, Any]]:
+        """Check swap-hands assets against their originals, frame by frame
+        (in worker processes), and keep each summary in the asset
+        (``derived["audit"]``, shown in its status). ``names``: every swap
+        asset whose source is in the project by default."""
+        from valve_qc_merger import workers as pool
+        reporter = reporter or Reporter()
+        chosen = [a for a in self.assets.values()
+                  if a.derived and a.derived.get("mode") == "hands"
+                  and a.derived.get("from") in self.assets
+                  and (names is None or a.name in names)]
+        results = pool.processes(
+            [(_audit_task, (str(self.asset_dir(a.derived["from"])), str(self.asset_dir(a.name))))
+             for a in chosen],
+            workers=pool.count(self.settings.workers), reporter=reporter,
+            label="checking retargets")
+        out: dict[str, dict[str, Any]] = {}
+        for asset, summary in zip(chosen, results, strict=True):
+            if isinstance(summary, BaseException):
+                summary = {"note": f"not checked: {summary}"}
+            asset.derived["audit"] = summary
+            out[asset.name] = summary
+        self.save()
+        return out
 
     def rederive_asset(self, name: str, options: dict[str, Any] | None = None,
                        reporter: Reporter | None = None) -> tuple[ServiceResult, Asset | None]:
@@ -1934,9 +1962,24 @@ def folder_categories(root: Path, models: list[Path]) -> dict[Path, str]:
 
 
 def _derive_task(mode: str, options: dict[str, Any], *, reporter: Reporter) -> ServiceResult:
-    """A derive service run, in a worker process (:meth:`Project.derive_many`)."""
+    """A derive service run, in a worker process (:meth:`Project.derive_many`);
+    a swap-hands result is checked against its original right away."""
     spec = DERIVE_MODES[mode]
-    return spec.run(options_from_dict(spec.options, options), reporter)
+    result = spec.run(options_from_dict(spec.options, options), reporter)
+    if mode == "hands" and result.ok:
+        result.data["audit"] = _audit_task(options[spec.input_field], options["out"],
+                                           reporter=reporter)
+    return result
+
+
+def _audit_task(original: str, swapped: str, *, reporter: Reporter) -> dict[str, Any]:
+    """:func:`~valve_qc_merger.handswap.audit.audit_retarget`'s summary, or
+    why it could not run (a worker task)."""
+    from valve_qc_merger.handswap.audit import audit_retarget
+    try:
+        return audit_retarget(Path(original), Path(swapped)).summary()
+    except Exception as exc:  # noqa: BLE001 - a check that cannot run is reported
+        return {"note": f"not checked: {type(exc).__name__}: {exc}"}
 
 
 def _normalize_quietly(folder: Path) -> None:

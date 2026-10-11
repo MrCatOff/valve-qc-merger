@@ -301,6 +301,11 @@ class MainWindow(QMainWindow):
         self.act_rederive = asset_menu.addAction(
             "Re-run retarget", lambda: self.rederive_asset(self.explorer.current_asset(), False),
             QKeySequence("Ctrl+Shift+R"))
+        self.act_compare = asset_menu.addAction(
+            "Compare with original…", lambda: self.compare_with_original(
+                self.explorer.current_asset()))
+        self.act_check = asset_menu.addAction(
+            "Check retargets", lambda: self.check_retargets(self.explorer.selected_assets()))
         self.act_find = asset_menu.addAction("Find…", self._focus_filter,
                                              QKeySequence.StandardKey.Find)
         asset_menu.addSeparator()
@@ -835,8 +840,9 @@ class MainWindow(QMainWindow):
         # what acts on the selection is enabled only when there is one
         asset = has and bool(self.explorer.selected_assets())
         build = has and bool(self.explorer.current_build())
-        for action in (self.act_derive, self.act_rederive):
+        for action in (self.act_derive, self.act_rederive, self.act_compare):
             action.setEnabled(asset and idle)
+        self.act_check.setEnabled(has and idle)
         for action in (self.act_run_build, self.act_compile_build, self.act_plan_build,
                        self.act_deploy_build, self.act_run_compile_build,
                        self.act_force_compile_build,
@@ -1306,6 +1312,36 @@ class MainWindow(QMainWindow):
                                                   name=name))
             return
         self._run_derive([(derived["from"], name)], derived["mode"], options)
+
+    def compare_with_original(self, name: str) -> None:
+        """Asset ▸ Compare with original: a swap-hands result beside its source."""
+        from valve_qc_merger.studio.compare_dialog import CompareDialog
+        project = self.project
+        if project is None or not name or name not in project.assets:
+            return
+        asset = project.assets[name]
+        if not asset.derived or asset.derived.get("mode") != "hands" \
+                or asset.derived.get("from") not in project.assets:
+            # the source picked: compare with its swap-hands result
+            swap = project.hands_asset(name)
+            if swap is None:
+                self.statusBar().showMessage(
+                    f"{name} has no swap-hands result to compare with (Retarget it)", 5000)
+                return
+            asset = swap
+        source = asset.derived["from"]
+        CompareDialog(project.asset_dir(source), project.asset_dir(asset.name),
+                      asset.name, asset.derived.get("audit"), self).exec()
+
+    def check_retargets(self, names: list[str]) -> None:
+        """Asset ▸ Check retargets: the selected swap-hands results (all of them
+        when none is selected) against their originals, frame by frame."""
+        if self.project is None or self.jobs.busy:
+            return
+        swaps = [n for n in names
+                 if (self.project.assets.get(n) and self.project.assets[n].derived
+                     and self.project.assets[n].derived.get("mode") == "hands")]
+        self._start_task("Check retargets", "audit", names=swaps or None)
 
     def _open_derive_dialog(self, dialog) -> None:  # noqa: ANN001 - DeriveDialog
         previous = getattr(self, "_derive_dialog", None)
