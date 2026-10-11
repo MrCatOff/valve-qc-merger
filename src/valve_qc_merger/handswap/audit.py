@@ -148,8 +148,6 @@ def audit_retarget(original: Path, result: Path) -> RetargetAudit:
     tracked = [i for i, n in enumerate(r.bone_names)
                if n.startswith(("UpperArm", "Arm0", "Arm1", "Hand."))]
     upper = [i for i, n in enumerate(r.bone_names) if n.startswith("UpperArm")]
-    o_wrists = [o.bone_names.index(n) for n in o.bone_names
-                if re.search(r"(?i)hand", n) and not re.search(r"(?i)finger|se_hand", n)][:2]
     rng = np.random.default_rng(0)
     bones = np.concatenate([b.bones for b in r_hand])
     grip = np.flatnonzero(~np.isin(bones, list(arm)))
@@ -182,7 +180,9 @@ def audit_retarget(original: Path, result: Path) -> RetargetAudit:
                 seq_fit.append(float(err.mean()))
                 sa.fit95 = max(sa.fit95, float(np.percentile(err, 95)))
             joints = tr[tracked]
-            wrists = to[o_wrists] if o_wrists else np.zeros((1, 3))
+            # the original hands' own motion (their skin: no guessing which
+            # bone is a wrist — weapon bones are called "handle" too)
+            wrists = np.concatenate([o.skin(b, ro, to)[0] for b in o_hand])
             if prev is not None:
                 speeds.append(float(np.linalg.norm(joints - prev, axis=1).max()))
                 wrist_speeds.append(float(np.linalg.norm(wrists - prev_wrist, axis=1).max()))
