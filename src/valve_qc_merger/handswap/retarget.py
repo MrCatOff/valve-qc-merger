@@ -41,7 +41,8 @@ FALLBACK_ARM_DIR = np.array([0.0, 8.0, -6.0])  # behind and below the view
 # bumped when the retarget's result changes for the same input: swap-hands
 # assets made by an older revision are re-made by builds (status: stale).
 # 2: hand sides by their own shape, worn weapons left alone, shoulders off screen
-RETARGET_REVISION = 2
+# 3: weapon geometry on the old arms kept on carrier bones; QC hands dropped at 50 %
+RETARGET_REVISION = 3
 
 # Wrist kink of OUR hand mesh as CSO's own animators pose it: the forearm
 # direction in the palm frame, relative to the rest pose, (pitch, yaw) in

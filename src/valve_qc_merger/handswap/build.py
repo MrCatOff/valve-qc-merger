@@ -31,6 +31,7 @@ from .math3d import inv_rigid, local_matrix, mat3_to_euler, orthonormalize
 from .retarget import RetargetPlan, build_plan, solve_frame
 from .smd import Node, Smd, Triangle, Vertex
 
+LABELED_HAND_FRACTION = 0.5  # a mesh of the QC's hands group
 HAND_WEIGHT_FRACTION = 0.95   # mesh is "a hand" if this much weight mass
                               # sits on hand bones
 
@@ -348,6 +349,9 @@ def classify_meshes(model: WeaponModel, hand_bones: set[str],
     hand bones AND its textures are hand textures — a gauntlet weapon is
     skinned to hand bones but weapon-textured, and must be kept."""
     dropped, kept = [], []
+    labeled = {studio.replace("\\", "/").split("/")[-1]
+               for group, studio in model.qc.references
+               if re.search("hand", group, re.IGNORECASE)}
     for name, wmap in model.weights.items():
         total = sum(wmap.values())
         if total <= 0:
@@ -362,8 +366,11 @@ def classify_meshes(model: WeaponModel, hand_bones: set[str],
             n = sum(counts.values())
             mat_frac = sum(c for m, c in counts.items()
                            if m in hand_mats) / n if n else 0.0
-        if total > 0 and on_hand / total >= HAND_WEIGHT_FRACTION \
-                and mat_frac >= 0.5:
+        # the QC's own hands group is the old hands once most of it rides
+        # hand bones (v_patroldrone's also skin a second, unrecognised arm
+        # rig: 69 %, and were kept beside ours)
+        needed = LABELED_HAND_FRACTION if name in labeled else HAND_WEIGHT_FRACTION
+        if total > 0 and on_hand / total >= needed and mat_frac >= 0.5:
             dropped.append(name)
         else:
             kept.append(name)
@@ -391,7 +398,32 @@ def assemble(model: WeaponModel, plan: RetargetPlan,
                 continue  # cut out (mixed mesh) or re-attached later
             kept_dominant |= doms
 
-    keep: set[str] = set()
+    # a hand bone weapon geometry still rides that has no CSO counterpart to
+    # carry it (an arm root, a sleeve bone — not the wrist, the fan or a
+    # paired finger): kept as a carrier with its own motion, a root of its
+    # own, so that geometry stays exactly where it was (a piece glued to
+    # the old arm root went 21 u astray riding the wrist: v_famas_l85a2)
+    counterpart: set[str] = set()
+    for sp in plan.sides:
+        counterpart |= {sp.hand.wrist, sp.hand.fan}
+        for oc, cc in sp.pairs:
+            counterpart |= set(oc[:len(cc)])
+    carriers: set[str] = set()
+    for mesh in kept_meshes:
+        smd = model.refs[mesh]
+        n_of = smd.name_of()
+        hand_mats = getattr(model, "_hand_mats", None)
+        for tri in smd.triangles:
+            doms = [n_of[v.dominant_bone()] for v in tri.verts]
+            if all(d in hand_bones for d in doms) \
+                    and (hand_mats is None or tri.material in hand_mats):
+                continue  # cut out with the hands
+            carriers |= {d for d in doms if d in hand_bones and d not in counterpart}
+    if carriers:
+        log("  carrier bones kept for weapon geometry on the old arms: %s"
+            % ", ".join(sorted(carriers)))
+
+    keep: set[str] = set(carriers)
     for b in kept_dominant:
         keep.add(b)
         for a in skel.ancestors(b):
@@ -404,9 +436,11 @@ def assemble(model: WeaponModel, plan: RetargetPlan,
     parent_name: dict[str, str | None] = {}
     for b in kept_weapon:
         p = skel.parent[b]
-        while p is not None and p not in keep:
+        while p is not None and (p not in keep or p in carriers):
             p = skel.parent.get(p)
-        parent_name[b] = p
+        # a carrier stands alone (its world keys are its own motion); a weapon
+        # bone never hangs off one
+        parent_name[b] = None if b in carriers else p
 
     cso_bones = plan.cso_bones()
     for c in cso_bones:
@@ -562,9 +596,14 @@ def rebuild_weapon_reference(asm: Assembly, model: WeaponModel,
                 ok = False
                 break
             # keep the vertex glued to where the old bone would be at the
-            # setup pose, then let the CSO wrist carry it
+            # setup pose, then let the anchor carry it (stored at the
+            # anchor's reference bind: the setup grip for CSO bones, the
+            # original bind for weapon bones)
             m = (asm.setup_world_old[dom]
                  @ inv_rigid(model.skel.bind_world[dom]))
+            if anchor in asm.kept_weapon:
+                m = (model.skel.bind_world[anchor]
+                     @ inv_rigid(asm.setup_world_old[anchor]) @ m)
             pos = m[:3, :3] @ v.pos + m[:3, 3]
             nrm = m[:3, :3] @ v.normal
             verts.append(Vertex(bone=asm.id_of[anchor], pos=pos,
