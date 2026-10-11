@@ -28,7 +28,7 @@ from .asset import HandsAsset
 from .identify import (HandInfo, OrigSkeleton, find_hands, worn_meshes,
                        mesh_bone_weights, merge_skeleton)
 from .math3d import inv_rigid, local_matrix, mat3_to_euler, orthonormalize
-from .retarget import RetargetPlan, build_plan, solve_frame
+from .retarget import RetargetPlan, build_plan, reset_motion, solve_frame
 from .smd import Node, Smd, Triangle, Vertex
 
 LABELED_HAND_FRACTION = 0.5  # a mesh of the QC's hands group
@@ -459,6 +459,7 @@ def assemble(model: WeaponModel, plan: RetargetPlan,
         nodes.append(Node(id_of[name], name,
                           id_of[p] if p is not None else -1))
 
+    reset_motion(plan)
     setup_world_cso = solve_frame(plan, setup_world_old)
     return Assembly(nodes=nodes, id_of=id_of, parent_name=parent_name,
                     cso_bones=cso_bones, kept_weapon=kept_weapon,
@@ -628,6 +629,7 @@ def build_sequence(asm: Assembly, model: WeaponModel, plan: RetargetPlan,
                    anim: Smd) -> Smd:
     frames_world = anim_world_frames(anim, model.skel)
     out_frames = []
+    reset_motion(plan)  # each sequence starts free; its frames follow on
     for world_old in frames_world:
         world_cso = solve_frame(plan, world_old)
         out_frames.append(_locals_from_worlds(asm, world_cso, world_old))

@@ -31,3 +31,14 @@ def test_a_shoulder_in_view_bends_out_of_it() -> None:
     assert np.isclose(np.linalg.norm(shoulder - elbow), upper)  # bones keep their length
     assert not _shoulder_seen(shoulder, u)
     assert np.arccos(np.clip(np.dot(u, d), -1, 1)) <= MAX_SHOULDER_BEND + 1e-6
+
+
+def test_an_arm_part_turns_no_faster_than_allowed() -> None:
+    # frame-to-frame continuity: a 90 deg flip of the forearm is spread out
+    from valve_qc_merger.handswap.retarget import _angle, _limit_turn
+    previous = np.array([1.0, 0.0, 0.0])
+    wanted = np.array([0.0, 1.0, 0.0])
+    limited = _limit_turn(previous, wanted, 15.0)
+    assert np.isclose(_angle(previous, limited), 15.0)
+    assert np.isclose(np.linalg.norm(limited), 1.0)
+    assert np.allclose(_limit_turn(previous, wanted, 120.0), wanted)  # within the limit

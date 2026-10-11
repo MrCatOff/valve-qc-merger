@@ -42,7 +42,8 @@ FALLBACK_ARM_DIR = np.array([0.0, 8.0, -6.0])  # behind and below the view
 # assets made by an older revision are re-made by builds (status: stale).
 # 2: hand sides by their own shape, worn weapons left alone, shoulders off screen
 # 3: weapon geometry on the old arms kept on carrier bones; QC hands dropped at 50 %
-RETARGET_REVISION = 3
+# 4: arm parts turn frame to frame no faster than the original's (no elbow/shoulder jumps)
+RETARGET_REVISION = 4
 
 # Wrist kink of OUR hand mesh as CSO's own animators pose it: the forearm
 # direction in the palm frame, relative to the rest pose, (pitch, yaw) in
@@ -100,6 +101,10 @@ class SidePlan:
     elbow_ref: str | None                      # original forearm bone
     fit_cost: float = 0.0
     _prev_dir: np.ndarray | None = None
+    # frame-to-frame continuity within a sequence (reset_motion starts one)
+    _prev_orig: np.ndarray | None = None  # the original forearm direction
+    _prev_d: np.ndarray | None = None  # our forearm direction (wrist -> elbow)
+    _prev_u: np.ndarray | None = None  # our upper arm direction (elbow -> shoulder)
 
 
 @dataclass
@@ -338,6 +343,7 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
     asset = plan.asset
     step = np.radians(2.0)
     max_auto = np.radians(max_deg)
+    reset_motion(plan)
     base_cso = solve_frame(plan, setup_world_old)
 
     for sp in plan.sides:
@@ -489,6 +495,28 @@ SHOULDER_ANCHOR = np.array([8.0, 3.0, -10.0])  # the player's shoulder (x mirror
 MAX_SHOULDER_BEND = float(np.radians(60.0))  # sharper folds the elbow's skin over
 
 
+MAX_EXTRA_TURN = 12.0  # deg a frame an arm part may turn beyond the original's turn
+
+
+def _angle(a: np.ndarray, b: np.ndarray) -> float:
+    """Degrees between two unit vectors."""
+    return float(np.degrees(np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))))
+
+
+def _limit_turn(previous: np.ndarray, wanted: np.ndarray, limit_deg: float) -> np.ndarray:
+    """``wanted``, turned from ``previous`` by at most ``limit_deg``."""
+    angle = _angle(previous, wanted)
+    if angle <= limit_deg or angle < 1e-9:
+        return wanted
+    return _slerp_dir(previous, wanted, limit_deg / angle)
+
+
+def reset_motion(plan: RetargetPlan) -> None:
+    """Start a new sequence: no frame-to-frame continuity across sequences."""
+    for sp in plan.sides:
+        sp._prev_orig = sp._prev_d = sp._prev_u = None
+
+
 def _on_screen(point: np.ndarray) -> bool:
     depth = -point[1]
     return bool(depth > VIEW_NEAR and abs(point[0]) < depth * VIEW_TAN_H
@@ -513,7 +541,8 @@ def _slerp_dir(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
                       / np.sin(angle))
 
 
-def _hidden_shoulder(elbow: np.ndarray, d: np.ndarray, upper_len: float) -> np.ndarray:
+def _hidden_shoulder(elbow: np.ndarray, d: np.ndarray, upper_len: float,
+                     prefer: np.ndarray | None = None) -> np.ndarray:
     """The shoulder for an elbow: straight on along the forearm line ``d``
     (elbow -> shoulder) when that is off screen — else the upper arm bends at
     the elbow just as far as it takes to leave the view: the least bend of
@@ -548,7 +577,8 @@ def _hidden_shoulder(elbow: np.ndarray, d: np.ndarray, upper_len: float) -> np.n
             else:
                 high = mid
         u = _slerp_dir(d, toward, high)
-        angle = float(np.arccos(np.clip(np.dot(u, d), -1.0, 1.0)))
+        # the least bend, or (mid-sequence) the way nearest last frame's
+        angle = _angle(u, prefer if prefer is not None else d)
         if best is None or angle < best[0]:
             best = (angle, u)
     if best is not None:
@@ -582,11 +612,19 @@ def solve_frame(plan: RetargetPlan,
                 else FALLBACK_ARM_DIR.copy()
         d = normalized(d)
         sp._prev_dir = d
+        d_orig = d
         if NATURAL_WRIST:
             palm_now = hand_w @ rig.palm_local
             palm_rest = rig.palm_world
             back_rest = normalized(asset.head(rig.arm[1]) - asset.head(rig.wrist))
             d = _natural_arm(palm_now, d, _palm_angles(palm_rest, back_rest), sp.side)
+        # continuity: the forearm turns no faster than the original one (plus
+        # a margin) — the wrist-angle clamp could flip it in one frame when
+        # the original wrist folded past 90 deg (v_holysword: 7.8 u elbow jump)
+        if sp._prev_d is not None and sp._prev_orig is not None:
+            d = _limit_turn(sp._prev_d, d, _angle(sp._prev_orig, d_orig) + MAX_EXTRA_TURN)
+        turned = _angle(sp._prev_d, d) if sp._prev_d is not None else None
+        sp._prev_orig, sp._prev_d = d_orig, d
 
         upper, fore0, fore1 = rig.arm  # UpperArm, Arm0, Arm1
         s_rest = asset.head(upper)
@@ -596,8 +634,15 @@ def solve_frame(plan: RetargetPlan,
         upper_len = float(np.linalg.norm(e_rest - s_rest))
 
         elbow = w_target + d * fore_chord
-        shoulder = (_hidden_shoulder(elbow, d, upper_len) if HIDE_SHOULDERS
+        shoulder = (_hidden_shoulder(elbow, d, upper_len, sp._prev_u) if HIDE_SHOULDERS
                     else w_target + d * (fore_chord + upper_len))
+        u = normalized(shoulder - elbow)
+        if sp._prev_u is not None and turned is not None:
+            # the upper arm turns no faster than the forearm (plus a margin):
+            # no shoulder jumping between ways out of the view
+            u = _limit_turn(sp._prev_u, u, turned + MAX_EXTRA_TURN)
+            shoulder = elbow + u * upper_len
+        sp._prev_u = u
 
         # forearm assembly: aim the elbow->wrist chord, then take the
         # twist of the desired hand rotation about the chord
