@@ -951,7 +951,9 @@ class Project:
         asset = Asset(name=name, kind=kind, path=relative.as_posix(),
                       notes=existing.notes if existing is not None else "",
                       derived={"from": source, "mode": mode, "options": stored,
-                               "at": round(time.time(), 3)},
+                               "at": round(time.time(), 3),
+                               **({"revision": _retarget_revision()} if mode == "hands"
+                                  else {})},
                       category=self.assets[source].category)
         self.assets[name] = asset
         self.save()
@@ -1478,11 +1480,20 @@ class Project:
         notes: list[str] = []
         ready = converted = reused = 0
 
-        pending: list[tuple[Asset, Asset | None]] = []  # (asset, its swap asset to remake)
+        # (asset to convert, its swap asset to remake, staged folder to fall back on)
+        pending: list[tuple[Asset, Asset | None, Path]] = []
         for done, asset in enumerate(assets):
             reporter.check()
             reporter.progress(done, len(assets), f"retarget {asset.name}")
             source = staged / asset.name
+            origin = (self.assets.get(asset.derived.get("from", ""))
+                      if asset.derived else None)
+            if outdated_swap(asset) and origin is not None:
+                # made by an older retarget: made again from its source
+                reporter.log(f"  retarget {asset.name}: made by an older retarget — again "
+                             f"from {origin.name}")
+                pending.append((origin, asset, self.asset_dir(origin.name)))
+                continue
             if ((asset.derived and asset.derived.get("mode") == "hands")
                     or dir_wears_hands(source, reference)):
                 shutil.copytree(source, retargeted / asset.name)
@@ -1490,27 +1501,28 @@ class Project:
                 ready += 1
                 continue
             existing = self.hands_asset(asset.name)
-            bones = _mesh_bones(self.asset_dir(existing.name)) if existing is not None else 0
-            if bones > _STUDIO_BONES and existing.derived.get("options", {}) == wanted:
+            current = existing is not None and not outdated_swap(existing) \
+                and existing.derived.get("options", {}) == wanted
+            bones = _mesh_bones(self.asset_dir(existing.name)) if current else 0
+            if bones > _STUDIO_BONES:
                 notes.append(f"{asset.name}: on our hands it has {bones} bones (studiomdl "
                              f"keeps {_STUDIO_BONES}); shipped on its own with its own hands")
                 if build.options.get("standalone_rejects", True):
                     shutil.copytree(source, retargeted / asset.name)
                 reporter.log(f"  warn: {notes[-1]}")
                 continue
-            if existing is not None and existing.derived.get("options", {}) == wanted:
+            if current:
                 shutil.copytree(self.asset_dir(existing.name), retargeted / existing.name)
                 reporter.log(f"  retarget {asset.name}: {existing.name} (made before with "
                              "these settings) reused")
                 reused += 1
                 continue
-            pending.append((asset, existing))
+            pending.append((asset, existing, source))
         # the conversions themselves run in worker processes (Settings ▸ workers)
         outcomes = self.derive_many(
             [(asset.name, existing.name if existing is not None else None)
-             for asset, existing in pending], "hands", wanted, reporter=reporter)
-        for (asset, _existing), (result, made) in zip(pending, outcomes, strict=True):
-            source = staged / asset.name
+             for asset, existing, _source in pending], "hands", wanted, reporter=reporter)
+        for (asset, existing, source), (result, made) in zip(pending, outcomes, strict=True):
             if made is not None and _mesh_bones(self.asset_dir(made.name)) > _STUDIO_BONES:
                 # our hands' 41 bones on a big rig: more than studiomdl takes
                 result.failures.append(
@@ -1526,7 +1538,13 @@ class Project:
             said = " ".join([why, *result.failures])
             if any(marker in said for marker in _HANDS_ARE_THE_MODEL):
                 # nothing to swap: the model has no hands, or they are all of it
-                # (a zombie's emote: hands, no weapon)
+                # (a zombie's emote: hands, no weapon; a gauntlet)
+                asset.hands_model = True
+                if existing is not None and outdated_swap(existing):
+                    # an older retarget swapped what it should not have
+                    self.remove_asset(existing.name)
+                    reporter.log(f"  retarget {asset.name}: {existing.name} (an older "
+                                 "retarget's) removed")
                 nohands = retargeted.parent / NOHANDS_INPUT
                 nohands.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(source, nohands / asset.name)
@@ -1852,6 +1870,18 @@ def _import_task(source: str, out: str, *, reporter: Reporter) -> dict[str, Any]
             hands[folder.name] = hands_are_the_model(folder, source) is not None
     return {"folders": [str(f) for f in folders], "failures": list(result.failures),
             "hands": hands}
+
+
+def _retarget_revision() -> int:
+    from valve_qc_merger.handswap.retarget import RETARGET_REVISION
+    return RETARGET_REVISION
+
+
+def outdated_swap(asset: Asset) -> bool:
+    """A swap-hands asset made by an older retarget (see RETARGET_REVISION)."""
+    derived = asset.derived or {}
+    return (derived.get("mode") == "hands"
+            and int(derived.get("revision", 1)) < _retarget_revision())
 
 
 _STUDIO_BONES = 127  # studiomdl refuses a model using 128 ("used 128, max 128")

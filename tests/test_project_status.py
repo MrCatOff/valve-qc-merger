@@ -172,3 +172,25 @@ def test_hand_verdicts_are_remembered_until_the_meshes_change(project: Project,
     os.utime(smd, (later, later))  # a changed mesh is checked again
     assert project_status(project)["v_anaconda_hands"].hands == "own"
     assert calls == [project.asset_dir("v_anaconda_hands")]
+
+
+def test_a_swap_from_an_older_retarget_is_stale_and_remade_by_builds(
+        tmp_path: Path) -> None:
+    from valve_qc_merger.handswap.retarget import RETARGET_REVISION
+    from valve_qc_merger.services.base import CollectingReporter
+    project = Project.create(tmp_path / "pack")
+    project.import_decompiled(_ANACONDA)
+    result, _asset = project.derive_asset("v_anaconda", "hands")
+    assert result.ok
+    swap = project.assets["v_anaconda_hands"]
+    assert swap.derived["revision"] == RETARGET_REVISION
+    assert not project_status(project)["v_anaconda_hands"].outdated
+    swap.derived.pop("revision")  # as an older version made it
+    project.save()
+    status = project_status(project)["v_anaconda_hands"]
+    assert status.outdated and status.level == "stale"
+    project.add_build(Build("view", "merge-v", retarget=True))
+    reporter = CollectingReporter()
+    project.run_build("view", reporter)
+    assert any("made by an older retarget" in line for line in reporter.lines)
+    assert project.assets["v_anaconda_hands"].derived["revision"] == RETARGET_REVISION

@@ -25,6 +25,7 @@ _RETARGET_RE = re.compile(r"^retarget (\S+) failed")
 class AssetStatus:
     hands: str | None = None  # "ours" | "own" (view models only)
     stale: bool = False  # derived, and the source changed since
+    outdated: bool = False  # swap hands made by an older retarget
     builds: list[str] = field(default_factory=list)  # builds that take it
     problems: list[str] = field(default_factory=list)  # "<build>: <failure>"
     replaced: list[str] = field(default_factory=list)  # "<build>: by <asset>"
@@ -34,7 +35,7 @@ class AssetStatus:
         """``problem`` > ``stale`` > ``ours`` / ``own`` / ``plain``."""
         if self.problems:
             return "problem"
-        if self.stale:
+        if self.stale or self.outdated:
             return "stale"
         return self.hands or "plain"
 
@@ -46,6 +47,8 @@ class AssetStatus:
             out.append("own hands (not retargeted yet)")
         if self.stale:
             out.append("source changed since this was made: Re-run retarget")
+        if self.outdated:
+            out.append("made by an older retarget: Re-run retarget (builds re-make it)")
         out += [f"✗ {p}" for p in self.problems]
         out.append(f"in builds: {', '.join(self.builds)}" if self.builds else "in no build")
         out += [f"left out of {r} (same weapon on our hands)" for r in self.replaced]
@@ -148,7 +151,7 @@ def _build_problems(project: Project) -> dict[str, list[str]]:
 
 def project_status(project: Project) -> dict[str, AssetStatus]:
     """Status of every asset of ``project``."""
-    from valve_qc_merger.project.model import ProjectError
+    from valve_qc_merger.project.model import ProjectError, outdated_swap
 
     statuses = {name: AssetStatus() for name in project.assets}
     for build in project.builds.values():
@@ -177,6 +180,7 @@ def project_status(project: Project) -> dict[str, AssetStatus]:
         status = statuses[name]
         if asset.kind == "v":
             status.hands = "ours" if ours[name] else "own"
+        status.outdated = outdated_swap(asset)
         derived = asset.derived
         if derived and derived.get("from") in project.assets:
             made = float(derived.get("at") or 0.0) or edited(name)
