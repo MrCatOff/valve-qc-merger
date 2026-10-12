@@ -203,14 +203,34 @@ def test_grenade_skins_are_entries_of_their_own(tmp_path: Path) -> None:
     assert "pev_body_red_frog" not in report.manifest["v_alpha_knife"]
 
 
-def test_a_mirrored_frog_is_the_frog_in_a_mirror() -> None:
-    # v_china's frog is a mirror image: drawn on our frog's mirror, by rotations
-    from valve_qc_merger.merge_zhands.frog import mirror_frog
-    from valve_qc_merger.models.smd import BonePose, Frame, Node, Smd
-    nodes = [Node(0, "gren_root", -1)]
-    frog = Smd(nodes=nodes, frames=[Frame(0, (BonePose(0, ZERO, ZERO),))],
-               triangles=[_tri("frogbomb.bmp", 0, 2.0)])
-    mirrored = mirror_frog(frog, "gren_")
-    (before,), (after,) = frog.triangles, mirrored.triangles
-    assert [v.position.x for v in after.vertices] == [-2.0, -2.0, -3.0]  # x mirrored
-    assert after.vertices[1].uv == before.vertices[2].uv  # winding turned: faces out
+def test_a_mirrored_frog_is_drawn_on_our_frog() -> None:
+    # v_china's frog is ours in a mirror: paired across (our left half with
+    # its right), it is drawn on our own frog by rotations — no extra frog
+    from valve_qc_merger.merge_zhands.frog import can_redraw, redraw_grenade
+
+    def frog(side: float) -> Smd:
+        # left/right twins share a UV; a lopsided part (unique UVs) on one side
+        twins = [(1.0, 0.0, 0.0), (2.0, 1.0, 0.0), (1.5, 0.0, 1.0), (1.0, 2.0, 0.5)]
+        lopsided = [(0.3, 0.0, 0.0), (0.5, 1.0, 0.0), (0.3, 0.5, 1.5), (0.4, 2.0, 0.2)]
+
+        def vertex(x: float, y: float, z: float, uv: float) -> Vertex:
+            return Vertex(0, Vector3(side * x, y, z), Vector3(0.0, 0.0, 1.0),
+                          Vector2(uv, uv))
+
+        triangles = []
+        for n, (x, y, z) in enumerate(twins):
+            uv = n / 10
+            triangles.append(Triangle("frogbomb.bmp", (
+                vertex(x, y, z, uv), vertex(-x, y, z, uv), vertex(0.0, y + 3.0, z, 0.5 + uv))))
+        for n, (x, y, z) in enumerate(lopsided):
+            uv = 0.9 + n / 100
+            triangles.append(Triangle("frogbomb.bmp", (
+                vertex(x, y, z, uv), vertex(x, y + 0.1, z, uv + 0.001),
+                vertex(x, y, z + 0.1, uv + 0.002))))
+        return Smd(nodes=[Node(0, "gren_root", -1)],
+                   frames=[Frame(0, (BonePose(0, ZERO, ZERO),))], triangles=triangles)
+
+    ours, theirs = frog(1.0), frog(-1.0)
+    assert can_redraw(ours, theirs, "gren_")
+    anim = Smd(nodes=list(theirs.nodes), frames=list(theirs.frames), triangles=[])
+    assert redraw_grenade(ours, theirs, {"idle": anim}, "gren_") is not None

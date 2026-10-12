@@ -438,9 +438,6 @@ def _choose_grenade(carriers: list[ZombieModel],
         _same_mesh(c.grenade, other.grenade, {}, {}) for other in carriers))
 
 
-MIRROR_SUFFIX = "#mirror"  # redrawn_by: on the shared frog's mirror image
-
-
 def unify_grenades(models: list[ZombieModel], canonical: ZombieModel,
                    report: ZhandsReport | None = None) -> list[str]:
     """One frog for everyone: every grenade model of ``models`` drops its
@@ -448,24 +445,15 @@ def unify_grenades(models: list[ZombieModel], canonical: ZombieModel,
     animation redrawn for ``canonical``'s frog (:mod:`.frog`) — the merge
     then draws that one frog for all of them. A frog that cannot be paired
     (another UV layout) keeps its own. Returns the models redrawn."""
-    from valve_qc_merger.merge_zhands.frog import mirror_frog, redraw_grenade
+    from valve_qc_merger.merge_zhands.frog import redraw_grenade
     redrawn: list[str] = []
     scales: list[float] = []
-    mirrored = mirror_frog(canonical.grenade, GRENADE_PREFIX)
     for zm in models:
         if zm.grenade is None:
             continue
         if not _same_grenade_rig(canonical, zm):
             done = redraw_grenade(canonical.grenade, zm.grenade, zm.model.anims,
                                   GRENADE_PREFIX)
-            if done is None:  # a mirrored frog (v_china): on the frog's mirror image
-                done = redraw_grenade(mirrored, zm.grenade, zm.model.anims, GRENADE_PREFIX)
-                if done is not None:
-                    zm.redrawn_by = canonical.stem + MIRROR_SUFFIX
-                    zm.grenade = None
-                    scales.append(done.scale)
-                    redrawn.append(zm.stem)
-                    continue
             if done is None:
                 if report is not None:
                     report.warnings.append(
@@ -672,9 +660,9 @@ class _PoolBones:
         rigs: list[ZombieModel] = []
         for model_in, zm in zip(models_in, _prepared(models_in, grenade_prefix, frog),
                                 strict=True):
-            if zm.redrawn_by is not None:  # drawn with the shared frog (or its mirror)
+            if zm.redrawn_by is not None:  # drawn with the shared frog
                 self.tables[model_in.name], self.shared[model_in.name] = _pool_table(zm)
-                self.rig[model_in.name] = -3 if zm.redrawn_by.endswith(MIRROR_SUFFIX) else -2
+                self.rig[model_in.name] = -2
                 continue
             self.tables[model_in.name], self.shared[model_in.name] = _pool_table(zm)
             if zm.grenade is None:
@@ -690,8 +678,7 @@ class _PoolBones:
         """pev_body (grenade entries + 1) x (hands + 1) within a view model's
         byte; entries = frogs x (default + skins)."""
         rigs = {self.rig[m.name] for m in models_in} - {-1}
-        # -2: the shared frog, -3: its mirror image
-        frogs = len(rigs - {-2, -3}) + (-2 in rigs) + (-3 in rigs)
+        frogs = len(rigs)  # -2 (the shared frog) is one of them
         grenades = frogs * (1 + self.skins)
         return (grenades + 1) * (len(models_in) + 1) <= limits.VIEW_BODY_VALUES
 
@@ -909,19 +896,11 @@ def merge_zhands(
     skin_index: dict[str, dict[str, int]] = {}  # model -> skin label -> entry
     chosen_from: list[str] = []
     skins = [(_skin_label(Path(path)), Path(path)) for path in (grenade_skins or [])]
-    shared_users = [zm for zm in models if zm.redrawn_by is not None
-                    and not zm.redrawn_by.endswith(MIRROR_SUFFIX)]
-    mirror_users = [zm for zm in models if zm.redrawn_by is not None
-                    and zm.redrawn_by.endswith(MIRROR_SUFFIX)]
+    shared_users = [zm for zm in models if zm.redrawn_by is not None]
     frogs: list[tuple[ZombieModel, Smd, list[ZombieModel]]] = []
     if shared_users:  # one frog for all: drawn on this part's node table
         mesh = frog_mesh(shared_frog, models[0].hands)
         frogs.append((shared_frog, mesh, shared_users))
-    if mirror_users:  # the same frog in a mirror, for the mirrored ones
-        from valve_qc_merger.merge_zhands.frog import mirror_frog
-        mirror = dataclasses.replace(
-            shared_frog, grenade=mirror_frog(shared_frog.grenade, GRENADE_PREFIX))
-        frogs.append((mirror, frog_mesh(mirror, models[0].hands), mirror_users))
     for members in variants:
         frogs.append((_choose_grenade(members, grenade_texture), None, members))
     if frogs:

@@ -32,6 +32,7 @@ from valve_qc_merger.transform import Transform, matrix_to_euler
 
 MIN_COVERAGE = 0.8  # of the canonical frog's vertices paired with the other frog
 MIN_PAIRS = 3  # vertices a bone needs to take its own rotation
+MAX_ACROSS = 0.25  # a mirrored frog's fit on ours, of the frog's size
 
 
 @dataclass
@@ -140,7 +141,7 @@ def _pair(canonical: Smd, theirs: Smd, prefix: str) -> Pairs | None:
     those — every vertex to its nearest counterpart of the same UV (the left
     and right halves share UVs: pairing the left eye with the right one
     mirrored the frog). A frog that is a mirror image of ours (v_china) is
-    paired across: our left half with its right. None when too few pair up."""
+    paired across (:func:`_pair_across`). None when too few pair up."""
     c_verts, t_verts = _frog_vertices(canonical, prefix), _frog_vertices(theirs, prefix)
     total = sum(len(v) for v in c_verts.values())
     if total == 0:
@@ -153,12 +154,10 @@ def _pair(canonical: Smd, theirs: Smd, prefix: str) -> Pairs | None:
     target = np.array([t[2] for _c, t in unique])
     linear, scale, shift, residual = _similarity(source, target)
     mirror = _similarity(source, target, reflect=True)
-    mirrored = mirror[3] < 0.25 * residual  # their frog is ours in a mirror
-    if mirrored:
-        linear, scale, shift, residual = mirror
-    # every candidate of their frog, laid where ours is
     candidates = [(bone, r, root) for verts in t_verts.values() for bone, r, root in verts]
     t_roots = np.array([root for _b, _r, root in candidates])
+    if mirror[3] < 0.25 * residual:  # their frog is ours in a mirror
+        return _pair_across(c_verts, candidates, t_roots, mirror)
     index_of_key: dict[tuple, list[int]] = {}
     position = 0
     for key, verts in t_verts.items():
@@ -169,11 +168,9 @@ def _pair(canonical: Smd, theirs: Smd, prefix: str) -> Pairs | None:
     for key, mine in c_verts.items():
         for bone, q, root_point in mine:
             moved = scale * linear @ root_point + shift
-            # the same UV on the same bone — on the other side's bone first
-            # when their frog is mirrored (our left eye is its right eye)
-            same = index_of_key.get(key, [])
-            across = index_of_key.get((key[0], key[1], _other_side(key[2])), [])
-            pool = (across or same) if mirrored else (same or across)
+            # the same UV, the nearest of its vertices (same bone first)
+            pool = (index_of_key.get(key)
+                    or index_of_key.get((key[0], key[1], _other_side(key[2])), []))
             if not pool:
                 continue
             best = min(pool, key=lambda i: float(np.sum((t_roots[i] - moved) ** 2)))
@@ -185,6 +182,59 @@ def _pair(canonical: Smd, theirs: Smd, prefix: str) -> Pairs | None:
             paired += 1
     if paired / total < MIN_COVERAGE:
         return None
+    return {b: (np.array(qs), names, np.array(rs)) for b, (qs, names, rs) in pairs.items()}
+
+
+def _symmetry(verts: dict[tuple, list[tuple[str, np.ndarray, np.ndarray]]]
+              ) -> tuple[np.ndarray, np.ndarray] | None:
+    """The frog's plane of symmetry in its root frame (normal, a point on
+    it), from the vertex twins sharing a UV (left and right halves)."""
+    twins = [(vs[0][2], vs[1][2]) for vs in verts.values() if len(vs) == 2]
+    if len(twins) < 4:
+        return None
+    gaps = np.array([a - b for a, b in twins])
+    widest = gaps[np.argmax(np.linalg.norm(gaps, axis=1))]
+    normal = (gaps * np.sign(gaps @ widest)[:, None]).sum(0)
+    if np.linalg.norm(normal) < 1e-9:
+        return None
+    normal /= np.linalg.norm(normal)
+    return normal, np.array([(a + b) / 2 for a, b in twins]).mean(0)
+
+
+def _pair_across(c_verts: dict[tuple, list[tuple[str, np.ndarray, np.ndarray]]],
+                 candidates: list[tuple[str, np.ndarray, np.ndarray]],
+                 t_roots: np.ndarray, mirror: tuple[np.ndarray, float, np.ndarray, float]
+                 ) -> Pairs | None:
+    """Pairs for a frog that is ours in a mirror (v_china's): our frog
+    mirrored across its own plane of symmetry is laid on theirs — a turn, no
+    mirror — and each of our vertices takes the nearest of theirs by place,
+    whatever its UV: our left half rides their right. The frog is nearly
+    symmetric, so the same frog of ours draws theirs with rotations alone
+    (its few lopsided details come out on the other side)."""
+    plane = _symmetry(c_verts)
+    if plane is None:
+        return None
+    normal, point = plane
+    linear, scale, shift, _r = mirror
+    flip = np.eye(3) - 2.0 * np.outer(normal, normal)  # across our plane
+    shift = shift + 2.0 * scale * float(point @ normal) * (linear @ normal)
+    linear = linear @ flip
+    mine = [(bone, q, root) for verts in c_verts.values() for bone, q, root in verts]
+    roots = np.array([root for _b, _q, root in mine])
+    for _round in range(4):  # nearest by place, the fit refined on those pairs
+        moved = roots @ (scale * linear).T + shift
+        nearest = np.argmin(((moved[:, None] - t_roots[None]) ** 2).sum(-1), axis=1)
+        linear, scale, shift, residual = _similarity(roots, t_roots[nearest])
+    spread = scale * np.sqrt(((roots - roots.mean(0)) ** 2).sum(1).mean())
+    if np.sqrt(residual) > MAX_ACROSS * spread:  # not a symmetric frog after all
+        return None
+    pairs: dict[str, tuple[list[np.ndarray], list[str], list[np.ndarray]]] = {}
+    for (bone, q, _root), best in zip(mine, nearest, strict=True):
+        other_bone, r, _troot = candidates[best]
+        entry = pairs.setdefault(bone, ([], [], []))
+        entry[0].append(q)
+        entry[1].append(other_bone)
+        entry[2].append(r)
     return {b: (np.array(qs), names, np.array(rs)) for b, (qs, names, rs) in pairs.items()}
 
 
@@ -229,33 +279,6 @@ def can_redraw(canonical: Smd, theirs: Smd, prefix: str) -> bool:
         return False
     pairs = _pair(canonical, theirs, prefix)
     return pairs is not None and not _mirrored(pairs)
-
-
-def mirror_frog(smd: Smd, prefix: str) -> Smd:
-    """``smd``'s frog in a mirror (across its root's local YZ plane), winding
-    turned so it still faces out: the shape a mirrored frog (v_china's) can
-    be redrawn on with rotations alone — bones cannot mirror."""
-    from valve_qc_merger.models.smd import Triangle, Vertex
-    worlds = fk_worlds(smd, smd.frames[0])
-    name_of = {n.index: n.name for n in smd.nodes}
-    parent_of = {n.index: n.parent for n in smd.nodes}
-    gren = {i for i, name in name_of.items() if name.startswith(prefix)}
-    roots = sorted((i for i in gren if parent_of[i] not in gren), key=lambda i: name_of[i])
-    root = _matrix(worlds[roots[0]]) if roots else np.eye(4)
-    flip = root @ np.diag([-1.0, 1.0, 1.0, 1.0]) @ _rigid_inverse(root)
-
-    def point(v: Vector3) -> Vector3:
-        return Vector3(*(float(x) for x in (flip @ np.array([v.x, v.y, v.z, 1.0]))[:3]))
-
-    def normal(v: Vector3) -> Vector3:
-        return Vector3(*(float(x) for x in flip[:3, :3] @ np.array([v.x, v.y, v.z])))
-
-    triangles = []
-    for tri in smd.triangles:
-        a, b, c = (Vertex(v.bone, point(v.position), normal(v.normal), v.uv)
-                   for v in tri.vertices)
-        triangles.append(Triangle(tri.material, (a, c, b)))
-    return Smd(nodes=list(smd.nodes), frames=list(smd.frames), triangles=triangles)
 
 
 def redraw_grenade(canonical: Smd, theirs: Smd, anims: dict[str, Smd],
@@ -343,4 +366,4 @@ def redraw_grenade(canonical: Smd, theirs: Smd, anims: dict[str, Smd],
     return report
 
 
-__all__ = ["Redraw", "can_redraw", "mirror_frog", "redraw_grenade"]
+__all__ = ["Redraw", "can_redraw", "redraw_grenade"]
