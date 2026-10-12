@@ -201,3 +201,16 @@ def test_grenade_skins_are_entries_of_their_own(tmp_path: Path) -> None:
     assert entry["pev_body"] % 3 == 1 and entry["pev_body_red_frog"] % 3 == 2
     assert entry["pev_body_red_frog"] // 3 == entry["pev_body"] // 3  # the same hands
     assert "pev_body_red_frog" not in report.manifest["v_alpha_knife"]
+
+
+def test_a_mirrored_frog_is_the_frog_in_a_mirror() -> None:
+    # v_china's frog is a mirror image: drawn on our frog's mirror, by rotations
+    from valve_qc_merger.merge_zhands.frog import mirror_frog
+    from valve_qc_merger.models.smd import BonePose, Frame, Node, Smd
+    nodes = [Node(0, "gren_root", -1)]
+    frog = Smd(nodes=nodes, frames=[Frame(0, (BonePose(0, ZERO, ZERO),))],
+               triangles=[_tri("frogbomb.bmp", 0, 2.0)])
+    mirrored = mirror_frog(frog, "gren_")
+    (before,), (after,) = frog.triangles, mirrored.triangles
+    assert [v.position.x for v in after.vertices] == [-2.0, -2.0, -3.0]  # x mirrored
+    assert after.vertices[1].uv == before.vertices[2].uv  # winding turned: faces out
