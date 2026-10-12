@@ -231,9 +231,10 @@ def test_export_package_writes_tree_include_res_and_report(tmp_path: Path) -> No
     assert "#define VQM_V_AK47_BODY 3" in inc and "#define VQM_V_AK47_ANIM_RELOAD 1" in inc
     # run-time rows for vqm_weapons.sma: source order -> merged sequences
     assert "stock const VQM_WEAPON_COUNT = 1;" in inc
-    assert "stock const VQM_SEQ[] = { 1, 2, 4, 5 };" in inc
-    assert "stock const VQM_SHOOT[] = { 4 };" in inc  # shoot_empty is not a shot
-    assert "stock const VQM_BODIES[] = { 3 };" in inc and "stock vqm_find(" in inc
+    assert "stock const VQM_SEQ[] = {\n\t1, 2, 4, 5\n};" in inc
+    assert "stock const VQM_SHOOT[] = {\n\t4\n};" in inc  # shoot_empty is not a shot
+    assert "stock const VQM_BODIES[] = {\n\t3\n};" in inc and "stock vqm_find(" in inc
+    assert max(len(line) for line in inc.splitlines()) < 4000  # amxxpc's line limit
     amxx = tmp_path / "out" / "amxx"
     assert "#include \"vqm_resources.inc\"" in (amxx / "vqm_weapons.sma").read_text()
     assert "; view models: v_ak47" in (amxx / "vqm_weapons.ini").read_text()

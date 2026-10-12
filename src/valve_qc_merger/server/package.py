@@ -300,8 +300,12 @@ def _runtime_tables(result: PackageResult) -> list[str]:
     def strings(values: list[str]) -> list[str]:
         return [f'\t"{v}",' for v in values or ["-"]]
 
-    def numbers(values: list[int]) -> str:
-        return ", ".join(map(str, values or [0]))
+    def numbers(name: str, values: list[int]) -> list[str]:
+        # a few values a line: amxxpc stops at 4K characters a line
+        values = values or [0]
+        rows = [", ".join(map(str, values[i:i + 32])) for i in range(0, len(values), 32)]
+        return [f"stock const {name}[] = {{", *(f"\t{row}," for row in rows[:-1]),
+                f"\t{rows[-1]}", "};"]
 
     return [
         "", "// the same weapons as rows, looked up by manifest name at run time",
@@ -310,14 +314,14 @@ def _runtime_tables(result: PackageResult) -> list[str]:
         f"stock const VQM_WEAPON_COUNT = {len(names)};",
         "stock const VQM_NAMES[][] = {", *strings(names), "};",
         "stock const VQM_MODEL_PATHS[][] = {", *strings(models), "};",
-        f"stock const VQM_BODIES[] = {{ {numbers(bodies)} }};",
-        f"stock const VQM_SKINS[] = {{ {numbers(skins)} }};",
-        f"stock const VQM_SEQ_FIRST[] = {{ {numbers(seq_first)} }};",
-        f"stock const VQM_SEQ_COUNT[] = {{ {numbers(seq_count)} }};",
-        f"stock const VQM_SEQ[] = {{ {numbers(seqs)} }};",
-        f"stock const VQM_SHOOT_FIRST[] = {{ {numbers(shoot_first)} }};",
-        f"stock const VQM_SHOOT_COUNT[] = {{ {numbers(shoot_count)} }};",
-        f"stock const VQM_SHOOT[] = {{ {numbers(shoots)} }};",
+        *numbers("VQM_BODIES", bodies),
+        *numbers("VQM_SKINS", skins),
+        *numbers("VQM_SEQ_FIRST", seq_first),
+        *numbers("VQM_SEQ_COUNT", seq_count),
+        *numbers("VQM_SEQ", seqs),
+        *numbers("VQM_SHOOT_FIRST", shoot_first),
+        *numbers("VQM_SHOOT_COUNT", shoot_count),
+        *numbers("VQM_SHOOT", shoots),
         "",
         "// the row of a manifest name, or -1",
         "stock vqm_find(const name[])", "{",
