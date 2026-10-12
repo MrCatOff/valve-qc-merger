@@ -41,13 +41,13 @@ def test_part_stats_and_manifest(zombie_project: Project) -> None:
     record = zombie_project.build_dir("zh") / "last_run.json"
     (stats,) = record_part_stats(record, zombie_project.root)
     # grenade {blank, grenade} + hands {blank, ...}: every group leads with a blank
-    assert (stats.bodyparts, stats.submodels, stats.sequences) == (2, 5, 2)
+    assert (stats.bodyparts, stats.submodels, stats.sequences) == (2, 6, 2)  # + body-2 blank
     assert stats.bones == 3 and not stats.over() and stats.seq_bytes > 0
     assert json.loads(record.read_text())["parts"][0]["name"] == "v_zhands"
     header, rows = manifest_rows(zombie_project.build_dir("zh") / "output")
     assert header[:3] == ["asset", "pev_body", "hands"]
     by_asset = {row[0]: row for row in rows}
-    assert by_asset["v_alpha_grenade"][1] == "3"  # the hands group leads with a blank
+    assert by_asset["v_alpha_grenade"][1] == "4"  # 1 + {blank, grenade, blank} x 1
 
 
 def test_pev_body_decodes_to_bodygroup_entries(zombie_project: Project) -> None:
@@ -55,8 +55,10 @@ def test_pev_body_decodes_to_bodygroup_entries(zombie_project: Project) -> None:
     scene = build_scene(zombie_project.build_dir("zh") / "output")
     assert list(scene.groups) == ["grenade", "hands"]
     assert scene.decode_body(0) == {"grenade": 0, "hands": 0}
-    assert scene.decode_body(1) == {"grenade": 1, "hands": 0}  # grenade = low bit
-    assert scene.decode_body(2) == {"grenade": 0, "hands": 1}
+    assert scene.decode_body(1) == {"grenade": 1, "hands": 0}  # grenade = low digit
+    assert scene.decode_body(2) == {"grenade": 2, "hands": 0}  # the body-2 blank
+    assert scene.groups["grenade"][2] == "blank"
+    assert scene.decode_body(3) == {"grenade": 0, "hands": 1}
 
 
 def test_part_stats_flags_over_limits(tmp_path: Path) -> None:

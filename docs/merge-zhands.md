@@ -16,7 +16,8 @@ is torn apart, so each rig is an entry).
 **Grenade skins**: `--grenade-skin red.bmp --grenade-skin blue.bmp` adds the
 frog in each texture as one more entry of the `grenade` group (a view
 model's skin is never sent to the client, so a texture is a bodygroup entry):
-`blank, grenade, grenade_red, grenade_blue`. `models.ini` gives every grenade
+`blank, grenade, blank, grenade_red, grenade_blue` (the second `blank` is
+body 2, see below). `models.ini` gives every grenade
 model `pev_body` (default frog) and `pev_body_<skin>` for each skin.
 
 ```sh
@@ -54,14 +55,18 @@ out/zhands/
   *.bmp, models.ini
 ```
 
-`pev_body = grenade + (grenades + 1) * (hands_index + 1)`, `grenade` = 0 for a
-knife, the model's grenade entry (1…) for a grenade; with one grenade rig that
-is `grenade_on + 2 * (hands_index + 1)` — a zombie's knife and grenade are `n`
-and `n | 1`. Parts are split so this stays under 256 (a view model's body is
-a byte). The
-hands group (like the grenade group) leads with a `blank`, so `pev_body 0`
-draws nothing (the client's prediction shows nothing until the plugin sets
-the body). `models.ini` gives each
+The grenade group is the low digit and keeps two blanks, at 0 and 2:
+`{blank, grenade, blank, grenade_<skin>…}`. `pev_body = grenade + (grenades +
+2) * (hands_index + 1)`, `grenade` = 0 for a knife, the model's grenade entry
+for a grenade (1, then 3, 4… past the blank); with one frog that is
+`grenade_on + 3 * (hands_index + 1)`. Parts are split so this stays under 256
+(a view model's body is a byte). The hands group also leads with a `blank`.
+So `pev_body 0` draws nothing (the client's prediction shows nothing until the
+plugin sets the body), and neither does `pev_body 2`: CS's client draws body 2
+by itself with `cl_lw 1` (the knife's and every fire event call
+`EV_WeaponAnimation(seq, 2)`), which showed the first zombie's hands. Without
+grenades the hands are the low group: `{blank, h0, blank, h1, …}` — the same
+layout as merge-v (docs/merge-v.md). `models.ini` gives each
 input model its `pev_body`, its `hands` entry and every `anim_<name>` index;
 the knife and grenade weapons of one zombie use the same .mdl with different
 `pev_body` values.

@@ -33,6 +33,7 @@ from valve_qc_merger.merge_view.animsize import SEQ_DATA_LIMIT, sequence_sizes
 from valve_qc_merger.merge_view.discovery import ModelInput
 from valve_qc_merger.merge_view.hands import collision_guard, match_hands, rig_bones_from_smd
 from valve_qc_merger.merge_view.merger import (
+    PREDICTED_BODY,
     _sanitize_material,
     fit_texture_name,
     merged_skeleton,
@@ -552,9 +553,10 @@ def _unique_names(models: list[ZombieModel]) -> dict[tuple[str, str], str]:
 VERTEX_LIMIT = 2048  # studiomdl: vertices, and normals, per submodel
 def hands_limit() -> int:
     """Models a part: the hands group (a leading blank + an entry each) and
-    the grenade's 2 within the compiler's submodels, and pev_body
-    (grenade + 2 x (hands + 1)) within a view model's byte."""
-    return min(limits.submodels() - 3, limits.VIEW_BODY_VALUES // 2 - 1)
+    the grenade's 3 (blank, grenade, the body-2 blank) within the compiler's
+    submodels, and pev_body (grenade + 3 x (hands + 1)) within a view model's
+    byte."""
+    return min(limits.submodels() - 4, limits.VIEW_BODY_VALUES // 3 - 1)
 
 
 def hands_size(model: ModelInput, grenade_prefix: str = "frogbomb") -> tuple[int, int]:
@@ -675,12 +677,14 @@ class _PoolBones:
             self.rig[model_in.name] = home
 
     def body_fits(self, models_in: list[ModelInput]) -> bool:
-        """pev_body (grenade entries + 1) x (hands + 1) within a view model's
-        byte; entries = frogs x (default + skins)."""
+        """pev_body (grenade entries + 2) x (hands + 1) within a view model's
+        byte (two blanks: bodies 0 and 2); entries = frogs x (default + skins)."""
         rigs = {self.rig[m.name] for m in models_in} - {-1}
         frogs = len(rigs)  # -2 (the shared frog) is one of them
         grenades = frogs * (1 + self.skins)
-        return (grenades + 1) * (len(models_in) + 1) <= limits.VIEW_BODY_VALUES
+        if not grenades:  # the hands are the low group: {blank, h, blank, h…}
+            return len(models_in) + 2 <= limits.VIEW_BODY_VALUES
+        return (grenades + 2) * (len(models_in) + 1) <= limits.VIEW_BODY_VALUES
 
     def __call__(self, models_in: list[ModelInput]) -> int:
         from valve_qc_merger.merge_view.bonepool import plan_pool
@@ -968,7 +972,8 @@ def merge_zhands(
 
     # Budgets.
     grenades = len(grenade_paths)
-    submodels = 1 + len(hand_entries) + (1 + grenades if grenades else 0)  # blanks lead
+    # blanks lead each group; the low group has another at body 2
+    submodels = 1 + len(hand_entries) + (1 + grenades if grenades else 0) + 1
     if submodels > limits.submodels():
         raise ZhandsError(f"{submodels} submodels exceed studiomdl's {limits.submodels()}")
     if report.sequences > SEQUENCE_LIMIT:
@@ -978,25 +983,39 @@ def merge_zhands(
     if report.textures > TEXTURE_LIMIT:
         report.warnings.append(f"{report.textures} textures (> {TEXTURE_LIMIT})")
 
-    # The grenade group (blank + one entry a grenade rig) comes FIRST, so it
-    # is the low digit: pev_body = grenade + (grenades + 1) * (hands + 1) —
-    # with one rig grenade_on + 2 * (hands + 1): a zombie's knife and grenade
-    # are n and n | 1, the same convention as merge-v --shared-hands.
-    grenade_stride = grenades + 1
-    if grenade_stride * (len(hand_entries) + 1) > limits.VIEW_BODY_VALUES:
+    # The grenade group (blank + one entry a grenade) comes FIRST, so it is
+    # the low digit: pev_body = grenade + (grenades + 2) * (hands + 1). Every
+    # group leads with a blank (body 0: the client's prediction draws
+    # nothing), and the low group keeps a second blank at index 2: CS's
+    # client draws body 2 by itself (its fire events, the knife's too, call
+    # EV_WeaponAnimation(seq, 2)) — the same layout as merge-v. Without
+    # grenades the hands are the low group: {blank, h0, blank, h1, …}.
+    def low(entry: int) -> int:  # an entry of the low group, past the body-2 blank
+        return entry + 1 if entry >= PREDICTED_BODY else entry
+
+    if grenades:
+        grenade_stride = grenades + 2
+
+        def body(grenade: int, hand: int) -> int:
+            return low(grenade) + grenade_stride * (hand + 1)
+    else:
+        grenade_stride = 1
+
+        def body(grenade: int, hand: int) -> int:
+            return low(hand + 1)
+    top = body(grenades, len(hand_entries) - 1) if hand_entries else 0
+    if top >= limits.VIEW_BODY_VALUES:
         raise ZhandsError(
-            f"{grenades} grenade rigs x {len(hand_entries)} hands need pev_body up to "
-            f"{grenade_stride * (len(hand_entries) + 1) - 1} (a view model's body is a byte)")
+            f"{grenades} grenade entries x {len(hand_entries)} hands need pev_body up to "
+            f"{top} (a view model's body is a byte)")
     for zm in models:
         grenade = grenade_index.get(zm.stem, 0) if zm.role == "grenade" else 0
-        # +1: the hands group leads with a blank (pev_body 0 draws nothing:
-        # the client prediction shows nothing until the plugin sets the body)
-        report.pev_body[zm.stem] = grenade + grenade_stride * (hand_index[zm.stem] + 1)
+        report.pev_body[zm.stem] = body(grenade, hand_index[zm.stem])
 
     lines = [
         "// Generated by valve-qc-merger merge-zhands: zombie hands + one",
-        "// grenade entries (frog x skin); pev_body = grenade + (grenades + 1) * (hands + 1);",
-        "// 0 draws nothing.",
+        "// grenade entries (frog x skin); pev_body = grenade + (grenades + 2) * (hands + 1);",
+        "// 0 and 2 draw nothing (the bodies CS's client draws by itself).",
         "",
         f'$modelname "{name}.mdl"',
         '$cd "."',
@@ -1009,12 +1028,13 @@ def merge_zhands(
         lines.append(f'$texrendermode "{texture}" {mode}')
     if stage.modes:
         lines.append("")
+    grenade_group = ["blank", *(f'studio "{path}"' for path in grenade_paths)]
+    hands_group = ["blank", *(f'studio "hands/{label}"' for label, _ in hand_entries)]
+    low_group = grenade_group if grenade_paths else hands_group
+    low_group.insert(PREDICTED_BODY, "blank")  # body 2 (appended when shorter)
     if grenade_paths:
-        lines += ['$bodygroup "grenade"', "{", "\tblank",
-                  *(f'\tstudio "{path}"' for path in grenade_paths), "}"]
-    lines += ['$bodygroup "hands"', "{", "\tblank"]
-    lines += [f'\tstudio "hands/{label}"' for label, _ in hand_entries]
-    lines += ["}"]
+        lines += ['$bodygroup "grenade"', "{", *(f"\t{e}" for e in grenade_group), "}"]
+    lines += ['$bodygroup "hands"', "{", *(f"\t{e}" for e in hands_group), "}"]
     lines += ["", "$flags 0", ""]
     for final, smd_path, meta in order:
         lines.append(f'$sequence "{final}" {{')
@@ -1034,7 +1054,7 @@ def merge_zhands(
         zm.stem: {
             "pev_body": report.pev_body[zm.stem],
             # the same grenade in each skin (a grenade model only)
-            **({f"pev_body_{label}": entry + grenade_stride * (hand_index[zm.stem] + 1)
+            **({f"pev_body_{label}": body(entry, hand_index[zm.stem])
                 for label, entry in skin_index.get(zm.stem, {}).items()}
                if zm.role == "grenade" else {}),
             "hands": hand_entries[hand_index[zm.stem]][0],

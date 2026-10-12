@@ -74,9 +74,12 @@ def test_knife_and_grenade_share_hands_and_one_grenade(tmp_path: Path) -> None:
     assert qc.index('$bodygroup "grenade"') < qc.index('$bodygroup "hands"')
     # the hands group leads with a blank: pev_body 0 draws nothing
     assert '$bodygroup "hands"\n{\n\tblank' in qc
-    assert ini["v_alpha_knife"]["pev_body"] == "2"
-    assert ini["v_alpha_grenade"]["pev_body"] == "3"  # grenade is the low bit
-    assert ini["v_alpha_knife_invisible"]["pev_body"] == "4"  # hands (1 + 1) * 2
+    # grenade group {blank, grenade, blank}: body 2 draws nothing too (the
+    # client draws it by itself on a knife hit), stride 3
+    assert '$bodygroup "grenade"\n{\n\tblank\n\tstudio "grenade/grenade"\n\tblank\n}' in qc
+    assert ini["v_alpha_knife"]["pev_body"] == "3"
+    assert ini["v_alpha_grenade"]["pev_body"] == "4"  # grenade is the low digit
+    assert ini["v_alpha_knife_invisible"]["pev_body"] == "6"  # hands (1 + 1) * 3
     # the grenade subtree is namespaced so it can't collide with hand roots
     grenade = parse_smd_file(out / "grenade" / "grenade.smd")
     assert "gren_root" in {n.name for n in grenade.nodes}
@@ -154,10 +157,10 @@ def test_grenades_of_different_rigs_get_an_entry_each(tmp_path: Path) -> None:
     qc = (out / "v_zh.qc").read_text(encoding="latin-1")
     assert '\tstudio "grenade/grenade"' in qc and '\tstudio "grenade/grenade2"' in qc
     assert '\tstudio "grenade/grenade3"' not in qc  # alpha and gamma share a rig
-    # grenade group {blank, rig 1, rig 2} is the low digit: stride 3
-    hands = {stem: (body // 3) - 1 for stem, body in report.pev_body.items()}
-    grenade = {stem: body % 3 for stem, body in report.pev_body.items()}
-    assert grenade == {"v_alpha_grenade": 1, "v_beta_grenade": 2, "v_gamma_grenade": 1}
+    # grenade group {blank, rig 1, blank, rig 2} is the low digit: stride 4
+    hands = {stem: (body // 4) - 1 for stem, body in report.pev_body.items()}
+    grenade = {stem: body % 4 for stem, body in report.pev_body.items()}
+    assert grenade == {"v_alpha_grenade": 1, "v_beta_grenade": 3, "v_gamma_grenade": 1}
     assert min(hands.values()) >= 0
 
 
@@ -178,8 +181,8 @@ def test_one_frog_for_all_redraws_the_other_rigs(tmp_path: Path) -> None:
     qc = (out / "v_zh.qc").read_text(encoding="latin-1")
     assert '\tstudio "grenade/grenade"' in qc and "grenade2" not in qc
     assert any("redrawn" in w for w in report.warnings)
-    # grenade group {blank, frog}: every grenade model shows entry 1
-    assert {stem: body % 2 for stem, body in report.pev_body.items()} == {
+    # grenade group {blank, frog, blank}: every grenade model shows entry 1
+    assert {stem: body % 3 for stem, body in report.pev_body.items()} == {
         "v_alpha_grenade": 1, "v_beta_grenade": 1, "v_gamma_grenade": 1}
 
 
@@ -197,9 +200,9 @@ def test_grenade_skins_are_entries_of_their_own(tmp_path: Path) -> None:
     skinned = (out / "grenade" / "grenade_red_frog.smd").read_text(encoding="latin-1")
     assert "Red_Frog.bmp" in skinned or "red_frog" in skinned.lower()
     entry = report.manifest["v_alpha_grenade"]
-    # grenade group {blank, frog, red frog}: stride 3
-    assert entry["pev_body"] % 3 == 1 and entry["pev_body_red_frog"] % 3 == 2
-    assert entry["pev_body_red_frog"] // 3 == entry["pev_body"] // 3  # the same hands
+    # grenade group {blank, frog, blank, red frog}: stride 4
+    assert entry["pev_body"] % 4 == 1 and entry["pev_body_red_frog"] % 4 == 3
+    assert entry["pev_body_red_frog"] // 4 == entry["pev_body"] // 4  # the same hands
     assert "pev_body_red_frog" not in report.manifest["v_alpha_knife"]
 
 
@@ -234,3 +237,17 @@ def test_a_mirrored_frog_is_drawn_on_our_frog() -> None:
     assert can_redraw(ours, theirs, "gren_")
     anim = Smd(nodes=list(theirs.nodes), frames=list(theirs.frames), triangles=[])
     assert redraw_grenade(ours, theirs, {"idle": anim}, "gren_") is not None
+
+
+def test_knives_alone_keep_body_two_blank(tmp_path: Path) -> None:
+    # no grenades: the hands are the low group, {blank, h0, blank, h1}
+    src = tmp_path / "in"
+    _write_model(src, "v_alpha_knife", grenade=False, hand_root="Bone01")
+    _write_model(src, "v_beta_knife", grenade=False, hand_root="Bone01",
+                 render="$texrendermode hand.bmp additive")
+    models = [load_model(d) for d in sorted(src.iterdir())]
+    report = merge_zhands(models, tmp_path / "out", "v_zh")
+    qc = (tmp_path / "out" / "v_zh.qc").read_text(encoding="latin-1")
+    hands = qc.split('$bodygroup "hands"\n{\n')[1].split("}")[0].split("\n")
+    assert hands[0] == hands[2] == "\tblank"
+    assert sorted(report.pev_body.values()) == [1, 3]
