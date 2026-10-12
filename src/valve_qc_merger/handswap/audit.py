@@ -135,14 +135,23 @@ def audit_retarget(original: Path, result: Path) -> RetargetAudit:
     from valve_qc_merger.studio.scene import build_scene
     audit = RetargetAudit()
     o, r = build_scene(Path(original)), build_scene(Path(result))
+    from valve_qc_merger.handswap.identify import HAND_TEXTURE
     all_hands, male = _hands_stems(Path(original))
-    o_hand = [b for b in o.batches if b.stem == male]
+    if male is not None:
+        o_hand = [b for b in o.batches if b.stem == male]
+        o_weapon = [b for b in o.batches if b.stem not in all_hands and len(b.bones)]
+    else:
+        # no hands group (Valve: hands and weapon in one mesh): the hands are
+        # the hand-textured triangles (view_finger, view_glove, view_skin)
+        o_hand = [b for b in o.batches if HAND_TEXTURE.search(b.material) and len(b.bones)]
+        o_weapon = [b for b in o.batches
+                    if not HAND_TEXTURE.search(b.material) and len(b.bones)]
     r_hand = [b for b in r.batches if b.stem == "hands"]
     if not o_hand or not r_hand:
-        audit.note = "no hands group to compare with"
+        audit.note = "no hands to compare with"
         return audit
-    o_weapon = [b for b in o.batches if b.stem not in all_hands and len(b.bones)]
-    r_weapon = [b for b in r.batches if b.stem != "hands" and len(b.bones)]
+    r_weapon = [b for b in r.batches if b.stem != "hands" and len(b.bones)
+                and (male is not None or not HAND_TEXTURE.search(b.material))]
     arm = {i for i, n in enumerate(r.bone_names)
            if n.startswith(("UpperArm", "Arm0", "Arm1"))}
     tracked = [i for i, n in enumerate(r.bone_names)

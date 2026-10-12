@@ -44,6 +44,7 @@ def hands_are_the_model(folder: Path, source: str | None = None) -> str | None:
         find_hands,
         merge_skeleton,
         mesh_bone_weights,
+        rigid_hand_bones,
         worn_meshes,
     )
     folder = Path(folder)
@@ -69,7 +70,8 @@ def hands_are_the_model(folder: Path, source: str | None = None) -> str | None:
         labeled = {studio.replace("\\", "/").split("/")[-1]
                    for group, studio in qc.references if re.search("hand", group, re.I)}
         hands = find_hands(skel, refs, weights, labeled, log=lambda *_a: None)
-        worn = worn_meshes(hands, weights, labeled) if hands else {}
+        worn = worn_meshes(hands, weights, labeled, refs) if hands else {}
+        rigid = rigid_hand_bones(skel, hands, refs, labeled) if hands else {}
     except Exception:  # noqa: BLE001 - an unreadable model is left to the merge to judge
         return None
     if not hands:
@@ -82,6 +84,8 @@ def hands_are_the_model(folder: Path, source: str | None = None) -> str | None:
         return "no hands"
     if worn:  # a gauntlet / fist weapon rides the fingers: swap the hands, lose it
         return f"worn on the hands ({', '.join(sorted(worn))})"
+    if rigid:  # a hand modelled as a rigid mesh: ours would stand beside it
+        return f"a rigid hand mesh ({', '.join(sorted(rigid))})"
     hand_bones: set[str] = set().union(*(h.core for h in hands))
     for hand in hands:
         bone = skel.parent.get(hand.wrist)

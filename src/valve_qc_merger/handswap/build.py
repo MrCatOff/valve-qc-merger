@@ -25,7 +25,8 @@ import numpy as np
 from . import qc as qcmod
 from . import smd as smdmod
 from .asset import HandsAsset
-from .identify import (HandInfo, OrigSkeleton, find_hands, worn_meshes,
+from .identify import (HAND_TEXTURE, HandInfo, OrigSkeleton, find_hands, rigid_hand_bones,
+                       worn_meshes,
                        mesh_bone_weights, merge_skeleton)
 from .math3d import inv_rigid, local_matrix, mat3_to_euler, orthonormalize
 from .retarget import RetargetPlan, build_plan, reset_motion, solve_frame
@@ -100,11 +101,16 @@ def load_weapon(weapon_dir: str, qc_path: str | None, log=print,
     if not hands:
         raise RuntimeError("no hands found in the original model")
     # (zombie hands lend their claws as they are: allow_worn)
-    worn = {} if allow_worn else worn_meshes(hands, weights, hand_labeled)
+    worn = {} if allow_worn else worn_meshes(hands, weights, hand_labeled, refs)
     if worn:
         raise RuntimeError(
             "weapon worn on the hands (%s on the finger bones) — the hands are the "
             "model" % ", ".join("%s %.0f%%" % (m, 100 * x) for m, x in sorted(worn.items())))
+    rigid = {} if allow_worn else rigid_hand_bones(skel, hands, refs, hand_labeled)
+    if rigid:
+        raise RuntimeError(
+            "a hand is a rigid mesh (%s) — the hands are the model"
+            % ", ".join("%d hand triangles on %s" % (n, b) for b, n in sorted(rigid.items())))
     return WeaponModel(qc=qc, refs=refs, anims=anims, skel=skel,
                        weights=weights, hands=hands)
 
@@ -337,8 +343,10 @@ def hand_materials(model: WeaponModel, core: set[str],
     # knife blade riding the wrist: 1). The fraction guard is deliberately
     # low — with only one detectable hand anchoring the census, a genuine
     # hand texture can drop to ~0.32 of corners on core (cartblue).
+    # ... and a texture named for the hands (Valve's view_skin: the forearm
+    # skin touches no finger at all, and was kept on the old arm bones)
     return {m for m, (tot, on, bones) in per_mat.items()
-            if tot and on / tot > 0.25 and len(bones) >= 5}
+            if (tot and on / tot > 0.25 and len(bones) >= 5) or HAND_TEXTURE.search(m)}
 
 
 def classify_meshes(model: WeaponModel, hand_bones: set[str],

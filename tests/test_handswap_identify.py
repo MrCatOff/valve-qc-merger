@@ -19,7 +19,12 @@ from types import SimpleNamespace
 import numpy as np
 
 from valve_qc_merger.handswap import build as buildmod
-from valve_qc_merger.handswap.identify import HandInfo, _resolve_sides, worn_meshes
+from valve_qc_merger.handswap.identify import (
+    HAND_TEXTURE,
+    HandInfo,
+    _resolve_sides,
+    worn_meshes,
+)
 
 
 def _model(weights, refs):
@@ -227,3 +232,13 @@ def test_weapon_chain_off_the_wrist_does_not_evict_a_finger() -> None:
     # without the mesh information the old compactness rule drops the middle finger
     legacy = _finger_chains_of(skel, "wrist", weighted, total)
     assert "middle0" not in [c[0] for c in legacy]
+
+
+def test_hand_textures_by_name() -> None:
+    # Valve keeps hands and weapon in one mesh: the hands are its view_* textures
+    for name in ("view_finger.bmp", "view_glove.bmp", "view_skin.bmp", "CSO_Girl_Hand.bmp",
+                 "arm.bmp", "skin_l.bmp"):
+        assert HAND_TEXTURE.search(name), name
+    # ... and a blade, a grip or a charm are no hands
+    for name in ("knifeskin.bmp", "p228_handle.bmp", "v_famas.bmp", "charm.bmp"):
+        assert not HAND_TEXTURE.search(name), name

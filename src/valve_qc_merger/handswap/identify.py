@@ -303,24 +303,79 @@ def _descendant_fans(skel, fan, fan_names):
 WORN_SHARE = 0.05  # of a weapon mesh's weight on finger bones: worn, not held
 
 
+# a texture of the hands themselves (Valve keeps hands and weapon in one mesh:
+# view_finger / view_glove / view_skin beside v_famas.bmp; knifeskin is a
+# blade, p228_handle a grip)
+HAND_TEXTURE = re.compile(
+    r"(?i)hand(?!le)|glove|sleeve|finger|(?:^|[^a-z])(?:skin|arms?)(?:[^a-z]|$)")
+
+
 def worn_meshes(hands: list[HandInfo], weights_by_mesh: dict[str, dict[str, float]],
-                hand_labeled: set[str]) -> dict[str, float]:
+                hand_labeled: set[str],
+                refs: dict[str, Smd] | None = None) -> dict[str, float]:
     """Meshes outside the QC's hands group that ride the FINGER bones: a
     gauntlet, a claw glove, a fist weapon (v_balrog9, v_crow9, v_spknife,
     v_laserfist). A held weapon puts none of its weight there (0.0 on every
     one of ~500 CSO weapons); a worn one 15-60 %. Swapping the hands would
     throw the weapon away with them: such a model's hands are the model.
+    With ``refs`` the hands' own triangles (hand-named textures) are left
+    out first — a Valve model has no hands group, its one mesh holds hands
+    and weapon (v_famas, v_knife were taken for gauntlets).
     Returns mesh -> share of its weight on finger bones, for the worn ones."""
     fingers = {b for h in hands for chain in h.chains for b in chain}
     worn: dict[str, float] = {}
     for mesh, weights in weights_by_mesh.items():
+        if mesh in hand_labeled:
+            continue
+        smd = (refs or {}).get(mesh)
+        if smd is not None:
+            names = smd.name_of()
+            weights = {}
+            for tri in smd.triangles:
+                if HAND_TEXTURE.search(tri.material):
+                    continue
+                for vertex in tri.verts:
+                    for bone, w in vertex.weights():
+                        weights[names[bone]] = weights.get(names[bone], 0.0) + w
         total = sum(weights.values())
-        if mesh in hand_labeled or total <= 0:
+        if total <= 0:
             continue
         share = sum(w for b, w in weights.items() if b in fingers) / total
         if share > WORN_SHARE:
             worn[mesh] = share
     return worn
+
+
+RIGID_HAND_TRIANGLES = 40  # hand-textured triangles off every hand: rigid hands
+
+
+def rigid_hand_bones(skel: OrigSkeleton, hands: list[HandInfo],
+                     refs: dict[str, Smd], hand_labeled: set[str]) -> dict[str, int]:
+    """Bones outside every found hand (its fingers, the wrist's subtree and
+    the arm above it) that carry hand-textured triangles: a hand modelled as
+    a rigid mesh on a helper bone (Valve's v_shield_r holds the shield with
+    212 glove triangles on ``MESH_Leftarm07``; its skeletal left hand draws
+    nothing). Swapping would put our hand beside it: such a model keeps its
+    own hands. The QC's hands group is left out: it goes whole, sleeves
+    (CSO's Bone_L_Upper) and all. Returns bone -> triangles, over the
+    threshold."""
+    region: set[str] = set()
+    for h in hands:
+        region |= h.core | {b for chain in h.chains for b in chain}
+        region |= skel.subtree(h.wrist) | set(skel.ancestors(h.wrist)) | {h.wrist}
+    counts: dict[str, int] = {}
+    for mesh, smd in refs.items():
+        if mesh in hand_labeled:
+            continue
+        names = smd.name_of()
+        for tri in smd.triangles:
+            if not HAND_TEXTURE.search(tri.material):
+                continue
+            bones = {names[v.dominant_bone()] for v in tri.verts}
+            if not bones & region:
+                for bone in bones:
+                    counts[bone] = counts.get(bone, 0) + 1
+    return {b: n for b, n in counts.items() if n >= RIGID_HAND_TRIANGLES}
 
 
 def _tip_directions(skel, refs, chains):

@@ -43,7 +43,8 @@ FALLBACK_ARM_DIR = np.array([0.0, 8.0, -6.0])  # behind and below the view
 # 2: hand sides by their own shape, worn weapons left alone, shoulders off screen
 # 3: weapon geometry on the old arms kept on carrier bones; QC hands dropped at 50 %
 # 4: arm parts turn frame to frame no faster than the original's (no elbow/shoulder jumps)
-RETARGET_REVISION = 4
+# 5: hand-named textures (Valve's view_skin) cut with the hands; rigid hand meshes kept
+RETARGET_REVISION = 5
 
 # Wrist kink of OUR hand mesh as CSO's own animators pose it: the forearm
 # direction in the palm frame, relative to the rest pose, (pitch, yaw) in
