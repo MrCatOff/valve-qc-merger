@@ -8,6 +8,8 @@ name: build-exe
 #   valve-qc-studio-<os>  the GUI (a folder, zipped; macOS: the .app)
 #   studiomdl-<os>        HLSDK studiomdl with 1024 submodels, $texrendermode,
 #                         64-bit fixes and a 16 MB output check
+# On a version tag they are also attached to its GitHub release (made if the
+# tag has none yet), one file per OS.
 
 on:
   workflow_dispatch:
@@ -136,3 +138,33 @@ jobs:
           name: studiomdl-Windows
           path: out/windows/studiomdl.exe
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [cli, studio, studiomdl]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+      - name: Name the files per OS
+        run: |
+          mkdir upload
+          cp artifacts/valve-qc-merger-windows/valve-qc-merger.exe upload/valve-qc-merger-windows.exe
+          cp artifacts/valve-qc-merger-macos/valve-qc-merger upload/valve-qc-merger-macos
+          cp artifacts/valve-qc-merger-linux/valve-qc-merger upload/valve-qc-merger-linux
+          cp artifacts/valve-qc-studio-*/valve-qc-studio-* upload/
+          cp artifacts/studiomdl-Windows/studiomdl.exe upload/studiomdl-windows.exe
+          cp artifacts/studiomdl-macOS/studiomdl upload/studiomdl-macos
+          cp artifacts/studiomdl-Linux/studiomdl upload/studiomdl-linux
+          ls -l upload
+      - name: Attach to the release
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 \
+            || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "${TAG#v}" --notes ""
+          gh release upload "$TAG" upload/* -R "$GITHUB_REPOSITORY" --clobber
