@@ -122,8 +122,9 @@ def _part_counts(
         hands = len(part) if any_hands else 0
     submodels = sum(groups) + blanks + hands
     # the leading blank of the weapon group and of the hands group (view
-    # models: pev_body 0 draws nothing — see merge_models' blank_first)
-    submodels += 1 + (1 if hands else 0)
+    # models: pev_body 0 draws nothing — see merge_models' blank_first) and
+    # the low-order group's second blank (body 2, the client's own)
+    submodels += 1 + (1 if hands else 0) + 1
     materials: set[tuple[str, str]] = set()
     sequences: set[tuple[str, float | None, tuple[str, ...]]] = set()
     for model, _ in part:
@@ -155,14 +156,17 @@ def view_body_range(part: list[Pair], *, shared_hands: bool = False) -> int:
     layout, every group leading with a blank): the weapon group, each extra
     weapon group (blank + the weapons with that many submodels), and the hands
     — shared (male/female) or one per weapon, aligned with it. A view model's
-    body is ONE byte: 256 values."""
+    body is ONE byte: 256 values. The low-order group (the shared hands, else
+    the weapons) holds one more blank, at index 2 (the client's own body 2)."""
     weapons = len(part)
     total = weapons + 1  # every group leads with a blank
+    if not shared_hands:
+        total += 1  # the low-order group's body-2 blank
     groups = max(len(parts.weapon_stems) for _m, parts in part)
     for k in range(1, groups):
         total *= 1 + sum(1 for _m, parts in part if len(parts.weapon_stems) > k)
     if shared_hands:
-        total *= max(len(part[0][1].hand_variants), 1) + 1
+        total *= max(len(part[0][1].hand_variants), 1) + 2
     elif any(parts.hands_stem is not None for _m, parts in part):
         total *= weapons + 1
     return total

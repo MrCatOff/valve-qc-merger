@@ -42,10 +42,11 @@ def test_split_respects_submodel_budget_with_per_model_hands(
     tmp_path: Path,
 ) -> None:
     # 40 weapons, each bringing its own hands: 2 submodels per model, plus the
-    # blank each of the two groups leads with: 2N + 2 <= 32 -> 15
+    # blank each of the two groups leads with and the weapon group's body-2
+    # blank: 2N + 3 <= 32 -> 14
     pairs = [_model(f"m{i:02d}", tmp_path, "tex.bmp") for i in range(40)]
     parts = split_parts(pairs, PartBudget(submodels=32, textures=80))
-    assert [len(p) for p in parts] == [15, 15, 10]
+    assert [len(p) for p in parts] == [14, 14, 12]
     assert [m.name for m, _ in parts[0]][:2] == ["m00", "m01"]
 
 
@@ -62,15 +63,15 @@ def test_split_distinct_hands_count_separately(tmp_path: Path) -> None:
     pairs = [
         _model(f"m{i}", tmp_path, "tex.bmp", offset=float(i)) for i in range(4)
     ]
-    parts = split_parts(pairs, PartBudget(submodels=6, textures=80))
+    parts = split_parts(pairs, PartBudget(submodels=7, textures=80))
     # Each model brings weapon + own hands = 2 submodels, plus the two groups'
-    # leading blanks: 6 fits two models.
+    # leading blanks and the body-2 blank: 7 fits two models.
     assert [len(p) for p in parts] == [2, 2]
 
 
 def test_split_shared_hands_counts_one_hands_group(tmp_path: Path) -> None:
     # --shared-hands: ONE hands group (male/female) for the whole part, so a
-    # part takes 28 weapons + their blank + {blank, male, female} = 32.
+    # part takes 27 weapons + their blank + {blank, male, blank, female} = 32.
     pairs = []
     for i in range(40):
         model, parts = _model(f"m{i:02d}", tmp_path, "tex.bmp")
@@ -78,4 +79,4 @@ def test_split_shared_hands_counts_one_hands_group(tmp_path: Path) -> None:
         pairs.append((model, parts))
     parts = split_parts(pairs, PartBudget(submodels=32, textures=80),
                         shared_hands=True)
-    assert [len(p) for p in parts] == [28, 12]  # N + blank + 3 hands entries <= 32
+    assert [len(p) for p in parts] == [27, 13]  # N + blank + 4 hands entries <= 32

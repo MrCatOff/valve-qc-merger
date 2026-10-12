@@ -58,14 +58,17 @@ def test_shared_hands_emits_one_shared_hands_bodygroup(tmp_path: Path) -> None:
     assert not (out / "v_w0" / "hands.smd").exists()
 
 
-def test_shared_hands_pev_body_is_weapon_times_three(tmp_path: Path) -> None:
-    # hands first {blank, male, female} (stride 1), weapon second {blank, w0…}
-    # (stride 3): pev_body = (position + 1) x 3 + 1 (the first hand), the
-    # second hand +1 at runtime; 0 draws nothing (the client prediction).
+def test_shared_hands_pev_body_is_weapon_times_four(tmp_path: Path) -> None:
+    # hands first {blank, male, blank, female} (stride 1), weapon second
+    # {blank, w0…} (stride 4): pev_body = (position + 1) x 4 + 1 (the first
+    # hand), the second hand +2 at runtime; 0 and 2 draw nothing (the bodies
+    # the client predicts with).
     pairs = [_model(f"v_w{i}", tmp_path) for i in range(4)]
     report = merge_models(pairs, tmp_path / "out", "v_merged", shared_hands=True)
-    assert [report.pev_body[f"v_w{i}"] for i in range(4)] == [4, 7, 10, 13]
-    assert max(report.pev_body.values()) < 255
+    assert [report.pev_body[f"v_w{i}"] for i in range(4)] == [5, 9, 13, 17]
+    qc = (tmp_path / "out" / "v_merged.qc").read_text(encoding="latin-1")
+    hands = qc.split('$bodygroup "hands"')[1].split("}")[0].split()
+    assert hands[1] == "blank" and hands[4] == "blank"  # {, blank, studio "…", blank
 
 
 def test_collapse_keeps_hand_variants(tmp_path: Path) -> None:
@@ -142,3 +145,16 @@ def test_multipart_weapon_collapses_to_multiple_submodels(tmp_path: Path) -> Non
     )
     parts = collapse_bodygroups(model)
     assert len(parts.weapon_stems) > 1
+
+
+def test_body_two_draws_nothing(tmp_path: Path) -> None:
+    # CS's client draws body 2 by itself (its fire events, cl_lw 1): the
+    # low-order group keeps a blank there, so it never shows the 2nd weapon
+    pairs = [_model(f"v_w{i}", tmp_path) for i in range(3)]
+    report = merge_models(pairs, tmp_path / "out", "v_merged")
+    qc = (tmp_path / "out" / "v_merged.qc").read_text(encoding="latin-1")
+    weapon = [line.strip() for line in
+              qc.split('$bodygroup "weapon"')[1].split("}")[0].splitlines()[2:]]
+    assert weapon[0] == weapon[2] == "blank" and "blank" not in (weapon[1], weapon[3])
+    stride = len(weapon)
+    assert [report.pev_body[f"v_w{i}"] % stride for i in range(3)] == [1, 3, 4]

@@ -27,10 +27,11 @@
  *   - dropped weapons (weaponbox) get the w_ model and body.
  *
  * Shared-hands view models (merge-v --shared-hands) select the hands with the
- * low dimension: body = (weapon + 1) x 3 + 1 for the first hands (the value
- * the manifest gives) — set vqm_hand 1 for the second hands (+1). Every
+ * low dimension: body = (weapon + 1) x 4 + 1 for the first hands (the value
+ * the manifest gives) — set vqm_hand 1 for the second hands (+2). Every
  * bodygroup of a merged view model leads with a blank, so body 0 draws
- * nothing while the client predicts the stock animations.
+ * nothing while the client predicts the stock animations; body 2 (the client's
+ * fire events and its animation fix-up, cl_lw 1) is a blank too.
  * The p_ model is drawn with the PLAYER's body: vqm_p_body 1 sets it on deploy
  * (it also selects the player model's own bodygroups — turn it off when your
  * player models use them).
@@ -173,7 +174,7 @@ bool:event_matches(const name[], const short[])
 
 view_body(row)
 {
-	return VQM_BODIES[row] + get_pcvar_num(g_cvar_hand);
+	return VQM_BODIES[row] + 2 * get_pcvar_num(g_cvar_hand);  // index 2: a blank
 }
 
 send_anim(player, anim, body)

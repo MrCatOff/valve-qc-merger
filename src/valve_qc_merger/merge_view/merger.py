@@ -45,6 +45,9 @@ SUBMODEL_LIMIT = 32  # hard studiomdl array size; exceeding = memory corruption
 STOCK_VERT_LIMIT = 2048  # stock MAXSTUDIOVERTS per submodel (verts and normals)
 SUBMODEL_TRI_WARN = 4080  # old GoldSrc renderers degrade past this per submodel
 TEXTURE_WARN = 80
+# the view model body CS's client draws by itself: its fire events and its
+# animation fix-up call EV_WeaponAnimation(seq, 2) (cl_lw 1)
+PREDICTED_BODY = 2
 
 
 class MergeError(RuntimeError):
@@ -392,7 +395,10 @@ def merge_models(
     ``pev_body 0`` draws nothing — the client's weapon prediction (which
     plays the stock animations with body 0) shows nothing, and the plugin sets
     the body and starts the animation itself. Every weapon's pev_body moves
-    up by one entry in each group.
+    up by one entry in each group. The client also draws ``pev_body 2`` on
+    its own (the fire events and its animation fix-up), so the low-order
+    group keeps a second blank at index 2: body 2 draws nothing either,
+    never another weapon (or the hands alone).
 
     With ``shared_hands`` the models all wear the same hands (our retargeted
     male/female, identical bind): one shared ``hands`` bodygroup (2 submodels)
@@ -569,9 +575,9 @@ def merge_models(
     groups: list[tuple[str, list[str]]] = []
     if shared_hand_paths:
         # ONE shared hands bodygroup for the whole model (male/female), emitted
-        # FIRST as the low-order dimension: pev_body = (weapon + 1) x 3 + hand, so the
-        # male/female bit is the cheap +1 the game toggles and the weapon index
-        # scales by 2. (Independent of the weapon: 2N-1 max, not weapon x hands.)
+        # FIRST as the low-order dimension: pev_body = (weapon + 1) x 4 + hand, so the
+        # male/female choice is the cheap +2 the game toggles (index 2 is the
+        # prediction blank). (Independent of the weapon, not weapon x hands.)
         groups.append(("hands", lead + list(shared_hand_paths)))
         groups.append(("weapon", lead + [weapon_paths[m.name][0] for m in models]))
     else:
@@ -588,6 +594,12 @@ def merge_models(
             groups.append(("hands", lead + [
                 hands_paths.get(m.name, "blank") for m in models
             ]))
+    if blank_first:
+        # the client draws body 2 by itself (CS fire events and its animation
+        # fix-up call EV_WeaponAnimation(seq, 2)): a blank there too, in the
+        # low-order group, so it shows nothing instead of the second weapon
+        low_name, low = groups[0]
+        groups[0] = (low_name, [*low[:PREDICTED_BODY], "blank", *low[PREDICTED_BODY:]])
     report.bodyparts = len(groups)
     if report.bodyparts > BODYPART_LIMIT:
         report.warnings.append(
@@ -628,7 +640,7 @@ def merge_models(
     for position, model in enumerate(models):
         value = 0
         stride = 1
-        for group_name, entries in groups:
+        for number, (group_name, entries) in enumerate(groups):
             if group_name == "weapon":
                 index = position + len(lead)
             elif group_name.startswith("weapon_"):
@@ -639,6 +651,8 @@ def merge_models(
                 index = len(lead)
             else:  # per-weapon hands, aligned with the weapon group
                 index = position + len(lead)
+            if number == 0 and blank_first and index >= PREDICTED_BODY:
+                index += 1  # past the prediction blank
             value += index * stride
             stride *= len(entries)
         report.pev_body[model.name] = value

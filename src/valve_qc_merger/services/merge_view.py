@@ -357,11 +357,12 @@ def _plan_rows(opts: MergeViewOptions, resolved: list) -> list[dict[str, object]
         models = [model.name for model, _parts in part_pairs]
         folded = [model.name for model, parts in part_pairs if parts.fold_report is not None]
         # shared hands: the hands group is the low dimension, both groups
-        # lead with a blank (merger.merge_models' blank_first), so pev_body =
-        # (weapon + 1) x (hand variants + 1) + 1 (the first hand); per-weapon
+        # lead with a blank (merger.merge_models' blank_first) and the hands
+        # keep one more at index 2 (the client's body 2), so pev_body =
+        # (weapon + 1) x (hand variants + 2) + 1 (the first hand); per-weapon
         # hands depend on every model's group layout -> known after the run
         variants = max(len(part_pairs[0][1].hand_variants), 1)
-        bodies = ({name: (index + 1) * (variants + 1) + 1
+        bodies = ({name: (index + 1) * (variants + 2) + 1
                    for index, name in enumerate(models)}
                   if opts.shared_hands else {})
         rows.append({

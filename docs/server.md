@@ -227,7 +227,7 @@ weapon_knife = v_combat_hands p_combat -
   plays one of the merged model's `shoot*`/`fire*` sequences and the sound
   for everyone (no shell / smoke effects then).
 - Dropped weapons get the w_ model and body (`CWeaponBox::SetModel`).
-- `vqm_hand 1`: the second hands of a shared-hands view model (body + 1).
+- `vqm_hand 1`: the second hands of a shared-hands view model (body + 2; body + 1 + 1 is the blank the client's body 2 lands on).
   `vqm_p_body 1` (default): the p_ body goes on the player — GoldSource draws
   the p_ model with the player's body, which also picks the player model's own
   bodygroups; turn it off if your player models use them.

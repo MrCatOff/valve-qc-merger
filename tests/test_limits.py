@@ -57,8 +57,9 @@ def test_the_compiler_banner_sets_the_submodels(tmp_path: Path) -> None:
 def test_view_body_range() -> None:
     one = ModelParts(weapon_stems=[["w"]], hands_stem="h")
     shared = ModelParts(weapon_stems=[["w"]], hand_variants=["m", "f"])
-    # every group leads with a blank: per-weapon hands (N + 1) x (N + 1)
-    assert view_body_range([(None, one)] * 15) == 256
-    assert view_body_range([(None, one)] * 16) == 289  # over a view model's byte
-    # shared hands: (N + 1) x 3
-    assert view_body_range([(None, shared)] * 84, shared_hands=True) == 255
+    # every group leads with a blank, the weapons keep one more (body 2):
+    # per-weapon hands (N + 2) x (N + 1)
+    assert view_body_range([(None, one)] * 14) == 240
+    assert view_body_range([(None, one)] * 15) == 272  # over a view model's byte
+    # shared hands: (N + 1) x 4
+    assert view_body_range([(None, shared)] * 63, shared_hands=True) == 256
