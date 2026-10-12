@@ -265,17 +265,67 @@ def stock_sound_files(project: Project) -> dict[str, Path]:
     return out
 
 
+def game_sound_roots(project: Project) -> list[Path]:
+    """The ``sound/`` folders of the game install (Project ▸ Settings ▸ Game
+    install — read, never written): its mod folder, then the base game next
+    to it (``valve``: CS plays Half-Life's sounds too). Either the mod folder
+    or the folder holding it (``…/Half-Life``) may be given."""
+    if not project.settings.game_install:
+        return []
+    mod = Path(project.settings.game_install)
+    if not (mod / "sound").is_dir() and (mod / "cstrike" / "sound").is_dir():
+        mod = mod / "cstrike"
+    roots = [mod / "sound", mod.with_name("valve") / "sound"]
+    return [r for r in dict.fromkeys(roots) if r.is_dir()]
+
+
+_GAME_FILES: dict[tuple[str, ...], dict[str, Path]] = {}
+
+
+def game_sound_files(project: Project) -> dict[str, Path]:
+    """Every sound a player already has: the game install's WAVs (name as
+    the game spells it -> file; the mod's own before the base game's), and
+    the stock sounds found in the game folder."""
+    roots = game_sound_roots(project)
+    key = tuple(str(r) for r in roots)
+    if key not in _GAME_FILES:
+        found: dict[str, Path] = {}
+        taken: set[str] = set()
+        for root in roots:
+            for path in sorted(_wavs(root)):
+                name = path.relative_to(root).as_posix()
+                if sound_key(name) not in taken:
+                    taken.add(sound_key(name))
+                    found[name] = path
+        _GAME_FILES[key] = found
+    out = dict(_GAME_FILES[key])
+    taken = {sound_key(n) for n in out}
+    for name, path in stock_sound_files(project).items():
+        if sound_key(name) not in taken:
+            out[name] = path
+    return out
+
+
+def in_game(project: Project, name: str) -> bool:
+    """Does every player have ``name`` already (the game install has it)?"""
+    return sound_key(name) in {sound_key(n) for n in game_sound_files(project)}
+
+
 def find_similar(project: Project, *, similar: bool = True,
                  progress=None) -> list:  # noqa: ANN001 - list[SoundGroup], callback
     """Groups of library sounds that could be one file (see
-    :mod:`valve_qc_merger.sound.similar`), with the stock sounds they match."""
+    :mod:`valve_qc_merger.sound.similar`), with the game's sounds they match
+    (the game install's, and the stock ones the game DLL precaches)."""
     from valve_qc_merger.sound.similar import analyse
     shared = {sound_key(k) for k in project.settings.sound_aliases}
+    game = game_sound_files(project)
+    theirs = {sound_key(n) for n in game}
     library = {name: sound_path(project, name) for name in list_sounds(project)
-               if sound_key(name) not in shared}  # already playing another one
+               if sound_key(name) not in shared  # already playing another one
+               and sound_key(name) not in theirs}  # the game's own: nothing to save
     users = {k: len(v) for k, v in sound_users(project).items()}
     threshold = None if similar else 2.0  # 2.0: no pair is ever that similar
-    groups = analyse(library, stock_sound_files(project), users=users, progress=progress,
+    groups = analyse(library, game, users=users, progress=progress, free=stock_sounds(),
                      **({} if threshold is None else {"similar_threshold": threshold}))
     return groups
 
@@ -309,12 +359,14 @@ def sound_users(project: Project) -> dict[str, list[str]]:
 
 def resolve(project: Project, name: str) -> Path | None:
     """Where a sound named by a model is: the library first, then the game
-    folder, its ``_downloads`` folder and the base game (case-insensitive)."""
+    folder, its ``_downloads`` folder and the base game, then the game
+    install (case-insensitive)."""
     candidates = [sounds_dir(project)]
     if project.settings.game_dir:
         game = Path(project.settings.game_dir)
         candidates += [game / "sound", game.with_name(game.name + "_downloads") / "sound",
                        game.with_name("valve") / "sound"]
+    candidates += [r for r in game_sound_roots(project) if r not in candidates]
     for base in candidates:
         direct = base / name
         if direct.is_file():
@@ -328,6 +380,7 @@ def resolve(project: Project, name: str) -> Path | None:
     return None
 
 
-__all__ = ["EVENT_SOUND", "asset_sounds", "can_undo_fix", "fix_sound", "import_sounds",
-           "list_sounds", "remove_sound", "resolve", "sequence_sounds", "sound_path",
-           "sound_users", "sounds_dir", "undo_fix"]
+__all__ = ["EVENT_SOUND", "asset_sounds", "can_undo_fix", "fix_sound", "game_sound_files",
+           "game_sound_roots", "import_sounds", "in_game", "list_sounds", "remove_sound",
+           "resolve", "sequence_sounds", "sound_path", "sound_users", "sounds_dir",
+           "undo_fix"]

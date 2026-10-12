@@ -45,7 +45,8 @@ class SimilarSoundsDialog(QDialog):
             "Find similar sounds", "Sounds that could be one file: identical copies, the "
             "same sound saved another way (rate, stereo, gain, silence), and similar ones. "
             "Sharing one changes no file — builds point the models' sound events at the "
-            "kept sound; a stock sound the game already has costs nothing."))
+            "kept sound. A game sound (Project ▸ Settings ▸ Game install) is kept first: "
+            "every player has it, nothing to download."))
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
 
@@ -110,9 +111,22 @@ class SimilarSoundsDialog(QDialog):
 
     # -- found ------------------------------------------------------------------
     def analyse(self) -> None:
+        from PySide6.QtWidgets import QProgressDialog
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        waiting = QProgressDialog("Listening to the sounds…", "", 0, 0, self)
+        waiting.setWindowTitle("Find similar sounds")
+        waiting.setCancelButton(None)
+        waiting.setMinimumDuration(400)
+        waiting.setWindowModality(Qt.WindowModality.WindowModal)
+
+        def progress(done: int, total: int, name: str) -> None:
+            if done % 50 == 0:
+                waiting.setMaximum(total)
+                waiting.setValue(done)
+                waiting.setLabelText(f"Listening to the sounds… {done}/{total}\n{name}")
+                QApplication.processEvents()
         try:
-            self.groups = library.find_similar(self.project,
+            self.groups = library.find_similar(self.project, progress=progress,
                                                similar=self.similar_box.isChecked())
             texts = []
             from valve_qc_merger.project.qc_edit import qc_file
@@ -126,6 +140,7 @@ class SimilarSoundsDialog(QDialog):
                                                 self.project.settings.sound_precache)
             self.users = library.sound_users(self.project)
         finally:
+            waiting.close()
             QApplication.restoreOverrideCursor()
         self._fill()
 
@@ -135,7 +150,7 @@ class SimilarSoundsDialog(QDialog):
         self.keepers = {}
         for index, group in enumerate(self.groups):
             title = (f"{len(group.members)} sound(s)"
-                     + (f" + stock {group.stock[0]}" if group.stock else ""))
+                     + (f" + the game's {group.stock[0]}" if group.stock else ""))
             node = QTreeWidgetItem(self.tree, [title, f"{LEVEL_TEXT[group.level]} "
                                                f"({group.score:.0%})", "", ""])
             node.setData(0, ROLE_GROUP, index)
@@ -150,7 +165,7 @@ class SimilarSoundsDialog(QDialog):
                 stock = name in group.stock
                 users = self.users.get(name.lower(), [])
                 child = QTreeWidgetItem(node, [
-                    name + ("  (stock)" if stock else ""), "",
+                    name + (f"  ({self.game_label(name)})" if stock else ""), "",
                     f"{len(users)} model(s)" if users else
                     ("" if stock else "no model — your plugin names it"), ""])
                 child.setData(0, ROLE_NAME, name)
@@ -163,7 +178,8 @@ class SimilarSoundsDialog(QDialog):
                                      "point your plugin at the kept sound to drop this one")
             box = QComboBox()
             for name in group.stock + group.members:
-                box.addItem(name + ("  (stock)" if name in group.stock else ""), name)
+                box.addItem(name + (f"  ({self.game_label(name)})" if name in group.stock
+                                    else ""), name)
             box.setCurrentIndex(max(box.findData(group.keeper), 0))
             box.currentIndexChanged.connect(lambda _i: self._update_summary())
             self.tree.setItemWidget(node, 3, box)
@@ -171,6 +187,10 @@ class SimilarSoundsDialog(QDialog):
             node.setExpanded(True)
         self.tree.blockSignals(False)
         self._update_summary()
+
+    def game_label(self, name: str) -> str:
+        return ("game, precached anyway" if library.sound_key(name) in library.stock_sounds()
+                else "game")
 
     def played(self, name: str) -> bool:
         """A model plays it: sharing can change it (a plugin's own sound it cannot)."""
@@ -189,18 +209,20 @@ class SimilarSoundsDialog(QDialog):
     def savings(self) -> tuple[int, int, int]:
         """(files, precache_sound slots, generic slots) the ticked groups save."""
         files = sounds = generic = 0
-        stock = library.stock_sounds() | set(map(library.sound_key,
-                                                 library.stock_sound_files(self.project)))
+        free = library.stock_sounds()
+        game = set(map(library.sound_key, library.game_sound_files(self.project)))
         for group, keeper in self.ticked():
             dropped = [m for m in group.members
                        if m.lower() != keeper.lower() and self.played(m)]
-            if library.sound_key(keeper) in stock:  # the game has the stock one already
+            key = library.sound_key(keeper)
+            if key in game:  # every player has it: no file of ours left
                 dropped = [m for m in group.members if self.played(m)]
             files += len(dropped)
-            for name in dropped:
-                kind = self.kinds.get(library.sound_key(name))
-                sounds += kind == "sound"
-                generic += kind == "generic"
+            kinds = [self.kinds.get(library.sound_key(name)) for name in dropped]
+            if key in game and key not in free and kinds:
+                kinds = kinds[1:]  # the game's sound takes one slot instead
+            sounds += kinds.count("sound")
+            generic += kinds.count("generic")
         return files, sounds, generic
 
     def _update_summary(self) -> None:
@@ -219,9 +241,7 @@ class SimilarSoundsDialog(QDialog):
             return
         path = library.resolve(self.project, name)
         if path is None:
-            for group in self.groups:
-                if name in group.stock:
-                    path = library.stock_sound_files(self.project).get(name)
+            path = library.game_sound_files(self.project).get(name)
         if path is not None:
             audio.play(path)
 

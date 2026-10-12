@@ -98,6 +98,69 @@ def test_builds_stage_the_shared_sounds(tmp_path: Path) -> None:
     shutil.rmtree(work)
 
 
+def test_game_install_sounds_are_kept_first(tmp_path: Path) -> None:
+    # a clean game (read only): a copy of its sound becomes the game's own,
+    # the mod's own sound/ before Half-Life's valve/sound next to it
+    game = tmp_path / "Half-Life"
+    click = _click()
+    _write(game / "cstrike" / "sound" / "weapons" / "Clipin1.wav", click)
+    _write(game / "valve" / "sound" / "weapons" / "clipin1.wav", click * 0.5)
+    _write(game / "valve" / "sound" / "items" / "gunpickup2.wav", _click(0.3, 400, 3))
+    project = Project.create(tmp_path / "pack")
+    project.settings.game_install = str(game)  # the Half-Life folder works too
+    assert library.game_sound_roots(project) == [game / "cstrike" / "sound",
+                                                 game / "valve" / "sound"]
+    files = library.game_sound_files(project)
+    assert set(files) == {"weapons/Clipin1.wav", "items/gunpickup2.wav"}  # cstrike first
+    assert files["weapons/Clipin1.wav"].parts[-4] == "cstrike"
+    assert library.in_game(project, "WEAPONS/clipin1.wav")
+    base = library.sounds_dir(project) / "weapons"
+    _write(base / "m4_clipin.wav", click)  # the game's sound, our name
+    _write(base / "clipin1.wav", click)  # the game's own name: not ours to share
+    (group,) = library.find_similar(project)
+    assert group.members == ["weapons/m4_clipin.wav"]
+    assert group.keeper == "weapons/Clipin1.wav" and group.saves == 1
+    assert library.resolve(project, "items/gunpickup2.wav") == \
+        game / "valve" / "sound" / "items" / "gunpickup2.wav"
+    before = {p: p.stat().st_mtime_ns for p in game.rglob("*")}
+    library.share_sounds(project, group.members, group.keeper)
+    assert before == {p: p.stat().st_mtime_ns for p in game.rglob("*")}  # only read
+
+
+def test_package_leaves_the_games_sounds_out(tmp_path: Path) -> None:
+    import json
+
+    from valve_qc_merger.server.package import export_package
+    game = tmp_path / "Half-Life" / "cstrike"
+    _write(game / "sound" / "debris" / "metal9.wav", _click())
+    project = Project.create(tmp_path / "pack")
+    project.settings.game_install = str(game)
+    project.add_build(Build("view", "merge-v", options={"name": "v_pack"}))
+    output = project.build_dir("view") / "output"
+    output.mkdir(parents=True)
+    (output / "v_pack.qc").write_text(
+        '$modelname "v_pack.mdl"\n$sequence "reload" {\n "a"\n'
+        ' { event 5004 3 "debris/metal9.wav" }\n'
+        ' { event 5004 9 "weapons/pack_clipin.wav" }\n}\n', encoding="latin-1")
+    (output / "v_pack.mdl").write_bytes(b"IDST" + b"\0" * 300)
+    (project.build_dir("view") / "last_run.json").write_text(json.dumps(
+        {"outputs": ["builds/view/output/v_pack.qc"]}), encoding="utf-8")
+    _write(library.sounds_dir(project) / "weapons" / "pack_clipin.wav", _click(0.3, 500))
+    _write(library.sounds_dir(project) / "debris" / "metal9.wav", _click(0.3, 700))
+    result = export_package(project, tmp_path / "out")
+    assert result.game_sounds == ["debris/metal9.wav"]
+    assert result.shadowed_sounds == ["debris/metal9.wav"]  # ours, another file
+    assert "sound/debris/metal9.wav" not in result.files  # every player has it
+    assert "sound/weapons/pack_clipin.wav" in result.files
+    inc = (tmp_path / "out" / "amxx" / "vqm_resources.inc").read_text()
+    assert '"sound/debris/metal9.wav",' in inc  # still precached
+    res = (tmp_path / "out" / "vqm_resources.res").read_text().splitlines()
+    assert "sound/debris/metal9.wav" not in res
+    text = (tmp_path / "out" / "package_report.txt").read_text()
+    assert "the game already has (precached, not packed): 1" in text
+    assert "players never download them" in text
+
+
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
 

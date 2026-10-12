@@ -127,8 +127,16 @@ one file, on three levels:
   spectrum; >= 0.9, and never two sounds whose names give them different jobs:
   a clip going in and a knife hit). Listen first (double-click plays).
 
-A stock sound the game folder has and ReGameDLL precaches anyway is the best
-one to keep — nothing to download, no slot. Identical and same-sound groups
+**The game's own sounds.** Project ▸ Settings ▸ **Game install** points at a
+clean game (`…/Half-Life/cstrike`, or the `Half-Life` folder): what every
+player already has. It is only ever read — nothing is written there (unlike
+the Game folder, where Deploy copies). Its `sound/` and Half-Life's
+`valve/sound/` next to it (CS plays those too) take part in the search, so a
+copy of a game sound under another name (a server's `m134_boxin.wav` that is
+the game's `weapons/m249_boxin.wav`) shows up with the game's sound as the
+keeper: nothing to download; one that ReGameDLL precaches anyway (stock)
+takes no slot either, and is kept first. The first search reads the game's
+~2900 sounds (a few seconds); later ones remember them. Identical and same-sound groups
 are ticked; *Share the ticked groups* makes every other member play the kept
 one. No file changes: the project remembers the aliases and every build
 points its staged models' sound events at the kept sound (the Budget, the
@@ -179,7 +187,10 @@ Build ▸ **Export server package…** (Ctrl+Shift+E) writes
 - `cstrike/` — every compiled build (models + `T.mdl`, manifests renamed
   `<name>_models.<ext>`) where Deploy would put them, plus every sound the
   models' events play, taken from the library or the game folder, under
-  `sound/`. The same tree is what FastDL (`sv_downloadurl`) serves: upload it
+  `sound/` — except the ones the Game install has: every player has those,
+  so they are precached but neither packed nor listed in the `.res` (the
+  report counts them, and warns about a sound of yours under a game sound's
+  name: players never download it and hear the game's). The same tree is what FastDL (`sv_downloadurl`) serves: upload it
   to the server and to the HTTP host as is.
 - `amxx/vqm_resources.inc` — for a ReAPI weapon plugin: `VQM_MODELS`,
   `VQM_CLIENT_SOUNDS` (sounds only the shooter hears: `precache_generic`,

@@ -32,6 +32,8 @@ def _open(args: argparse.Namespace):  # noqa: ANN202 - Project, imported lazily
         project.settings.studiomdl = str(args.studiomdl)
     if getattr(args, "game_dir", None):
         project.settings.game_dir = str(args.game_dir)
+    if getattr(args, "game_install", None):
+        project.settings.game_install = str(args.game_install)
     return project
 
 
@@ -99,6 +101,18 @@ class ProjectCommand(Command):
         package = action("package", "export a server package (cstrike tree, AMXX include, "
                                     ".res, ReChecker rules, update set)")
         package.add_argument("--out", type=Path, required=True, help="package folder")
+        sounds = action("sounds", "sounds that could be one file — your copies, the same "
+                                  "sound saved another way, the game's own (with "
+                                  "--game-install) — and share them", builds=False)
+        sounds.add_argument("--similar", action="store_true",
+                            help="also list similar (not identical) sounds")
+        sounds.add_argument("--share", action="store_true",
+                            help="share the identical / same-sound groups with their "
+                                 "suggested keeper (a game sound first)")
+        for sub in (package, sounds, actions.choices["info"]):
+            sub.add_argument("--game-install", type=Path,
+                             help="a clean game (…/Half-Life/cstrike), only read: what "
+                                  "players already have (sounds keeps it in the project)")
         for sub in (build, compile_):
             sub.add_argument("--studiomdl", type=Path, help="studiomdl to use this time")
             sub.add_argument("--force", action="store_true",
@@ -139,6 +153,7 @@ class ProjectCommand(Command):
                             or "none"))
         print(f"studiomdl: {project.settings.studiomdl or '-'}")
         print(f"game folder: {project.settings.game_dir or '-'}")
+        print(f"game install: {project.settings.game_install or '-'}")
         for name in sorted(project.builds):
             build = project.builds[name]
             print(f"  {name:<24} {build.kind:<14} {_status(project, name)}")
@@ -191,6 +206,32 @@ class ProjectCommand(Command):
         print(report(result))
         print(f"package written to {args.out}")
         return EXIT_FAIL if result.skipped_builds and args.builds else EXIT_OK
+
+    def _sounds(self, args: argparse.Namespace) -> int:
+        from valve_qc_merger.project import sounds as library
+        project = _open(args)
+        if args.game_install:
+            project.save()  # remembered, as Project ▸ Settings does
+        groups = library.find_similar(project, similar=args.similar)
+        users = library.sound_users(project)
+        game = len(library.game_sound_files(project))
+        print(f"{len(library.list_sounds(project))} sounds in the library, {game} the "
+              "game's" + ("" if project.settings.game_install else
+                          " (no game install: --game-install …/cstrike)"))
+        shared = 0
+        for group in groups:
+            print(f"{group.level:<8} {group.score:.0%}  keep {group.keeper}"
+                  + ("  (the game's)" if group.keeper in group.stock else ""))
+            for name in group.members:
+                print(f"    {name}  — {len(users.get(name.lower(), []))} model(s)")
+            if args.share and group.level != "similar":
+                played = [m for m in group.members if users.get(m.lower())]
+                shared += len(library.share_sounds(project, played, group.keeper))
+        if not groups:
+            print("nothing to share: every sound is its own")
+        if args.share:
+            print(f"{shared} sound(s) now share — run the builds to apply")
+        return EXIT_OK
 
     def _import(self, args: argparse.Namespace) -> int:
         from valve_qc_merger.studio.tasks import import_models

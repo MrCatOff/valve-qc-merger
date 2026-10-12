@@ -154,6 +154,10 @@ class Settings:
     studiomdl: str | None = None
     hlam: str | None = None
     game_dir: str | None = None  # the mod folder (…/cstrike): Deploy copies there
+    # a clean game install (…/Half-Life/cstrike), only ever read: what every
+    # player already has — sounds the project's can become, files the
+    # package need not ship
+    game_install: str | None = None
     deploy_after_compile: bool = False
     # server budget: what the game DLL + plugins precache (the studio cannot
     # see those) and where plugins put the view models' client sounds
@@ -417,6 +421,7 @@ class Project:
         project.settings = Settings(
             studiomdl=settings.get("studiomdl"), hlam=settings.get("hlam"),
             game_dir=settings.get("game_dir"),
+            game_install=settings.get("game_install"),
             deploy_after_compile=bool(settings.get("deploy_after_compile", False)),
             extra_models=int(settings.get("extra_models", 0)),
             extra_sounds=int(settings.get("extra_sounds", 0)),
@@ -451,6 +456,7 @@ class Project:
             "settings": {"studiomdl": self.settings.studiomdl,
                          "hlam": self.settings.hlam,
                          "game_dir": self.settings.game_dir,
+                         "game_install": self.settings.game_install,
                          "deploy_after_compile": self.settings.deploy_after_compile,
                          "extra_models": self.settings.extra_models,
                          "extra_sounds": self.settings.extra_sounds,

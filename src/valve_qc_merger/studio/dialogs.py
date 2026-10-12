@@ -152,6 +152,8 @@ class SettingsDialog(QDialog):
         self.hlam_edit.setPlaceholderText("HLAM / HLMV (optional)")
         self.game_edit = QLineEdit(settings.game_dir or "")
         self.game_edit.setPlaceholderText("e.g. …/Half-Life/cstrike")
+        self.install_edit = QLineEdit(settings.game_install or "")
+        self.install_edit.setPlaceholderText("a clean game: …/Half-Life/cstrike (read only)")
         self.deploy_box = QCheckBox("Deploy to the game after every successful compile")
         self.deploy_box.setChecked(settings.deploy_after_compile)
         from valve_qc_merger.workers import default_workers
@@ -182,6 +184,13 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.deploy_box)
         layout.addWidget(kit.hint("Deploy copies compiled models and their manifest into "
                                   "this mod folder (each build can pick a subfolder)."))
+        install = kit.form()
+        install.addRow("Game install", _path_row(self.install_edit, self._pick_install))
+        layout.addLayout(install)
+        layout.addWidget(kit.hint(
+            "What every player already has — only read, never changed. Its sounds (and "
+            "Half-Life's in valve/ next to it) are offered in Find similar sounds instead "
+            "of your copies, and a server package does not ship them."))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save
                                    | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -201,10 +210,17 @@ class SettingsDialog(QDialog):
         if folder:
             self.game_edit.setText(folder)
 
+    def _pick_install(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Game install (cstrike)",
+                                                  self.install_edit.text())
+        if folder:
+            self.install_edit.setText(folder)
+
     def apply_to(self, settings: Settings) -> None:
         settings.studiomdl = self.studiomdl_edit.text().strip() or None
         settings.hlam = self.hlam_edit.text().strip() or None
         settings.game_dir = self.game_edit.text().strip() or None
+        settings.game_install = self.install_edit.text().strip() or None
         settings.deploy_after_compile = self.deploy_box.isChecked()
         settings.workers = self.workers_spin.value()
 

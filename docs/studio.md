@@ -619,10 +619,13 @@ valve-qc-merger project compile MyPack view
 valve-qc-merger project deploy  MyPack                 # builds/<name>/cstrike -> game folder
 valve-qc-merger project package MyPack --out pkg/      # like Build ▸ Export server package
 valve-qc-merger project audit   MyPack [v_x_hands ...] # check swap-hands results (--json FILE)
+valve-qc-merger project sounds  MyPack --game-install …/Half-Life/cstrike  # sounds that could be one file (--similar, --share)
 ```
 
 No build names: every build. `--studiomdl` and `--game-dir` override the
-project's settings for that run only (nothing is saved). The exit code is 0
+project's settings for that run only (nothing is saved); `--game-install` on
+`sounds` is kept as Project ▸ Settings ▸ Game install (on `package` and
+`info`: that run only). The exit code is 0
 when everything succeeded, 2 when a build or compile failed, 3 for bad input
 (no such project or build, no game folder, not compiled yet).
 

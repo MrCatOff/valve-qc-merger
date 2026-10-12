@@ -12,9 +12,9 @@ Three levels, from safe to a judgement call:
   24 bands, weighted by how close the lengths are. Listen before using one
   for all.
 
-A stock sound (in the game folder, precached by the game DLL anyway) that a
-custom one matches is the best one to keep: nothing to download, no extra
-slot. :func:`analyse` returns the groups with a suggested keeper.
+A game sound that a custom one matches is the best one to keep: every player
+has it, nothing to download — and one the game DLL precaches anyway takes no
+slot either. :func:`analyse` returns the groups with a suggested keeper.
 """
 
 from __future__ import annotations
@@ -162,13 +162,50 @@ class SoundGroup:
         return len(self.members) - (0 if self.keeper in self.stock else 1)
 
 
+_PRINTS: dict[tuple[str, int, int, str, bool], Fingerprint | None] = {}
+
+
+def _cached_print(path: Path, name: str, stock: bool) -> Fingerprint | None:
+    """:func:`fingerprint`, remembered while the file is unchanged (the game's
+    thousands of sounds are read once a session)."""
+    stat = Path(path).stat()
+    key = (str(path), stat.st_mtime_ns, stat.st_size, name, stock)
+    if key not in _PRINTS:
+        _PRINTS[key] = fingerprint(path, name, stock=stock)
+    return _PRINTS[key]
+
+
+def _unit_rows(rows: np.ndarray) -> np.ndarray:
+    """Rows centred and of unit length (zero rows stay zero): their dot
+    products are the Pearson correlations."""
+    rows = rows - rows.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(rows, axis=1, keepdims=True)
+    return np.divide(rows, norms, out=np.zeros_like(rows), where=norms > 0)
+
+
+def _scores(prints: list[Fingerprint], own: list[int]) -> np.ndarray:
+    """:func:`similarity` of each of ``own`` with every print, at once."""
+    grid = _unit_rows(np.array([p.grid.ravel() for p in prints]))
+    envelope = _unit_rows(np.array([p.envelope for p in prints]))
+    bands = np.array([p.bands for p in prints])
+    length = np.array([p.duration for p in prints])
+    shorter = np.minimum(length[own][:, None], length[None])
+    longer = np.maximum(np.maximum(length[own][:, None], length[None]), 1e-9)
+    return ((0.6 * np.clip(grid[own] @ grid.T, 0.0, None)
+             + 0.2 * np.clip(envelope[own] @ envelope.T, 0.0, None)
+             + 0.2 * np.clip(bands[own] @ bands.T, 0.0, 1.0))
+            * np.sqrt(shorter / longer))
+
+
 def analyse(sounds: dict[str, Path], stock: dict[str, Path] | None = None, *,
-            users: dict[str, int] | None = None,
+            users: dict[str, int] | None = None, free: set[str] | None = None,
             similar_threshold: float = SIMILAR_THRESHOLD,
             progress: Callable[[int, int, str], None] | None = None) -> list[SoundGroup]:
     """Groups of project ``sounds`` (name -> file) that could share one file,
-    with the ``stock`` sounds (name -> file) they match. ``users``: how many
-    models play each sound (the most used is the suggested keeper)."""
+    with the game's ``stock`` sounds (name -> file: every player has them)
+    they match. ``users``: how many models play each sound (the most used is
+    the suggested keeper); ``free``: game sounds (lower case) the game DLL
+    precaches anyway — kept first."""
     stock = stock or {}
     users = users or {}
     prints: list[Fingerprint] = []
@@ -177,44 +214,53 @@ def analyse(sounds: dict[str, Path], stock: dict[str, Path] | None = None, *,
         if progress is not None:
             progress(done, len(items), name)
         try:
-            found = fingerprint(path, name, stock=is_stock)
+            found = _cached_print(path, name, is_stock)
         except OSError:
             found = None
         if found is not None:
             prints.append(found)
-    order = sorted(range(len(prints)), key=lambda k: prints[k].duration)
 
-    def pairs():
-        """Candidate pairs, shortest first (lengths within 1.6x)."""
-        for position, i in enumerate(order):
-            for j in order[position + 1:]:
-                if prints[j].duration > prints[i].duration * 1.6 + 0.05:
-                    break  # sorted by length: nothing further can be close
-                if not (prints[i].stock and prints[j].stock):  # stock vs stock: not ours
-                    yield i, j
-
-    # pass 1: exact copies and the same sound saved another way
+    # pass 1: exact copies and the same sound saved another way. Only pairs
+    # with one of ours (the game's among themselves are not ours to share),
+    # lengths within 1.6x
     safe = _Union(len(prints))
     rough: dict[tuple[int, int], float] = {}
-    for i, j in pairs():
-        a, b = prints[i], prints[j]
-        if a.md5 == b.md5:
-            safe.join(i, j, 0, 1.0)
-            continue
-        score = similarity(a, b)
-        if role(a.name) and role(b.name) and role(a.name) != role(b.name):
-            score = min(score, 0.5)  # different jobs: at most "not similar"
-        rough[(i, j)] = score
-        if score >= 0.85:
-            same = same_sound(a, b)
-            if same >= SAME_THRESHOLD:
-                safe.join(i, j, 1, same)
+    own = [k for k, p in enumerate(prints) if not p.stock]
+    if own:
+        scores = _scores(prints, own)
+        length = np.array([p.duration for p in prints])
+        for row, i in enumerate(own):
+            near = np.abs(length - length[i]) <= np.minimum(length, length[i]) * 0.6 + 0.05
+            near[i] = False
+            near[[j for j in own if j <= i]] = False  # each pair of ours once
+            for j in np.flatnonzero(near):
+                j = int(j)
+                a, b = prints[i], prints[j]
+                if a.md5 == b.md5:
+                    safe.join(i, j, 0, 1.0)
+                    continue
+                score = float(scores[row, j])
+                if score < min(similar_threshold, 0.85):
+                    continue  # (neither the same nor similar: nothing to keep)
+                if role(a.name) and role(b.name) and role(a.name) != role(b.name):
+                    continue  # different jobs: at most "not similar"
+                rough[(i, j)] = score
+                if score >= 0.85:
+                    same = same_sound(a, b)
+                    if same >= SAME_THRESHOLD:
+                        safe.join(i, j, 1, same)
     groups: list[SoundGroup | None] = []
     leader: dict[int, int] = {}  # a sound -> its safe group's keeper
     weight: dict[int, int] = {}  # a keeper -> how many sounds it stands for
     index = {p.name: k for k, p in enumerate(prints)}
+    closeness: dict[int, float] = {}  # a game sound -> how close one of ours is
+    for (i, j), score in rough.items():
+        for k in (i, j):
+            if prints[k].stock:
+                closeness[k] = max(closeness.get(k, 0.0), score)
+    free = {f.lower() for f in (free or set())}
     for members, level, score in safe.groups():
-        group = _group(prints, members, level, score, users)
+        group = _group(prints, members, level, score, users, None, free, closeness)
         groups.append(group)
         if group is not None:
             keeper = index[group.keeper]
@@ -229,7 +275,7 @@ def analyse(sounds: dict[str, Path], stock: dict[str, Path] | None = None, *,
         if li != lj and score >= similar_threshold:
             similar.join(li, lj, 2, score)
     for members, _level, score in similar.groups():
-        groups.append(_group(prints, members, 2, score, users, weight))
+        groups.append(_group(prints, members, 2, score, users, weight, free, closeness))
     groups = [g for g in groups if g is not None]
     return sorted(groups, key=lambda g: (LEVELS.index(g.level), -g.saves, g.keeper.lower()))
 
@@ -263,15 +309,21 @@ class _Union:
 
 
 def _group(prints: list[Fingerprint], members: list[int], level: int, score: float,
-           users: dict[str, int], weight: dict[int, int] | None = None
+           users: dict[str, int], weight: dict[int, int] | None = None,
+           free: set[str] | None = None, closeness: dict[int, float] | None = None
            ) -> SoundGroup | None:
     own = sorted((prints[i].name for i in members if not prints[i].stock), key=str.lower)
-    stock_names = sorted(prints[i].name for i in members if prints[i].stock)
+    free, closeness = free or set(), closeness or {}
+    # the game's: one it precaches anyway first, then the closest to ours
+    game = sorted((i for i in members if prints[i].stock),
+                  key=lambda i: (prints[i].name.lower() not in free,
+                                 -closeness.get(i, 1.0), prints[i].name.lower()))
+    stock_names = [prints[i].name for i in game]
     if not own or len(own) + len(stock_names) < 2:
         return None
     weight = weight or {}
     by_name = {prints[i].name: weight.get(i, 1) for i in members}
-    # a stock sound; else the one most models play, standing for most copies
+    # a game sound; else the one most models play, standing for most copies
     keeper = stock_names[0] if stock_names else max(
         own, key=lambda n: (users.get(n.lower(), 0), by_name.get(n, 1), -len(n), n))
     return SoundGroup(LEVELS[level], own, stock_names, round(score, 3), keeper)

@@ -50,6 +50,10 @@ class PackageResult:
     sprites: list[str] = field(default_factory=list)  # effect sprites (precache_model)
     hud_files: list[str] = field(default_factory=list)  # HUD txt + sheets (generic)
     missing_sounds: list[str] = field(default_factory=list)
+    # sounds every player has (the game install): precached, never shipped
+    game_sounds: list[str] = field(default_factory=list)
+    # ours under a game sound's name but another file: players keep the game's
+    shadowed_sounds: list[str] = field(default_factory=list)
     skipped_builds: list[str] = field(default_factory=list)  # not run / not compiled
     versions: object = None  # a versions.VersionReport
 
@@ -118,7 +122,15 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
     result.client_sounds = sorted({by_key.get(k, k) for k in kinds}, key=str.lower)
     result.server_sounds = [s for s in result.client_sounds
                             if kinds.get(s.lower()) == "sound"]
+    game = {library.sound_key(n): path for n, path in library.game_sound_files(project).items()}
     for sound in result.client_sounds:
+        theirs = game.get(library.sound_key(sound))
+        if theirs is not None:  # every player has it: nothing to download
+            result.game_sounds.append(sound)
+            mine = library.sound_path(project, sound)
+            if mine.is_file() and mine.read_bytes() != theirs.read_bytes():
+                result.shadowed_sounds.append(sound)
+            continue
         source = library.resolve(project, sound)
         if source is None:
             result.missing_sounds.append(sound)
@@ -375,6 +387,13 @@ def report(result: PackageResult) -> str:
              f"view-model sounds: {len(result.client_sounds)} ("
              f"{len(result.server_sounds)} precache_sound — others hear them, the rest "
              "precache_generic)"]
+    if result.game_sounds:
+        lines += ["", f"Sounds the game already has (precached, not packed): "
+                  f"{len(result.game_sounds)}"]
+    if result.shadowed_sounds:
+        lines += ["", "Your sounds under the name of a game sound — players never download "
+                  "them and hear the game's; give them names of their own:",
+                  *[f"  sound/{s}" for s in result.shadowed_sounds]]
     if result.missing_sounds:
         lines += ["", "Sounds the models play but neither the library nor the game folder "
                   "has (not packed):", *[f"  sound/{s}" for s in result.missing_sounds]]
