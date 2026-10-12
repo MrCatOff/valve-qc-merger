@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from valve_qc_merger.handswap import build as buildmod
 import numpy as np
 
+from valve_qc_merger.handswap import build as buildmod
 from valve_qc_merger.handswap.identify import HandInfo, _resolve_sides, worn_meshes
 
 
