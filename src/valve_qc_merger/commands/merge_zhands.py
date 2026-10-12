@@ -40,6 +40,14 @@ class MergeZhandsCommand(Command):
                             help="the shared grenade is taken from a model using "
                                  "this texture (default: frogbomb.bmp; falls back "
                                  "to the most common grenade)")
+        parser.add_argument("--own-grenades", dest="one_grenade", action="store_false",
+                            help="keep a frog per grenade rig, each zombie's own size "
+                                 "(default: one frog for all, the most common one; every "
+                                 "grenade animation redrawn for it)")
+        parser.add_argument("--grenade-skin", dest="grenade_skins", action="append",
+                            default=[], metavar="BMP",
+                            help="the frog in this texture too: one more grenade entry, "
+                                 "pev_body_<skin> in the manifest (repeatable)")
         parser.add_argument("--manifest-format", choices=("ini", "json", "toml"),
                             default="ini", help="per-model manifest format")
 

@@ -120,6 +120,13 @@ SPECS: dict[str, FieldSpec] = {
                                         "marks grenade triangles."),
     "merge-zhands.grenade_texture": _adv("Shared grenade from", "The shared grenade is taken "
                                          "from a model using this texture."),
+    "merge-zhands.one_grenade": FieldSpec("One frog for all", "Every zombie's grenade "
+                                          "animation is redrawn for one frog (the size most "
+                                          "zombies have): one grenade entry instead of one a "
+                                          "rig. Off: each zombie keeps its own frog."),
+    "merge-zhands.grenade_skins": FieldSpec("Grenade skins", "BMP textures: the frog in each "
+                                            "of them too — one more grenade entry each; the "
+                                            "manifest gives pev_body_<skin> per grenade."),
     # -- retarget (build "on our hands first" and the Retarget dialog) -------
     "retarget.category": HIDDEN,  # a CLI storage bucket; the studio sets the output
     "retarget.studiomdl": HIDDEN,  # Project ▸ Settings

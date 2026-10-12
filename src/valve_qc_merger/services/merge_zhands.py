@@ -17,6 +17,7 @@ from valve_qc_merger.merge_zhands.merger import (
     BONE_LIMIT,
     VERTEX_LIMIT,
     ZhandsReport,
+    canonical_grenade,
     hands_size,
     merge_zhands,
     split_zombies,
@@ -45,6 +46,11 @@ class MergeZhandsOptions:
     manifest_format: str = "ini"
     # a model the merge cannot take ships as a model of its own (standalone/)
     standalone_rejects: bool = True
+    # one frog for all: every grenade animation redrawn for the frog of the
+    # grenade_texture model (else one frog per grenade rig, as each zombie had it)
+    one_grenade: bool = True
+    # BMPs: the frog in each of them too — more grenade entries, pev_body_<skin>
+    grenade_skins: list[str] = field(default_factory=list)
 
 
 def run_merge_zhands(opts: MergeZhandsOptions,
@@ -99,9 +105,20 @@ def run_merge_zhands(opts: MergeZhandsOptions,
         reporter.check()
         reporter.log(message)
 
+    frog = (canonical_grenade(models, opts.grenade_prefix, opts.grenade_texture)
+            if opts.one_grenade else None)
+    if frog is not None:
+        reporter.log(f"  one frog for every grenade: {frog.name}'s")
+    skins = [str(Path(s)) for s in opts.grenade_skins]
+    for skin in skins:
+        if not Path(skin).is_file():
+            reporter.log(f"error: grenade skin not found: {skin}")
+            result.exit_code = EXIT_DISCOVERY
+            return result
     parts = split_zombies(
         models, opts.grenade_prefix, log=split_log,
-        progress=lambda done, total: reporter.progress(done, total, "splitting into parts"))
+        progress=lambda done, total: reporter.progress(done, total, "splitting into parts"),
+        frog=frog, skins=len(skins))
     multi = len(parts) > 1
     if multi:
         reporter.log(f"  split: {len(parts)} parts (studiomdl keeps {BONE_LIMIT} bones "
@@ -117,7 +134,7 @@ def run_merge_zhands(opts: MergeZhandsOptions,
     # the parts are independent: merged side by side, one a worker
     reports = workers.processes(
         [(_merge_part, (part, part_out, part_name, opts.grenade_prefix,
-                        opts.grenade_texture, opts.manifest_format))
+                        opts.grenade_texture, opts.manifest_format, frog, skins))
          for part, (part_name, part_out) in zip(parts, names, strict=True)],
         workers=workers.count(None), reporter=reporter, label="merging parts")
     for (part_name, part_out), report in zip(names, reports, strict=True):
@@ -154,11 +171,13 @@ def run_merge_zhands(opts: MergeZhandsOptions,
 
 
 def _merge_part(part: list, part_out: Path, part_name: str, grenade_prefix: str,
-                grenade_texture: str | None, manifest_format: str, *,
+                grenade_texture: str | None, manifest_format: str,
+                frog: object = None, skins: list[str] | None = None, *,
                 reporter: object = None) -> ZhandsReport:
     """One part's merge, in a worker process."""
     return merge_zhands(part, part_out, part_name, grenade_prefix=grenade_prefix,
-                        grenade_texture=grenade_texture, manifest_format=manifest_format)
+                        grenade_texture=grenade_texture, manifest_format=manifest_format,
+                        frog=frog, grenade_skins=skins)
 
 
 __all__ = ["MergeZhandsOptions", "run_merge_zhands"]

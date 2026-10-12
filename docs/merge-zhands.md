@@ -1,9 +1,23 @@
 # merge-zhands
 
 Merge CSO zombie hand view models into ONE model: every zombie's claws as a
-`hands` bodygroup and the frog grenade as a `grenade` bodygroup — one entry
-for every grenade rig of the part (models whose grenade bones sit alike share
-one mesh; a mesh drawn by another rig's animation is torn apart).
+`hands` bodygroup and the frog grenade as a `grenade` bodygroup.
+
+**One frog for all** (default): the CSO bombs are one frog asset that every
+zombie scaled and posed its own way (13 rigs, x0.40 to x1.15 on the nexon
+set); GoldSrc bones cannot scale, so each zombie's grenade animation is
+redrawn for ONE frog — the size most zombies have — its parts laid onto the
+zombie's own frog every frame (paired by UV), its centre where the zombie
+held it. The same frog, in the same size, in every part. A frog with another
+UV layout keeps its own (a second entry). `--own-grenades` keeps a frog per
+rig instead (each zombie's own size; a mesh drawn by another rig's animation
+is torn apart, so each rig is an entry).
+
+**Grenade skins**: `--grenade-skin red.bmp --grenade-skin blue.bmp` adds the
+frog in each texture as one more entry of the `grenade` group (a view
+model's skin is never sent to the client, so a texture is a bodygroup entry):
+`blank, grenade, grenade_red, grenade_blue`. `models.ini` gives every grenade
+model `pev_body` (default frog) and `pev_body_<skin>` for each skin.
 
 ```sh
 # 1. decompile the .mdl files yourself (the command never calls a decompiler)
@@ -33,9 +47,9 @@ into `maps_8bit/` under the name the SMDs use before merging.
 
 ```
 out/zhands/
-  v_zhands.qc      $bodygroup "grenade" { blank, grenade, grenade2 … } + $bodygroup "hands" { ... }
+  v_zhands.qc      $bodygroup "grenade" { blank, grenade, grenade_<skin> … } + $bodygroup "hands" { ... }
   hands/<entry>.smd   one per distinct hand mesh
-  grenade/grenade*.smd one per grenade rig
+  grenade/*.smd    the frog, and the frog in each skin
   v_<zombie>_<role>/  that model's sequences
   *.bmp, models.ini
 ```

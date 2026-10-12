@@ -79,6 +79,8 @@ class ZombieModel:
     renames: dict[str, str] = field(default_factory=dict)  # original -> final bone
     hands: Smd | None = None
     grenade: Smd | None = None
+    # its grenade animation redrawn for this model's frog (one frog for all)
+    redrawn_by: str | None = None
 
     @property
     def stem(self) -> str:
@@ -422,6 +424,105 @@ def _same_grenade_rig(a: ZombieModel, b: ZombieModel) -> bool:
     return True
 
 
+def _choose_grenade(carriers: list[ZombieModel],
+                    grenade_texture: str | None) -> ZombieModel:
+    """The grenade everyone shares: the first with the requested texture,
+    else the most common grenade geometry."""
+    if grenade_texture is not None:
+        chosen = next((zm for zm in carriers if any(
+            t.material.lower() == grenade_texture.lower()
+            for t in zm.grenade.triangles)), None)
+        if chosen is not None:
+            return chosen
+    return max(carriers, key=lambda c: sum(
+        _same_mesh(c.grenade, other.grenade, {}, {}) for other in carriers))
+
+
+def unify_grenades(models: list[ZombieModel], canonical: ZombieModel,
+                   report: ZhandsReport | None = None) -> list[str]:
+    """One frog for everyone: every grenade model of ``models`` drops its
+    own frog and, on another rig than ``canonical``'s, has its grenade
+    animation redrawn for ``canonical``'s frog (:mod:`.frog`) — the merge
+    then draws that one frog for all of them. A frog that cannot be paired
+    (another UV layout) keeps its own. Returns the models redrawn."""
+    from valve_qc_merger.merge_zhands.frog import redraw_grenade
+    redrawn: list[str] = []
+    scales: list[float] = []
+    for zm in models:
+        if zm.grenade is None:
+            continue
+        if not _same_grenade_rig(canonical, zm):
+            done = redraw_grenade(canonical.grenade, zm.grenade, zm.model.anims,
+                                  GRENADE_PREFIX)
+            if done is None:
+                if report is not None:
+                    report.warnings.append(
+                        f"{zm.stem}: its frog does not pair with {canonical.stem}'s "
+                        "(another UV layout): kept with its own grenade")
+                continue
+            scales.append(done.scale)
+            redrawn.append(zm.stem)
+        zm.redrawn_by = canonical.stem
+        zm.grenade = None
+    if report is not None and scales:
+        report.warnings.append(
+            f"{len(scales)} grenade(s) redrawn for {canonical.stem}'s frog (their frogs "
+            f"x{min(scales):.2f}-x{max(scales):.2f} its size)")
+    return redrawn
+
+
+def frog_mesh(canonical: ZombieModel, table: Smd) -> Smd:
+    """``canonical``'s frog on ``table``'s nodes and bind: each vertex keeps
+    its place in its bone's frame, so the game draws it exactly where the
+    (redrawn) animation puts that bone, whatever the bind."""
+    from valve_qc_merger.models.smd import Vertex
+    source = canonical.grenade
+    source_worlds = fk_worlds(source, source.frames[0])
+    table_worlds = fk_worlds(table, table.frames[0])
+    source_name = {n.index: n.name for n in source.nodes}
+    table_index = {n.name: n.index for n in table.nodes}
+    triangles = []
+    for tri in source.triangles:
+        vertices = []
+        for v in tri.vertices:
+            bone = source_name[v.bone]
+            local = source_worlds[v.bone].inverse()
+            world = table_worlds[table_index[bone]]
+            vertices.append(Vertex(
+                table_index[bone],
+                world.transform_point(local.transform_point(v.position)),
+                world.rotate_vector(local.rotate_vector(v.normal)), v.uv))
+        triangles.append(dataclasses.replace(tri, vertices=tuple(vertices)))
+    return Smd(nodes=list(table.nodes), frames=[table.frames[0]], triangles=triangles)
+
+
+def canonical_grenade(models_in: list[ModelInput], grenade_prefix: str,
+                      grenade_texture: str | None) -> ModelInput | None:
+    """The model whose frog everyone gets (one frog for all, every part): of
+    the frog rig most models share."""
+    carriers = [zm for zm in (prepare_model(m.clone(), grenade_prefix) for m in models_in)
+                if zm.grenade is not None]
+    if not carriers:
+        return None
+    # the frog most zombies already have (so most look as they did: the CSO
+    # bombs are x0.40 of aksha's on 99 of 118), its grenade_texture model first
+    rigs: list[list[ZombieModel]] = []
+    for zm in carriers:
+        home = next((r for r in rigs if _same_grenade_rig(r[0], zm)), None)
+        if home is None:
+            rigs.append([zm])
+        else:
+            home.append(zm)
+    common = max(rigs, key=len)
+    chosen = _choose_grenade(common, grenade_texture)
+    return next(m for m in models_in if m.name == chosen.stem)
+
+
+def _skin_label(path: Path) -> str:
+    """A grenade skin's name in entries and the manifest (its file stem)."""
+    return re.sub(r"[^A-Za-z0-9_]+", "_", path.stem).strip("_").lower() or "skin"
+
+
 def _hands_label(members: list[ZombieModel]) -> str:
     zombies = {m.zombie for m in members}
     roles = {m.role for m in members}
@@ -501,10 +602,14 @@ def zombie_of(name: str) -> str:
     return match.group("zombie").lower() if match else name.lower()
 
 
-def _prepared(models_in: list[ModelInput], grenade_prefix: str) -> list[ZombieModel]:
-    """Copies of ``models_in`` split, renamed and canonicalised as the merge
-    does, reduced to their hands and grenade meshes (the originals stay)."""
+def _prepared(models_in: list[ModelInput], grenade_prefix: str,
+              frog: ModelInput | None = None) -> list[ZombieModel]:
+    """Copies of ``models_in`` split, renamed (grenades redrawn for ``frog``'s
+    frog: one frog for all) and canonicalised as the merge does, reduced to
+    their hands and grenade meshes (the originals stay)."""
     models = [prepare_model(m.clone(), grenade_prefix) for m in models_in]
+    if frog is not None:
+        unify_grenades(models, prepare_model(frog.clone(), grenade_prefix))
     canonicalize_hands(models, ZhandsReport())
     for zm in models:
         zm.model.meshes = {"hands": zm.hands}
@@ -524,13 +629,13 @@ def _pool_table(zm: ZombieModel) -> tuple[dict[str, str | None], set[str]]:
     return table, shared
 
 
-def planned(models_in: list[ModelInput], grenade_prefix: str = "frogbomb"
-            ) -> tuple[int, int]:
+def planned(models_in: list[ModelInput], grenade_prefix: str = "frogbomb",
+            frog: ModelInput | None = None) -> tuple[int, int]:
     """(bones, largest sequence's anim bytes) a merge of ``models_in`` would
     have, with the bones pooled (nothing written; the models are left
     untouched). Pooling reshapes channels, so the bytes are measured with
     studiomdl's exact quantise+RLE replica."""
-    models = _prepared(models_in, grenade_prefix)
+    models = _prepared(models_in, grenade_prefix, frog)
     pool_bones(models, ZhandsReport())
     inputs = [zm.model for zm in models]
     skeleton = merged_skeleton(inputs)
@@ -546,13 +651,19 @@ class _PoolBones:
     :func:`planned`'s cost, which also applies the pool and measures every
     sequence)."""
 
-    def __init__(self, models_in: list[ModelInput], grenade_prefix: str) -> None:
+    def __init__(self, models_in: list[ModelInput], grenade_prefix: str,
+                 frog: ModelInput | None = None, skins: int = 0) -> None:
         self.tables: dict[str, dict[str, str | None]] = {}
         self.shared: dict[str, set[str]] = {}
-        self.rig: dict[str, int] = {}  # model -> its grenade rig (-1: none)
+        self.rig: dict[str, int] = {}  # model -> its grenade frog (-1: none)
+        self.skins = skins
         rigs: list[ZombieModel] = []
-        for model_in, zm in zip(models_in, _prepared(models_in, grenade_prefix),
+        for model_in, zm in zip(models_in, _prepared(models_in, grenade_prefix, frog),
                                 strict=True):
+            if zm.redrawn_by is not None:  # drawn with the shared frog
+                self.tables[model_in.name], self.shared[model_in.name] = _pool_table(zm)
+                self.rig[model_in.name] = -2
+                continue
             self.tables[model_in.name], self.shared[model_in.name] = _pool_table(zm)
             if zm.grenade is None:
                 self.rig[model_in.name] = -1
@@ -564,8 +675,11 @@ class _PoolBones:
             self.rig[model_in.name] = home
 
     def body_fits(self, models_in: list[ModelInput]) -> bool:
-        """pev_body (grenade rigs + 1) x (hands + 1) within a view model's byte."""
-        grenades = len({self.rig[m.name] for m in models_in} - {-1})
+        """pev_body (grenade entries + 1) x (hands + 1) within a view model's
+        byte; entries = frogs x (default + skins)."""
+        rigs = {self.rig[m.name] for m in models_in} - {-1}
+        frogs = len(rigs - {-2}) + (1 if -2 in rigs else 0)  # -2: the shared frog
+        grenades = frogs * (1 + self.skins)
         return (grenades + 1) * (len(models_in) + 1) <= limits.VIEW_BODY_VALUES
 
     def __call__(self, models_in: list[ModelInput]) -> int:
@@ -594,7 +708,8 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
                   limit: int = BONE_LIMIT,
                   log: Callable[[str], None] | None = None,
                   progress: Callable[[int, int], None] | None = None,
-                  ) -> list[list[ModelInput]]:
+                  *, frog: ModelInput | None = None,
+                  skins: int = 0) -> list[list[ModelInput]]:
     """Parts under the bone limit (with the bones pooled), the 64K a sequence
     and the submodel limit, a zombie's models (knife, grenade, variants)
     always together, in input order.
@@ -611,7 +726,7 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
     for model in models:
         zombies.setdefault(zombie_of(model.name), []).append(model)
     groups = list(zombies.values())
-    pool_bones_of = _PoolBones(models, grenade_prefix)
+    pool_bones_of = _PoolBones(models, grenade_prefix, frog, skins)
 
     def run(start: int, end: int) -> list[ModelInput]:
         return [model for group in groups[start:end] for model in group]
@@ -624,7 +739,7 @@ def split_zombies(models: list[ModelInput], grenade_prefix: str = "frogbomb",
 
     def fits(start: int, end: int) -> bool:
         trial = run(start, end)
-        bones, worst = planned(trial, grenade_prefix)
+        bones, worst = planned(trial, grenade_prefix, frog)
         verdict = _fits((bones, worst), limit)
         log(f"    part {len(parts) + 1}: {len(trial)} model(s) "
             f"({', '.join(zombie_of(g[0].name) for g in groups[start:end])}) — "
@@ -677,15 +792,28 @@ def merge_zhands(
     grenade_prefix: str = "frogbomb",
     grenade_texture: str | None = None,
     manifest_format: str = "ini",
+    frog: ModelInput | None = None,
+    grenade_skins: list[str] | None = None,
 ) -> ZhandsReport:
-    """Merge zombie hand models into ``out_dir/<name>.qc``; returns a report."""
+    """Merge zombie hand models into ``out_dir/<name>.qc``; returns a report.
+    ``frog``: the model whose frog every grenade gets (its animation redrawn
+    for it; :func:`canonical_grenade`) — None: a frog a grenade rig;
+    ``grenade_skins``: BMPs, the frog in each of them (more grenade entries,
+    ``pev_body_<skin>`` in the manifest)."""
     report = ZhandsReport()
     originals = {
         m.name: {s.name: str(_seq_path(m, s.name)) for s in m.sequences
                  if s.name in m.anims}
         for m in models_in
     }
+    # the frog first: it may be one of models_in (one object after pickling),
+    # which prepare_model renames in place
+    shared_frog = prepare_model(frog.clone(), grenade_prefix) if frog is not None else None
     models = [prepare_model(m, grenade_prefix) for m in models_in]
+    if shared_frog is not None and shared_frog.grenade is not None:
+        unify_grenades(models, shared_frog, report)
+    else:
+        shared_frog = None
     reference = canonicalize_hands(models, report)
     for zm in models:
         if "$attachment" in zm.model.qc_text:
@@ -750,10 +878,11 @@ def merge_zhands(
     report.hands = [label for label, _ in hand_entries]
 
     # Grenades: one mesh for every model with the same grenade RIG (the
-    # requested texture, else the most common geometry among them). A mesh
-    # drawn by another rig's animation is torn apart (CSO zombie bombs share
-    # the frog mesh on 13 differently placed skeletons), so each rig of the
-    # part is one more entry of the grenade group.
+    # requested texture, else the most common geometry among them); with
+    # one frog for all (unify_grenades) the redrawn ones use the chosen's.
+    # A frog of another rig drawn by another rig's animation is torn apart,
+    # so each rig left is one more frog. Every frog comes in its default
+    # texture and in each grenade skin: one entry each.
     carriers = [zm for zm in models if zm.grenade is not None]
     variants: list[list[ZombieModel]] = []
     for zm in carriers:
@@ -763,27 +892,42 @@ def merge_zhands(
         else:
             home.append(zm)
     grenade_paths: list[str] = []
-    grenade_index: dict[str, int] = {}
+    grenade_index: dict[str, int] = {}  # model -> its frog's default entry (1…)
+    skin_index: dict[str, dict[str, int]] = {}  # model -> skin label -> entry
     chosen_from: list[str] = []
-    for number, members in enumerate(variants, 1):
-        chosen = None
-        if grenade_texture is not None:
-            chosen = next((zm for zm in members if any(
-                t.material.lower() == grenade_texture.lower()
-                for t in zm.grenade.triangles)), None)
-        if chosen is None:
-            chosen = max(members, key=lambda c: sum(
-                _same_mesh(c.grenade, other.grenade, {}, {}) for other in members))
-        chosen_from.append(chosen.stem)
-        mesh = _restage(chosen.grenade, chosen, stage)
-        stem = "grenade" if number == 1 else f"grenade{number}"
+    skins = [(_skin_label(Path(path)), Path(path)) for path in (grenade_skins or [])]
+    shared_users = [zm for zm in models if zm.redrawn_by is not None]
+    frogs: list[tuple[ZombieModel, Smd, list[ZombieModel]]] = []
+    if shared_users:  # one frog for all: drawn on this part's node table
+        mesh = frog_mesh(shared_frog, models[0].hands)
+        frogs.append((shared_frog, mesh, shared_users))
+    for members in variants:
+        frogs.append((_choose_grenade(members, grenade_texture), None, members))
+    if frogs:
         (out_dir / "grenade").mkdir(exist_ok=True)
+    for number, (chosen, built, members) in enumerate(frogs, 1):
+        chosen_from.append(chosen.stem)
+        mesh = _restage(built if built is not None else chosen.grenade, chosen, stage)
+        stem = "grenade" if number == 1 else f"grenade{number}"
         (out_dir / "grenade" / f"{stem}.smd").write_text(
             write_smd_text(mesh), encoding="latin-1")
         grenade_paths.append(f"grenade/{stem}")
+        default = len(grenade_paths)
+        own_skins: dict[str, int] = {}
+        main = Counter(t.material for t in mesh.triangles).most_common(1)[0][0]
+        for label, path in skins:
+            texture = stage.stage(path.parent, path.name, None)
+            skinned = Smd(nodes=list(mesh.nodes), frames=list(mesh.frames), triangles=[
+                dataclasses.replace(t, material=texture) if t.material == main else t
+                for t in mesh.triangles])
+            (out_dir / "grenade" / f"{stem}_{label}.smd").write_text(
+                write_smd_text(skinned), encoding="latin-1")
+            grenade_paths.append(f"grenade/{stem}_{label}")
+            own_skins[label] = len(grenade_paths)
         for zm in members:
-            grenade_index[zm.stem] = number
-            if not _same_mesh(chosen.grenade, zm.grenade, {}, {}):
+            grenade_index[zm.stem] = default
+            skin_index[zm.stem] = own_skins
+            if built is None and not _same_mesh(chosen.grenade, zm.grenade, {}, {}):
                 report.warnings.append(
                     f"{zm.stem}: its own grenade mesh is replaced by "
                     f"{chosen.stem}'s (the same grenade rig)")
@@ -792,8 +936,8 @@ def merge_zhands(
             for zm in carriers for t in zm.grenade.triangles):
         report.warnings.append(f"no grenade uses texture {grenade_texture!r}; "
                                "using the most common grenade of each rig")
-    if len(variants) > 1:
-        report.warnings.append(f"{len(variants)} grenade rigs: one grenade entry each")
+    if len(frogs) > 1:
+        report.warnings.append(f"{len(frogs)} frogs: one grenade entry each")
     report.grenade_from = ", ".join(chosen_from) if chosen_from else None
     report.textures = len(stage.taken)
 
@@ -851,7 +995,8 @@ def merge_zhands(
 
     lines = [
         "// Generated by valve-qc-merger merge-zhands: zombie hands + one",
-        "// grenade a rig; pev_body = grenade + (grenades + 1) * (hands + 1); 0 draws nothing.",
+        "// grenade entries (frog x skin); pev_body = grenade + (grenades + 1) * (hands + 1);",
+        "// 0 draws nothing.",
         "",
         f'$modelname "{name}.mdl"',
         '$cd "."',
@@ -888,6 +1033,10 @@ def merge_zhands(
     report.manifest = {
         zm.stem: {
             "pev_body": report.pev_body[zm.stem],
+            # the same grenade in each skin (a grenade model only)
+            **({f"pev_body_{label}": entry + grenade_stride * (hand_index[zm.stem] + 1)
+                for label, entry in skin_index.get(zm.stem, {}).items()}
+               if zm.role == "grenade" else {}),
             "hands": hand_entries[hand_index[zm.stem]][0],
             **{f"anim_{k}": v for k, v in manifest_anim[zm.stem].items()},
         }
@@ -948,6 +1097,8 @@ def verify(
                     final = zm.renames.get(original_names[oi], original_names[oi])
                     if final not in merged_index:
                         continue
+                    if zm.redrawn_by is not None and final.startswith(GRENADE_PREFIX):
+                        continue  # redrawn for the shared frog on purpose
                     got = mw[merged_index[final]].translation
                     want = world.translation
                     delta = max(abs(got.x - want.x), abs(got.y - want.y),

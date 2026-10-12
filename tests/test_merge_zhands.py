@@ -159,3 +159,45 @@ def test_grenades_of_different_rigs_get_an_entry_each(tmp_path: Path) -> None:
     grenade = {stem: body % 3 for stem, body in report.pev_body.items()}
     assert grenade == {"v_alpha_grenade": 1, "v_beta_grenade": 2, "v_gamma_grenade": 1}
     assert min(hands.values()) >= 0
+
+
+def test_one_frog_for_all_redraws_the_other_rigs(tmp_path: Path) -> None:
+    # beta's frog sits on another rig (its mouth bone elsewhere): with one frog
+    # for all its grenade animation is redrawn for alpha's frog — one entry
+    from valve_qc_merger.merge_zhands.merger import canonical_grenade
+    src = tmp_path / "in"
+    _write_model(src, "v_alpha_grenade", grenade=True, hand_root="Bone01", mouth=1.0)
+    _write_model(src, "v_beta_grenade", grenade=True, hand_root="Bone01", mouth=3.0)
+    _write_model(src, "v_gamma_grenade", grenade=True, hand_root="Bone01", mouth=1.0)
+    models = [load_model(d) for d in sorted(src.iterdir())]
+    frog = canonical_grenade(models, "frogbomb", "frogbomb.bmp")
+    assert frog is not None and frog.name in ("v_alpha_grenade", "v_gamma_grenade")
+    out = tmp_path / "out"
+    report = merge_zhands(models, out, "v_zh", frog=frog, grenade_skins=[])
+    assert all(passed for _c, passed, _d in report.gate), report.gate
+    qc = (out / "v_zh.qc").read_text(encoding="latin-1")
+    assert '\tstudio "grenade/grenade"' in qc and "grenade2" not in qc
+    assert any("redrawn" in w for w in report.warnings)
+    # grenade group {blank, frog}: every grenade model shows entry 1
+    assert {stem: body % 2 for stem, body in report.pev_body.items()} == {
+        "v_alpha_grenade": 1, "v_beta_grenade": 1, "v_gamma_grenade": 1}
+
+
+def test_grenade_skins_are_entries_of_their_own(tmp_path: Path) -> None:
+    src = tmp_path / "in"
+    _write_model(src, "v_alpha_grenade", grenade=True, hand_root="Bone01")
+    _write_model(src, "v_alpha_knife", grenade=False, hand_root="Bone01")
+    skin = tmp_path / "Red Frog.bmp"
+    skin.write_bytes(b"BM red")
+    models = [load_model(d) for d in sorted(src.iterdir())]
+    out = tmp_path / "out"
+    report = merge_zhands(models, out, "v_zh", grenade_skins=[str(skin)])
+    qc = (out / "v_zh.qc").read_text(encoding="latin-1")
+    assert '\tstudio "grenade/grenade_red_frog"' in qc
+    skinned = (out / "grenade" / "grenade_red_frog.smd").read_text(encoding="latin-1")
+    assert "Red_Frog.bmp" in skinned or "red_frog" in skinned.lower()
+    entry = report.manifest["v_alpha_grenade"]
+    # grenade group {blank, frog, red frog}: stride 3
+    assert entry["pev_body"] % 3 == 1 and entry["pev_body_red_frog"] % 3 == 2
+    assert entry["pev_body_red_frog"] // 3 == entry["pev_body"] // 3  # the same hands
+    assert "pev_body_red_frog" not in report.manifest["v_alpha_knife"]
