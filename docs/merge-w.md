@@ -57,6 +57,13 @@ is rebound to `weapon`.
   `pev_body`, `skin = k` and `skin_of = <model>` — so a variant is one name in
   the v_, p_ and w_ manifests (and `VQM_<MODEL>_SKIN<k>_BODY` / `_SKIN` in
   the AMXX include). No submodel is added: the skin is still `pev_skin`.
+  In a Studio project build the weapon's models get one skin count: a
+  staged p_ / w_ model with fewer skin rows than its v_ model (or its w_ /
+  p_ sibling) takes the sibling's rows over the same textures with their
+  textures (w_jetgun gets p_jetgun's yellow), then repeats its first row (a
+  v_ model's ammo screens and charge states have no counterpart held or
+  dropped) — so every `<model>_skin<k>` of the v_ manifest exists in the
+  p_ and w_ ones too. The assets stay as imported.
 - `$texrendermode` entries are carried per staged texture.
 - Original per-model `$hbox` lines are **not** carried: their bones no longer
   exist. The auto-generated box on `weapon` is the union of the part's

@@ -1212,6 +1212,10 @@ class Project:
         if self.settings.sound_aliases:
             self._alias_staged_sounds(staged, reporter)
         reporter.log(f"build {name}: {build.kind} over {len(assets)} asset(s)")
+        if build.kind in ("merge-p", "merge-w"):
+            from valve_qc_merger.project.weapon_skins import align_staged_skins
+            for note in align_staged_skins(self, staged, assets):
+                reporter.log(f"  skins: {note}")
         options = dict(build.options)
         models_dir = staged
         notes: list[str] = []
