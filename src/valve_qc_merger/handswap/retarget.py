@@ -45,7 +45,8 @@ FALLBACK_ARM_DIR = np.array([0.0, 8.0, -6.0])  # behind and below the view
 # 4: arm parts turn frame to frame no faster than the original's (no elbow/shoulder jumps)
 # 5: hand-named textures (Valve's view_skin) cut with the hands; rigid hand meshes kept
 # 6: exact texel UVs (the decompiler slid UV islands up to a texel: dark seams)
-RETARGET_REVISION = 6
+# 7: an arm the original keeps out of view stays out (v_c4's draw)
+RETARGET_REVISION = 7
 
 # Wrist kink of OUR hand mesh as CSO's own animators pose it: the forearm
 # direction in the palm frame, relative to the rest pose, (pitch, yaw) in
@@ -525,7 +526,47 @@ def _on_screen(point: np.ndarray) -> bool:
                 and abs(point[2]) < depth * VIEW_TAN_V)
 
 
-def _shoulder_seen(shoulder: np.ndarray, up_dir: np.ndarray) -> bool:
+ARM_RADIUS = 2.5  # an arm's thickness about its bones
+
+
+def _segment_seen(start: np.ndarray, d: np.ndarray, length: float,
+                  fractions: tuple[float, ...]) -> bool:
+    """Any of an arm part (its axis and skin around it) on screen."""
+    helper = np.array([0.0, 0.0, 1.0]) if abs(d[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    a = normalized(np.cross(d, helper))
+    b = np.cross(d, a)
+    for f in fractions:
+        p = start + d * length * f
+        if any(_on_screen(q) for q in (p, p + ARM_RADIUS * a, p - ARM_RADIUS * a,
+                                       p + ARM_RADIUS * b, p - ARM_RADIUS * b)):
+            return True
+    return False
+
+
+def _forearm_seen(wrist: np.ndarray, d: np.ndarray, length: float) -> bool:
+    """Any of the forearm's elbow half (the wrist end is the hand's) on screen."""
+    return _segment_seen(wrist, d, length, (0.4, 0.55, 0.7, 0.85, 1.0))
+
+
+def _keep_forearm_hidden(wrist: np.ndarray, d: np.ndarray, d_orig: np.ndarray,
+                         length: float) -> np.ndarray:
+    """``d`` (the natural forearm), turned back toward the original one just
+    as far as it takes to leave the view — when the original forearm was out
+    of it and ours would come in (v_c4's draw: the hands rise from below the
+    screen, our forearm and elbow were already up in view)."""
+    if not _forearm_seen(wrist, d, length) or _forearm_seen(wrist, d_orig, length):
+        return d
+    low, high = 0.0, 1.0  # the least turn back that hides it
+    for _ in range(16):
+        mid = (low + high) / 2
+        if _forearm_seen(wrist, _slerp_dir(d, d_orig, mid), length):
+            low = mid
+        else:
+            high = mid
+    return _slerp_dir(d, d_orig, high)
+
+
+def _shoulder_cap_seen(shoulder: np.ndarray, up_dir: np.ndarray) -> bool:
     """Any of the shoulder's cap (head, past it, around it) on screen."""
     helper = np.array([0.0, 0.0, 1.0]) if abs(up_dir[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
     a = normalized(np.cross(up_dir, helper))
@@ -544,13 +585,21 @@ def _slerp_dir(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
 
 
 def _hidden_shoulder(elbow: np.ndarray, d: np.ndarray, upper_len: float,
-                     prefer: np.ndarray | None = None) -> np.ndarray:
+                     prefer: np.ndarray | None = None, whole: bool = False) -> np.ndarray:
     """The shoulder for an elbow: straight on along the forearm line ``d``
     (elbow -> shoulder) when that is off screen — else the upper arm bends at
     the elbow just as far as it takes to leave the view: the least bend of
     those toward the player's own shoulder (behind the eye, below, on the
     arm's side), straight down, outward and back. Bone lengths stay (hand
-    bones only rotate); the forearm and hand — the grip — do not move."""
+    bones only rotate); the forearm and hand — the grip — do not move.
+    ``whole``: the original arm is out of view, so all of the upper arm
+    must be, not only the shoulder."""
+
+    def _shoulder_seen(shoulder: np.ndarray, up_dir: np.ndarray) -> bool:
+        if whole and _segment_seen(elbow, up_dir, upper_len, (0.0, 0.25, 0.5, 0.75)):
+            return True
+        return _shoulder_cap_seen(shoulder, up_dir)
+
     shoulder = elbow + d * upper_len
     if not _shoulder_seen(shoulder, d):
         return shoulder
@@ -615,11 +664,19 @@ def solve_frame(plan: RetargetPlan,
         d = normalized(d)
         sp._prev_dir = d
         d_orig = d
+        fore_len = float(np.linalg.norm(asset.head(rig.wrist) - asset.head(rig.arm[1])))
+        # the original's whole arm out of view (a draw rising from below the
+        # screen) — then ours stays out too; not when only its forearm is
+        # (a reload's: switching there would jerk the arm about)
+        arm_hidden = (not _on_screen(w_target)
+                      and not _forearm_seen(w_target, d_orig, fore_len))
         if NATURAL_WRIST:
             palm_now = hand_w @ rig.palm_local
             palm_rest = rig.palm_world
             back_rest = normalized(asset.head(rig.arm[1]) - asset.head(rig.wrist))
             d = _natural_arm(palm_now, d, _palm_angles(palm_rest, back_rest), sp.side)
+            if arm_hidden:
+                d = _keep_forearm_hidden(w_target, d, d_orig, fore_len)
         # continuity: the forearm turns no faster than the original one (plus
         # a margin) — the wrist-angle clamp could flip it in one frame when
         # the original wrist folded past 90 deg (v_holysword: 7.8 u elbow jump)
@@ -636,7 +693,8 @@ def solve_frame(plan: RetargetPlan,
         upper_len = float(np.linalg.norm(e_rest - s_rest))
 
         elbow = w_target + d * fore_chord
-        shoulder = (_hidden_shoulder(elbow, d, upper_len, sp._prev_u) if HIDE_SHOULDERS
+        shoulder = (_hidden_shoulder(elbow, d, upper_len, sp._prev_u, whole=arm_hidden)
+                    if HIDE_SHOULDERS
                     else w_target + d * (fore_chord + upper_len))
         u = normalized(shoulder - elbow)
         if sp._prev_u is not None and turned is not None:

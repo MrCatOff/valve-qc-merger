@@ -12,7 +12,9 @@ player would and measures what went wrong in practice:
 - **jumps** — frames where an arm bone of ours suddenly moves much more than
   in the frames around it while the original wrist does not (an elbow
   flipping, a shoulder hopping);
-- **shoulder** — frames whose upper-arm head is in the player's view.
+- **shoulder** — frames whose upper-arm head is in the player's view;
+- **arms** — frames where the original hands are all out of view but our
+  arms show (v_c4's draw: the hands rise from below, our elbow was up).
 
 The view: SMD space with the eye at the origin, forward -Y, up +Z (studiomdl
 turns SMD data +90 deg about Z), a widescreen Hor+ field of ~112 x 82 deg.
@@ -38,6 +40,7 @@ MEASURE_STEP = 3  # weapon and fit every 3rd frame; jumps and shoulder every fra
 WEAPON_BAD = 0.05
 FIT_WARN = 0.45
 JUMP_FACTOR, JUMP_MARGIN = 2.5, 2.0  # a spike: > factor x neighbours + margin
+ARMS_SEEN = 20  # our arm vertices in view that count, when the original shows none
 
 
 @dataclass
@@ -49,6 +52,7 @@ class SequenceAudit:
     fit95: float = 0.0  # worst frame's 95th percentile
     jumps: list[int] = field(default_factory=list)  # frames
     shoulder: int = 0  # frames with our shoulder in view
+    arms: int = 0  # frames with our arms in view, the original's out of it
 
 
 @dataclass
@@ -57,6 +61,7 @@ class RetargetAudit:
     fit: float = 0.0
     jumps: int = 0
     shoulder: int = 0
+    arms: int = 0
     frames: int = 0
     sequences: list[SequenceAudit] = field(default_factory=list)
     note: str = ""  # why nothing could be measured
@@ -83,12 +88,17 @@ class RetargetAudit:
             worst = max(self.sequences, key=lambda s: s.shoulder)
             out.append(f"shoulder in view in {self.shoulder} of {self.frames} frame(s) "
                        f"({worst.name})")
+        if self.arms:
+            worst = max(self.sequences, key=lambda s: s.arms)
+            out.append(f"arms in view while the original's are not, {self.arms} frame(s) "
+                       f"({worst.name})")
         return out
 
     def summary(self) -> dict[str, object]:
         """What a project keeps (no per-sequence detail)."""
         return {"weapon": round(self.weapon, 3), "fit": round(self.fit, 3),
-                "jumps": self.jumps, "shoulder": self.shoulder, "frames": self.frames,
+                "jumps": self.jumps, "shoulder": self.shoulder, "arms": self.arms,
+                "frames": self.frames,
                 "problems": self.problems, "warnings": self.warnings,
                 **({"note": self.note} if self.note else {})}
 
@@ -161,6 +171,7 @@ def audit_retarget(original: Path, result: Path) -> RetargetAudit:
     bones = np.concatenate([b.bones for b in r_hand])
     grip = np.flatnonzero(~np.isin(bones, list(arm)))
     pick = rng.choice(grip, min(FIT_SAMPLES, len(grip)), replace=False)
+    arm_vertices = np.flatnonzero(np.isin(bones, list(arm)))
     r_index = {s.name: i for i, s in enumerate(r.sequences)}
     fits: list[float] = []
     for si, seq in enumerate(o.sequences):
@@ -198,6 +209,10 @@ def audit_retarget(original: Path, result: Path) -> RetargetAudit:
             prev, prev_wrist = joints, wrists
             if upper and on_screen(tr[upper]).any():
                 sa.shoulder += 1
+            if not on_screen(wrists).any():  # the original hands all out of view
+                ours = np.concatenate([r.skin(b, rr, tr)[0] for b in r_hand])
+                if int(on_screen(ours[arm_vertices]).sum()) >= ARMS_SEEN:
+                    sa.arms += 1
         sa.fit = float(np.mean(seq_fit)) if seq_fit else 0.0
         sa.jumps = [i + 1 for i in _spikes(speeds, wrist_speeds)]
         fits.append(sa.fit)
@@ -209,6 +224,7 @@ def audit_retarget(original: Path, result: Path) -> RetargetAudit:
     audit.fit = float(np.mean(fits))
     audit.jumps = sum(len(s.jumps) for s in audit.sequences)
     audit.shoulder = sum(s.shoulder for s in audit.sequences)
+    audit.arms = sum(s.arms for s in audit.sequences)
     audit.frames = sum(s.frames for s in audit.sequences)
     return audit
 
