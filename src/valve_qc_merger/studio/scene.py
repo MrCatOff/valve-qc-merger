@@ -14,6 +14,7 @@ SMD space (studiomdl's +90 deg turn makes that +X in game).
 from __future__ import annotations
 
 import re
+import struct
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -251,6 +252,26 @@ def _smd_locals(smd: Smd, names: list[str],
     return out
 
 
+def _game_uv(uv: np.ndarray, texture: Path | None) -> np.ndarray:
+    """``uv`` on the texels the game will draw: studiomdl takes texel
+    ``int(u * (width - 1))`` (and ``t`` the same way, flipped) — the preview
+    samples their middles, so it shows what the compiled model shows."""
+    if texture is None:
+        return uv
+    try:
+        with open(texture, "rb") as handle:
+            head = handle.read(26)
+        width, height = struct.unpack("<ii", head[18:26])
+    except (OSError, struct.error):
+        return uv
+    width, height = abs(width), abs(height)
+    if width < 2 or height < 2:
+        return uv
+    s = np.floor(uv[:, 0] * (width - 1))
+    t = np.floor(uv[:, 1] * (height - 1))
+    return np.stack([(s + 0.5) / width, (t + 0.5) / height], axis=1)
+
+
 def build_scene(directory: Path, model: ModelInput | None = None) -> ModelScene:
     """Load (or reuse) a decompiled model and prepare it for drawing."""
     model = model or load_model(Path(directory), require_anims=False)
@@ -304,16 +325,17 @@ def build_scene(directory: Path, model: ModelInput | None = None) -> ModelScene:
             # bind-world -> bone-local: R^T (p - t)
             local_pos = np.einsum("nji,nj->ni", r, pos - trans[bones])
             local_nrm = np.einsum("nji,nj->ni", r, nrm)
-            scene.batches.append(Batch(
-                stem=stem, material=material,
-                render_mode=modes.get(material.lower(), ""),
-                bones=bones, local_pos=local_pos, local_nrm=local_nrm,
-                uv=np.array([tuple(v.uv) for v in verts], dtype=np.float64),
-            ))
             if material not in scene.textures:
                 scene.textures[material] = next(
                     (p for p in model.directory.rglob("*")
                      if p.is_file() and p.name.lower() == material.lower()), None)
+            scene.batches.append(Batch(
+                stem=stem, material=material,
+                render_mode=modes.get(material.lower(), ""),
+                bones=bones, local_pos=local_pos, local_nrm=local_nrm,
+                uv=_game_uv(np.array([tuple(v.uv) for v in verts], dtype=np.float64),
+                            scene.textures[material]),
+            ))
 
     for seq in model.sequences:
         anim = model.anims.get(seq.name)
