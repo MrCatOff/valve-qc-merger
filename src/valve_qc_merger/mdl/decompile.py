@@ -140,6 +140,17 @@ def _vec(values: tuple[float, ...]) -> str:
     return " ".join(_fmt(v) for v in values)
 
 
+def _texel_uv(s: int, t: int, width: int, height: int) -> Vector2:
+    """The SMD UV studiomdl turns back into texel ``(s, t)`` exactly: it
+    takes ``s = int(u * (width - 1))`` and ``t`` from ``int(v * (height -
+    1))`` flipped, so the texel's middle on that scale survives the
+    truncation (``s / width`` lost up to a texel, more at the far edge, and
+    a shifted UV island shows the texture's black background at its seams)."""
+    u = (s + 0.5) / max(width - 1, 1)
+    v = 1.0 - (t - 0.5) / max(height - 1, 1)
+    return Vector2(u, v)
+
+
 def decompile_mdl(mdl: Path, out_root: Path) -> DecompileResult:
     """Decompile ``mdl`` into ``out_root/<model stem>/``."""
     model = read_mdl(mdl)
@@ -197,7 +208,7 @@ def decompile_mdl(mdl: Path, out_root: Path) -> DecompileResult:
                         pos = worlds[bone].transform_point(Vector3(*sub.vertices[tv.vertex]))
                         nrm = worlds[nbone].rotate_vector(Vector3(*sub.normals[tv.normal]))
                         verts.append(Vertex(bone=bone, position=pos, normal=nrm,
-                                            uv=Vector2(tv.s / width, 1.0 - tv.t / height)))
+                                            uv=_texel_uv(tv.s, tv.t, width, height)))
                     # studiomdl reverses SMD winding when it builds strips;
                     # write the reverse of the drawn order (round trip proven)
                     triangles.append(Triangle(material, (verts[1], verts[0], verts[2])))

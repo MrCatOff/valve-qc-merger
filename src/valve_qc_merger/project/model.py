@@ -59,7 +59,7 @@ from valve_qc_merger.services.zhands_grenade import (
     run_zhands_grenade,
 )
 
-FORMAT_VERSION = 2  # 2: asset categories, category builds
+FORMAT_VERSION = 3  # 2: asset categories, category builds; 3: exact texel UVs
 PROJECT_FILE = "project.toml"
 ASSET_KINDS = ("v", "p", "w", "player", "zhands", "prop")
 
@@ -447,6 +447,12 @@ class Project:
             build = Build(**entry)
             project._validate_build(build)
             project.builds[build.name] = build
+        if version < 3:  # decompiled before 0.22: UVs a texel off (texel_uvs)
+            from valve_qc_merger.project.texel_uvs import fix_directory
+            for asset in project.assets.values():
+                if project.asset_dir(asset.name).is_dir():
+                    fix_directory(project.asset_dir(asset.name))
+            project.save()
         return project
 
     def save(self) -> None:
@@ -520,6 +526,8 @@ class Project:
                 shutil.move(str(directory), str(self.root / relative))
             else:
                 shutil.copytree(directory, self.root / relative)
+            from valve_qc_merger.project.texel_uvs import fix_directory
+            fix_directory(self.root / relative)  # UVs on texel edges: a texel off
             if prepared is None:
                 _normalize_quietly(self.root / relative)
             asset = Asset(name=name, kind=asset_kind, path=relative.as_posix(),
