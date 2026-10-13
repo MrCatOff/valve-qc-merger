@@ -154,6 +154,8 @@ class SettingsDialog(QDialog):
         self.game_edit.setPlaceholderText("e.g. …/Half-Life/cstrike")
         self.install_edit = QLineEdit(settings.game_install or "")
         self.install_edit.setPlaceholderText("a clean game: …/Half-Life/cstrike (read only)")
+        self.folder_edit = QLineEdit(settings.server_folder or "")
+        self.folder_edit.setPlaceholderText("e.g. shadowproject (none: models/, sound/)")
         self.deploy_box = QCheckBox("Deploy to the game after every successful compile")
         self.deploy_box.setChecked(settings.deploy_after_compile)
         from valve_qc_merger.workers import default_workers
@@ -185,12 +187,16 @@ class SettingsDialog(QDialog):
         layout.addWidget(kit.hint("Deploy copies compiled models and their manifest into "
                                   "this mod folder (each build can pick a subfolder)."))
         install = kit.form()
+        install.addRow("Server folder", self.folder_edit)
         install.addRow("Game install", _path_row(self.install_edit, self._pick_install))
         layout.addLayout(install)
         layout.addWidget(kit.hint(
-            "What every player already has — only read, never changed. Its sounds (and "
-            "Half-Life's in valve/ next to it) are offered in Find similar sounds instead "
-            "of your copies, and a server package does not ship them."))
+            "Server folder: the builds put their models in models/<folder>/ and the sounds "
+            "they ship in sound/<folder>/ (the game's own sounds stay where they are). "
+            "Game install: what every player already has — only read, never changed. "
+            "Its sounds (and Half-Life's in valve/ next to it) are offered in Find "
+            "similar sounds instead of your copies, and a server package does not ship "
+            "them."))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save
                                    | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -221,6 +227,7 @@ class SettingsDialog(QDialog):
         settings.hlam = self.hlam_edit.text().strip() or None
         settings.game_dir = self.game_edit.text().strip() or None
         settings.game_install = self.install_edit.text().strip() or None
+        settings.server_folder = self.folder_edit.text().strip().strip("/\\") or None
         settings.deploy_after_compile = self.deploy_box.isChecked()
         settings.workers = self.workers_spin.value()
 

@@ -158,6 +158,9 @@ class Settings:
     # player already has — sounds the project's can become, files the
     # package need not ship
     game_install: str | None = None
+    # the server's own folder (e.g. "shadowproject"): models go to
+    # models/<folder>/, the sounds the project ships to sound/<folder>/
+    server_folder: str | None = None
     deploy_after_compile: bool = False
     # server budget: what the game DLL + plugins precache (the studio cannot
     # see those) and where plugins put the view models' client sounds
@@ -422,6 +425,7 @@ class Project:
             studiomdl=settings.get("studiomdl"), hlam=settings.get("hlam"),
             game_dir=settings.get("game_dir"),
             game_install=settings.get("game_install"),
+            server_folder=settings.get("server_folder"),
             deploy_after_compile=bool(settings.get("deploy_after_compile", False)),
             extra_models=int(settings.get("extra_models", 0)),
             extra_sounds=int(settings.get("extra_sounds", 0)),
@@ -463,6 +467,7 @@ class Project:
                          "hlam": self.settings.hlam,
                          "game_dir": self.settings.game_dir,
                          "game_install": self.settings.game_install,
+                         "server_folder": self.settings.server_folder,
                          "deploy_after_compile": self.settings.deploy_after_compile,
                          "extra_models": self.settings.extra_models,
                          "extra_sounds": self.settings.extra_sounds,
@@ -1211,6 +1216,9 @@ class Project:
             shutil.copytree(self.asset_dir(asset.name), staged / asset.name)
         if self.settings.sound_aliases:
             self._alias_staged_sounds(staged, reporter)
+        from valve_qc_merger.project.sounds import server_folder
+        if server_folder(self):
+            self._folder_staged_sounds(staged, reporter)
         reporter.log(f"build {name}: {build.kind} over {len(assets)} asset(s)")
         if build.kind in ("merge-p", "merge-w"):
             from valve_qc_merger.project.weapon_skins import align_staged_skins
@@ -1247,6 +1255,21 @@ class Project:
             models_dir = work / "retarget"
             options["shared_hands"] = True
         return assets, models_dir, options, notes
+
+    def _folder_staged_sounds(self, staged: Path, reporter: Reporter) -> None:
+        """Point the staged models' sound events into the server folder
+        (sound/<folder>/…): the game's own sounds stay where they are."""
+        from valve_qc_merger.project.sounds import folder_sound_events
+        changed = 0
+        for qc in staged.glob("*/*.qc"):
+            text = qc.read_text(encoding="latin-1")
+            new = folder_sound_events(self, text)
+            if new != text:
+                qc.write_text(new, encoding="latin-1")
+                changed += 1
+        if changed:
+            from valve_qc_merger.project.sounds import server_folder
+            reporter.log(f"  sounds of {changed} model(s) under sound/{server_folder(self)}/")
 
     def _alias_staged_sounds(self, staged: Path, reporter: Reporter) -> None:
         """Point the staged models' sound events at the sounds they share
@@ -1610,6 +1633,18 @@ class Project:
         return notes
 
     # -- deploy ---------------------------------------------------------------
+    def deploy_folder(self, build: Build) -> str:
+        """Where a build's models go under the game folder: its own folder,
+        else by kind — under the server folder when the project has one
+        (player models stay in models/player: the engine looks there)."""
+        if build.deploy_dir:
+            return build.deploy_dir
+        if build.kind in DEPLOY_DIRS:
+            return DEPLOY_DIRS[build.kind]
+        from valve_qc_merger.project.sounds import server_folder
+        folder = server_folder(self)
+        return f"{DEFAULT_DEPLOY_DIR}/{folder}" if folder else DEFAULT_DEPLOY_DIR
+
     def deploy_files(self, name: str, root: Path | None = None) -> list[tuple[Path, Path]]:
         """``(source, destination)`` of everything Deploy copies for a build:
         each compiled model (+ its ``T.mdl`` texture file and ``NN.mdl``
@@ -1625,7 +1660,7 @@ class Project:
             raise ProjectError(f"build {name!r} has not been run")
         record = json.loads(record_path.read_text(encoding="utf-8"))
         target = Path(root if root is not None else self.settings.game_dir) / (
-            build.deploy_dir or DEPLOY_DIRS.get(build.kind, DEFAULT_DEPLOY_DIR))
+            self.deploy_folder(build))
         players = build.kind == "merge-players"
         pairs: list[tuple[Path, Path]] = []
         missing: list[str] = []
@@ -1656,7 +1691,8 @@ class Project:
         """``(source, root/sound/<path>)`` of every sound the build's models
         play — as their QC names it (merge-v's sound folder, shared sounds
         already swapped in) — and the sounds not found. Stock sounds are left
-        out: the game has them."""
+        out: the game has them, as are the ones the game install has (every
+        player has those)."""
         from valve_qc_merger.project import sounds as library
         from valve_qc_merger.server.budget import _CLIENT_SOUND
         texts = [qc.read_text(encoding="latin-1")
@@ -1667,7 +1703,9 @@ class Project:
         missing: list[str] = []
         for key in sorted(library.project_sound_kinds(self, texts)):
             sound = named.get(key, key)
-            source = library.resolve(self, sound)
+            if library.in_game(self, sound):
+                continue
+            source = library.resolve(self, library.library_name(self, sound))
             if source is None:
                 missing.append(sound)
             else:

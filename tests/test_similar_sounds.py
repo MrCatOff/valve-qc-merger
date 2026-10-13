@@ -205,3 +205,25 @@ def test_similar_sounds_dialog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         assert len(dialog.groups[0].members) == 3
     finally:
         dialog.close()
+
+
+def test_a_server_folder_holds_the_projects_models_and_sounds(tmp_path: Path) -> None:
+    from valve_qc_merger.project.model import Build
+    project = Project.create(tmp_path / "pack")
+    project.settings.server_folder = "shadowproject/"
+    project.save()
+    project = Project.open(project.root)
+    assert project.deploy_folder(Build("v", "merge-v")) == "models/shadowproject"
+    assert project.deploy_folder(Build("pl", "merge-players")) == "models/player"
+    assert project.deploy_folder(Build("own", "merge-p", deploy_dir="models/x")) == "models/x"
+    qc = ('$sequence "reload" "a" {\n { event 5004 1 "weapons/m4_clipin.wav" }\n'
+          ' { event 5004 9 "weapons/m4a1_deploy.wav" }\n}\n')  # the second is stock
+    moved = library.folder_sound_events(project, qc)
+    assert '"shadowproject/weapons/m4_clipin.wav"' in moved
+    assert '"weapons/m4a1_deploy.wav"' in moved  # every player has it where it is
+    assert library.folder_sound_events(project, moved) == moved  # once
+    assert library.library_name(project, "shadowproject/weapons/m4_clipin.wav") == \
+        "weapons/m4_clipin.wav"
+    project.settings.sound_precache["weapons/m4_clipin.wav"] = "sound"
+    assert library.project_sound_kinds(project, [moved]) == {
+        "shadowproject/weapons/m4_clipin.wav": "sound"}  # its own choice follows it

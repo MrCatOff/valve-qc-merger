@@ -572,6 +572,13 @@ Running the build again removes the folder until the next Compile. Build
 panel ▸ Outputs ▸ **Server files (cstrike)** opens it — upload it as it is.
 
 Project ▸ Settings ▸ **Game folder** (the mod folder, e.g. `…/cstrike`).
+Project ▸ Settings ▸ **Server folder** (e.g. `shadowproject`) keeps the
+project's files apart from everyone else's: every build puts its models in
+`models/<folder>/` and the sounds it ships in `sound/<folder>/…` — the
+staged models' sound events are pointed there (`weapons/x.wav` →
+`shadowproject/weapons/x.wav`); the game's own sounds (stock, or in the Game
+install) stay where they are. Player models stay in `models/player/<name>/`
+(the engine looks only there); a build's own deploy folder wins.
 **Deploy** (build panel, Explorer ▸ build ▸ Deploy to game, F8) copies that
 folder into the game folder (making it first when it is missing). It lists
 every file first and marks the ones it replaces. With *deploy after every

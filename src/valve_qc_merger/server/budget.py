@@ -58,7 +58,6 @@ def project_load(project: Project) -> ProjectLoad:
     """The models each run build deploys and the client sounds they play."""
     import json
 
-    from valve_qc_merger.project.model import DEFAULT_DEPLOY_DIR, DEPLOY_DIRS
     load = ProjectLoad()
     for name, build in sorted(project.builds.items()):
         record = project.build_dir(name) / "last_run.json"
@@ -69,7 +68,7 @@ def project_load(project: Project) -> ProjectLoad:
             inputs = len(project.build_assets(build))
         except (OSError, ValueError, KeyError):
             continue
-        folder = (build.deploy_dir or DEPLOY_DIRS.get(build.kind, DEFAULT_DEPLOY_DIR))
+        folder = project.deploy_folder(build)
         folder = folder.strip("/\\").replace("\\", "/")
         paths = []
         for output in outputs:

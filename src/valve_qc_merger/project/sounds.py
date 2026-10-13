@@ -170,6 +170,38 @@ def apply_aliases(qc_text: str, aliases: dict[str, str]) -> str:
     return _EVENT_PATH.sub(swap, qc_text)
 
 
+def server_folder(project: Project) -> str:
+    """The project's server folder ("" for none): sound/<folder>/…"""
+    return (project.settings.server_folder or "").strip("/\\ ").replace("\\", "/")
+
+
+def library_name(project: Project, sound: str) -> str:
+    """The library's name of a sound a build names in its server folder
+    (``shadowproject/weapons/x.wav`` -> ``weapons/x.wav``)."""
+    folder = server_folder(project)
+    name = sound.replace("\\", "/").strip()
+    if folder and name.lower().startswith(folder.lower() + "/"):
+        return name[len(folder) + 1:]
+    return name
+
+
+def folder_sound_events(project: Project, qc_text: str) -> str:
+    """``qc_text`` with every sound event moved into the server folder —
+    except the game's own sounds (stock, or in the game install): every
+    player has those where they are."""
+    folder = server_folder(project)
+    if not folder:
+        return qc_text
+    keep = stock_sounds() | {sound_key(n) for n in game_sound_files(project)}
+
+    def move(match: re.Match[str]) -> str:
+        name = match.group(2).replace("\\", "/").strip()
+        if sound_key(name) in keep or sound_key(name).startswith(folder.lower() + "/"):
+            return match.group(0)
+        return f"{match.group(1)}{folder}/{name}{match.group(3)}"
+    return _EVENT_PATH.sub(move, qc_text)
+
+
 def stock_sounds() -> set[str]:
     """Sounds the game DLL precaches on every map (ReGameDLL, measured)."""
     from valve_qc_merger.server.stock import PRECACHED
@@ -180,7 +212,11 @@ def project_sound_kinds(project: Project, qc_texts: list[str]) -> dict[str, str]
     """:func:`precache_kinds` with the project's mode, choices and aliases;
     sounds the game precaches anyway (stock) left out — they cost nothing."""
     settings = project.settings
-    kinds = precache_kinds(qc_texts, settings.client_sounds, settings.sound_precache,
+    overrides = dict(settings.sound_precache)
+    folder = server_folder(project)
+    if folder:  # a sound's own choice follows it into the server folder
+        overrides.update({f"{folder}/{k}": v for k, v in settings.sound_precache.items()})
+    kinds = precache_kinds(qc_texts, settings.client_sounds, overrides,
                            aliases=settings.sound_aliases)
     stock = stock_sounds()
     return {k: v for k, v in kinds.items() if k not in stock}
@@ -381,6 +417,7 @@ def resolve(project: Project, name: str) -> Path | None:
 
 
 __all__ = ["EVENT_SOUND", "asset_sounds", "can_undo_fix", "fix_sound", "game_sound_files",
-           "game_sound_roots", "import_sounds", "in_game", "list_sounds", "remove_sound",
+           "folder_sound_events", "game_sound_roots", "import_sounds", "in_game",
+           "library_name", "list_sounds", "remove_sound",
            "resolve", "sequence_sounds", "sound_path", "sound_users", "sounds_dir",
            "undo_fix"]

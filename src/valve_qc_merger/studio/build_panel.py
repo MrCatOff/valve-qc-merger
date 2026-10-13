@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,6 @@ from PySide6.QtWidgets import (
 )
 
 from valve_qc_merger.project import BUILD_KINDS, Build, Project, ProjectError
-from valve_qc_merger.project.model import DEFAULT_DEPLOY_DIR, DEPLOY_DIRS
 from valve_qc_merger.services.retarget import RetargetOptions
 from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.build_report import LIMITS, load_record, manifest_rows
@@ -441,7 +441,8 @@ class BuildPanel(QTabWidget):
         deploy_row = QFormLayout()
         deploy_row.setContentsMargins(0, 0, 0, 0)
         self.deploy_edit = QLineEdit(build.deploy_dir or "")
-        self.deploy_edit.setPlaceholderText(DEPLOY_DIRS.get(build.kind, DEFAULT_DEPLOY_DIR))
+        default = dataclasses.replace(build, deploy_dir=None)
+        self.deploy_edit.setPlaceholderText(self.project.deploy_folder(default))
         tip = ("Where Deploy copies the compiled models and the manifest, inside the game "
                "folder (Project ▸ Settings).")
         self.deploy_edit.setToolTip(tip)

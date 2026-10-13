@@ -127,11 +127,11 @@ def export_package(project: Project, out: Path, builds: list[str] | None = None)
         theirs = game.get(library.sound_key(sound))
         if theirs is not None:  # every player has it: nothing to download
             result.game_sounds.append(sound)
-            mine = library.sound_path(project, sound)
+            mine = library.sound_path(project, library.library_name(project, sound))
             if mine.is_file() and mine.read_bytes() != theirs.read_bytes():
                 result.shadowed_sounds.append(sound)
             continue
-        source = library.resolve(project, sound)
+        source = library.resolve(project, library.library_name(project, sound))
         if source is None:
             result.missing_sounds.append(sound)
             continue
