@@ -417,6 +417,16 @@ Design:
 
 ## Bone tools (M5)
 
+**Sounds of a weapon** without editing the QC: Asset ▸ **Sounds of this
+model…** lists every sound its animation events play (which sequences, which
+frames), each with a picker — type to search the library and the game's own
+sounds, ▶ plays the one it plays now and the one picked, *Import a WAV…*
+brings a file into the library for the selected row. Saving points the
+events of every sequence at the picked sounds (Undo puts them back). In
+Inspector ▸ Animation, double-clicking a sequence opens its dialog: a sound
+event's option is the same picker, and *Add a sound at frame N* adds one on
+the frame the viewport shows.
+
 Hierarchy edits on the selected asset (Inspector ▸ **Bones**), applied to every
 SMD of the model (reference meshes and animations) by
 `valve_qc_merger.project.bones`, Qt-free:

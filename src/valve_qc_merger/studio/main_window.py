@@ -304,6 +304,9 @@ class MainWindow(QMainWindow):
         self.act_compare = asset_menu.addAction(
             "Compare with original…", lambda: self.compare_with_original(
                 self.explorer.current_asset()))
+        self.act_model_sounds = asset_menu.addAction(
+            "Sounds of this model…", lambda: self.edit_model_sounds(
+                self.explorer.current_asset()))
         self.act_check = asset_menu.addAction(
             "Check retargets", lambda: self.check_retargets(self.explorer.selected_assets()))
         self.act_find = asset_menu.addAction("Find…", self._focus_filter,
@@ -840,7 +843,8 @@ class MainWindow(QMainWindow):
         # what acts on the selection is enabled only when there is one
         asset = has and bool(self.explorer.selected_assets())
         build = has and bool(self.explorer.current_build())
-        for action in (self.act_derive, self.act_rederive, self.act_compare):
+        for action in (self.act_derive, self.act_rederive, self.act_compare,
+                       self.act_model_sounds):
             action.setEnabled(asset and idle)
         self.act_check.setEnabled(has and idle)
         for action in (self.act_run_build, self.act_compile_build, self.act_plan_build,
@@ -1130,11 +1134,43 @@ class MainWindow(QMainWindow):
         index = next((i for i, b in enumerate(blocks) if b.name == wanted), None)
         if index is None:
             return
-        dialog = SequenceDialog(blocks[index], info.sequences[row].frames or None, self)
+        # the frame the viewport shows, when it shows this sequence
+        state, scene = self.viewport.viewport.state, self._scene_cache.get(name)
+        shown = (scene.sequences[state.sequence].name
+                 if scene is not None and state.sequence is not None
+                 and 0 <= state.sequence < len(scene.sequences) else None)
+        frame = int(state.frame) if shown == wanted else None
+        dialog = SequenceDialog(blocks[index], info.sequences[row].frames or None, self,
+                                project=project, current_frame=frame)
         if dialog.exec() != SequenceDialog.DialogCode.Accepted:
             return
         values = dialog.values()
         self._edit_asset("Edit sequence", lambda d: set_sequence(d, index, **values))
+
+    def edit_model_sounds(self, name: str | None) -> None:
+        """Asset ▸ Sounds of this model: replace the sounds its events play."""
+        from valve_qc_merger.project.qc_edit import QcEditError, model_sounds, replace_sounds
+        from valve_qc_merger.studio.model_sounds import ModelSoundsDialog
+        project = self.project
+        if project is None or not name or self.jobs.busy:
+            return
+        try:
+            sounds = model_sounds(project.asset_dir(name))
+        except QcEditError as exc:
+            QMessageBox.warning(self, "Sounds", str(exc))
+            return
+        if not sounds:
+            QMessageBox.information(self, "Sounds", f"{name} plays no sounds from its "
+                                    "animations.")
+            return
+        dialog = ModelSoundsDialog(project, name, sounds, self)
+        if dialog.exec() != ModelSoundsDialog.DialogCode.Accepted:
+            return
+        mapping = dialog.mapping()
+        if mapping:
+            self._edit_asset("Replace sounds", lambda d: replace_sounds(d, mapping))
+            self.log.append_line(f"{name}: " + ", ".join(f"{a} -> {b}"
+                                                          for a, b in mapping.items()))
 
     def edit_render_mode(self, texture: str) -> None:
         from PySide6.QtWidgets import QInputDialog

@@ -212,6 +212,47 @@ def set_render_mode(directory: Path, texture: str, mode: str | None) -> QcEditRe
     return QcEditResult(files=[path])
 
 
+SOUND_EVENTS = (5004, 1004, 1008)  # client sound; server sound events NPC models use
+
+
+def model_sounds(directory: Path) -> dict[str, list[tuple[str, int]]]:
+    """``{sound: [(sequence, frame)]}`` of every sound event of the asset's
+    QC, the sounds in the order they first play."""
+    _path, text = _read(directory)
+    out: dict[str, list[tuple[str, int]]] = {}
+    for block in parse_blocks(text):
+        for event in block.events:
+            if event.event in SOUND_EVENTS and event.option:
+                sound = event.option.replace("\\", "/")
+                out.setdefault(sound, []).append((block.name, event.frame))
+    return out
+
+
+def replace_sounds(directory: Path, mapping: dict[str, str]) -> QcEditResult:
+    """Point the sound events of every sequence at other sounds (``{old:
+    new}``, case-insensitive old names; paths under sound/)."""
+    wanted = {old.replace("\\", "/").lower(): new.replace("\\", "/").strip()
+              for old, new in mapping.items() if new.strip()}
+    for new in wanted.values():
+        if '"' in new or "}" in new or not new.lower().endswith(".wav"):
+            raise QcEditError(f"not a sound path: {new!r} (a .wav under sound/)")
+    path, text = _read(directory)
+    changed = 0
+    # last block first: earlier spans stay valid while later ones are rewritten
+    for block in reversed(parse_blocks(text)):
+        touched = False
+        for event in block.events:
+            new = wanted.get(event.option.replace("\\", "/").lower())
+            if event.event in SOUND_EVENTS and new and new != event.option:
+                event.option, touched = new, True
+                changed += 1
+        if touched:
+            start, end = block.span
+            text = text[:start] + format_block(block) + text[end:]
+    path.write_text(text, encoding="latin-1")
+    return QcEditResult(files=[path], warnings=[] if changed else ["no event changed"])
+
+
 def write_qc(directory: Path, text: str) -> QcEditResult:
     """Replace the QC text, then prove the model still loads; a QC that does
     not is put back and the error raised."""
@@ -237,6 +278,7 @@ def write_qc(directory: Path, text: str) -> QcEditResult:
     return QcEditResult(files=[path])
 
 
-__all__ = ["EVENT_NAMES", "QcEditError", "QcEditResult", "RENDER_MODES", "SequenceBlock",
+__all__ = ["EVENT_NAMES", "QcEditError", "QcEditResult", "RENDER_MODES", "SOUND_EVENTS",
+           "SequenceBlock", "model_sounds", "replace_sounds",
            "SequenceEvent", "format_block", "parse_blocks", "qc_file", "set_render_mode",
            "set_sequence", "write_qc"]

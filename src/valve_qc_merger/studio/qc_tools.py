@@ -46,11 +46,15 @@ class SequenceDialog(QDialog):
     COLUMNS = ["Frame", "Event", "Option", "Meaning"]
 
     def __init__(self, block: SequenceBlock, frames: int | None = None,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, *, project=None,  # noqa: ANN001 - Project
+                 current_frame: int | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Sequence — {block.name}")
         self.block = block
         self.frames = frames
+        self.project = project  # sound events pick from its library (and the game's)
+        self.current_frame = current_frame
+        self._choices: list[str] | None = None
         self.name_edit = QLineEdit(block.name)
         self.name_edit.setMaxLength(LABEL_LIMIT)
         self.fps_box = QCheckBox("fps")
@@ -97,6 +101,11 @@ class SequenceDialog(QDialog):
         remove = QPushButton("Remove")
         remove.clicked.connect(self._remove_rows)
         buttons_row = QHBoxLayout()
+        if current_frame is not None:
+            here = QPushButton(f"Add a sound at frame {current_frame}")
+            here.setToolTip("The frame the viewport shows")
+            here.clicked.connect(lambda: self._add_row(SequenceEvent(5004, current_frame, "")))
+            buttons_row.addWidget(here)
         buttons_row.addWidget(add)
         buttons_row.addWidget(remove)
         buttons_row.addStretch(1)
@@ -126,16 +135,44 @@ class SequenceDialog(QDialog):
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.events.setItem(row, column, item)
         self.events.blockSignals(False)
+        self._sound_cell(row, event.event)
+
+    def _sound_cell(self, row: int, event: int) -> None:
+        """A sound event's option: a sound picker (search + play)."""
+        if self.project is None:
+            return
+        from valve_qc_merger.project.qc_edit import SOUND_EVENTS
+        from valve_qc_merger.studio.model_sounds import SoundPicker, sound_choices
+        if event in SOUND_EVENTS:
+            if not isinstance(self.events.cellWidget(row, 2), SoundPicker):
+                if self._choices is None:
+                    self._choices = sound_choices(self.project)
+                item = self.events.item(row, 2)
+                self.events.setCellWidget(row, 2, SoundPicker(
+                    self.project, item.text() if item else "", self._choices))
+        elif self.events.cellWidget(row, 2) is not None:
+            picker = self.events.cellWidget(row, 2)
+            self.events.item(row, 2).setText(picker.value())
+            self.events.removeCellWidget(row, 2)
+
+    def _option(self, row: int) -> str:
+        widget = self.events.cellWidget(row, 2)
+        if widget is not None and hasattr(widget, "value"):
+            return widget.value()
+        item = self.events.item(row, 2)
+        return item.text().strip() if item else ""
 
     def _event_changed(self, item: QTableWidgetItem) -> None:
         if item.column() != 1:
             return
         meaning = self.events.item(item.row(), 3)
+        try:
+            event = int(item.text())
+        except ValueError:
+            event = 0
         if meaning is not None:
-            try:
-                meaning.setText(EVENT_NAMES.get(int(item.text()), ""))
-            except ValueError:
-                meaning.setText("")
+            meaning.setText(EVENT_NAMES.get(event, ""))
+        self._sound_cell(item.row(), event)
 
     def _remove_rows(self) -> None:
         for row in sorted({i.row() for i in self.events.selectedIndexes()}, reverse=True):
@@ -147,7 +184,7 @@ class SequenceDialog(QDialog):
         for row in range(self.events.rowCount()):
             frame = int(self.events.item(row, 0).text())
             event = int(self.events.item(row, 1).text())
-            option = self.events.item(row, 2).text().strip()
+            option = self._option(row)
             if self.frames is not None and not 0 <= frame < max(self.frames, 1):
                 raise ValueError(f"event frame {frame} is outside 0..{self.frames - 1}")
             events.append(SequenceEvent(event, frame, option))
