@@ -180,3 +180,22 @@ def test_bad_extents_are_recompiled_with_subdivide(tmp_path: Path) -> None:
     result = X.recompile_subdivided(path, 200, settings=settings)
     assert result.bsp is not None
     assert "-subdivide 200 zm_e" in log.read_text()
+
+
+def test_import_names_are_portable_and_keep_a_capital_t(tmp_path: Path) -> None:
+    import shutil
+    examples = Path(__file__).parent / "examples" / "mdl"
+    cs = tmp_path / "client" / "cstrike"
+    (cs / "maps").mkdir(parents=True)
+    (cs / "models" / "Props").mkdir(parents=True)
+    shutil.copy(examples / "mini_ext.mdl", cs / "models" / "Props" / "Car-X.mdl")
+    shutil.copy(examples / "mini_extT.mdl", cs / "models" / "Props" / "Car-XT.mdl")
+    entities = [{"classname": "worldspawn"},
+                {"classname": "cycler_sprite", "model": "models/Props/Car-X.mdl"}]
+    (cs / "maps" / "zm_p.bsp").write_bytes(build_map(entities, external=[]))
+    out = tmp_path / "server" / "cstrike"
+    import_map("zm_p", SourceIndex.build([tmp_path / "client"]), out)
+    names = sorted(p.name for p in (out / "models" / "props").iterdir())
+    assert names == ["car_x.mdl", "car_xT.mdl"]  # the engine asks for <model>T.mdl
+    model = parse(B.Bsp.read(out / "maps" / "zm_p.bsp").entity_text)[1]["model"]
+    assert model == "models/props/car_x.mdl"

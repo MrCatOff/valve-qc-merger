@@ -38,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 from dataclasses import asdict, dataclass, field
@@ -175,14 +176,32 @@ def _needs(index: SourceIndex, bsp: B.Bsp, name: str) -> list[tuple[str, str]]:
     return out
 
 
-def _companions(path: Path, rel: str) -> list[tuple[str, str]]:
+def portable_path(rel: str) -> str:
+    """A game path in lower case, each name ``[a-z0-9_]`` (the extension kept):
+    ``models/Props/apc_back-arctic.mdl`` -> ``models/props/apc_back_arctic.mdl``."""
+    parts = rel.replace("\\", "/").lower().split("/")
+    out = []
+    for k, part in enumerate(parts):
+        stem, dot, ext = part.rpartition(".") if k == len(parts) - 1 and "." in part \
+            else (part, "", "")
+        out.append(re.sub(r"[^a-z0-9_]+", "_", stem).strip("_") + dot + ext or part)
+    return "/".join(out)
+
+
+def _companions(path: Path, rel: str, target: str) -> list[tuple[str, str, str]]:
+    """(where to find it, kind, where to write it) of a model's companions:
+    ``<model>T.mdl`` (the engine asks for a capital T), ``<model>01.mdl`` …
+    — named after the model as written — and the sounds its events play
+    (named as the events name them)."""
     refs = model_refs(path)
-    out: list[tuple[str, str]] = []
-    stem = rel[:-4]
+    out: list[tuple[str, str, str]] = []
+    stem, new = rel[:-4], target[:-4]
     if refs.needs_texture_file:
-        out.append((f"{stem}t.mdl", "model"))
-    out += [(f"{stem}{n:02d}.mdl", "model") for n in range(1, refs.sequence_groups)]
-    out += [(f"sound/{s.removeprefix('sound/')}", "sound") for s in refs.sounds]
+        out.append((f"{stem}t.mdl", "companion", f"{new}T.mdl"))
+    out += [(f"{stem}{n:02d}.mdl", "companion", f"{new}{n:02d}.mdl")
+            for n in range(1, refs.sequence_groups)]
+    out += [(f"sound/{s.removeprefix('sound/')}", "event_sound",
+             f"sound/{s.removeprefix('sound/')}".lower()) for s in refs.sounds]
     return out
 
 
@@ -293,7 +312,7 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
     bsp = B.Bsp.read(source_map)
     stock: Finder | None = finder_for([b.resolve() for b in base]) if base else None
     out = Path(out)
-    queue = _needs(index, bsp, source_map.stem)
+    queue: list[tuple[str, ...]] = list(_needs(index, bsp, source_map.stem))
     world = next((e for e in parse(bsp.entity_text) if e.get("classname") == "worldspawn"), {})
     sky = world.get("skyname", "").strip()
     new_sky = sky
@@ -309,15 +328,28 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
                 break
     wad_renames: dict[str, str] = {}
     seen: set[str] = set()
+    forced: dict[str, str] = {}  # companions: named after their model as written
     while queue:
-        rel, kind = queue.pop(0)
+        item = queue.pop(0)
+        rel, kind = item[0], item[1]
+        if len(item) > 2:
+            forced[rel.lower()] = str(item[2])
         rel = rel.replace("\\", "/").lstrip("/")
         key = rel.lower()
         if key in seen:
             continue
         seen.add(key)
         found = index.find_named(rel, ".wad") if kind == "wad" else index.find(rel)
-        target_rel = rel if kind == "wad" else key
+        if kind == "wad":
+            target_rel = rel
+        elif key in forced:
+            target_rel = forced[key]
+        elif kind in ("model", "sound"):
+            target_rel = portable_path(rel)
+            if target_rel != key:
+                result.renames[rel] = target_rel
+        else:
+            target_rel = key
         if kind == "sky" and new_sky != sky:
             target_rel = f"gfx/env/{new_sky.lower()}{key.rsplit(sky.lower(), 1)[-1]}"
         record = result.files.get(key) or ImportedFile(target_rel)
@@ -334,6 +366,8 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
                     continue
                 stem, dot, ext = target_rel.rpartition(".")
                 target_rel = f"{stem}_cso{dot}{ext}"
+                if kind == "companion" and stem.endswith("T"):
+                    target_rel = f"{stem[:-1]}_csoT{dot}{ext}"
                 record.path = target_rel
                 record.state = "renamed"
                 if kind in ("model", "sound"):
@@ -362,8 +396,8 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
-        if key.endswith(".mdl"):
-            queue += _companions(found, key)
+        if key.endswith(".mdl") and kind != "companion":
+            queue += _companions(found, key, target_rel)
     from valve_qc_merger.mapkit.analyze import forget
     forget(out)
     # the map itself, entities pointing at the names written
@@ -420,4 +454,4 @@ def write_record(result: ImportResult, out: Path) -> Path:
 
 
 __all__ = ["ImportResult", "ImportedFile", "SourceIndex", "cache_dir", "import_map",
-           "write_record"]
+           "portable_path", "write_record"]

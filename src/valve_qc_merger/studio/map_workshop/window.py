@@ -773,6 +773,9 @@ class MapWorkshop(QDialog):
         load.clicked.connect(self._show_3d)
         self.show_spawns = QCheckBox("Spawns")
         self.show_spawns.setChecked(True)
+        self.show_props = QCheckBox("Props")
+        self.show_props.setChecked(True)
+        self.show_props.setToolTip("The models entities show, at their places")
         self.show_light = QCheckBox("Light")
         self.show_light.setChecked(True)
         self.show_light.setToolTip("Faces as bright as the map's lightmaps make them")
@@ -782,7 +785,7 @@ class MapWorkshop(QDialog):
         walk.setToolTip("Appear at the spawn as a player and run around: the mouse looks, "
                         "W A S D run, Space jumps, Ctrl crouches, V noclip, Esc stops")
         walk.clicked.connect(self._walk)
-        for widget in (load, self.show_spawns, self.show_light):
+        for widget in (load, self.show_spawns, self.show_props, self.show_light):
             row.addWidget(widget)
         row.addStretch(1)
         row.addWidget(self.spawn_box)
@@ -837,9 +840,13 @@ class MapWorkshop(QDialog):
             return
         wads = map_wads(state.path, state.bsp, self.state.folders)
         self.viewport.stop_walk()
+        from valve_qc_merger.mapkit.analyze import finder_for, search_folders
+        finder = finder_for(search_folders(state.path, self.state.folders))
         scene = map_scene(state.bsp, wads, state.planned_entities(),
                           self._work / state.name, self.show_spawns.isChecked(),
-                          self.show_light.isChecked())
+                          self.show_light.isChecked(),
+                          find=(lambda rel: finder.find(rel)[0])
+                          if self.show_props.isChecked() else None)
         self.viewport.set_scene(scene)
         self.viewport.state.camera.pitch = 40.0
         self.viewport.setFocus()

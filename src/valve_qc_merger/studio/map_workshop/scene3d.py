@@ -9,6 +9,8 @@ the engine's (``s = v · vecs[0] + offset``, over the texture's width).
 
 from __future__ import annotations
 
+import math
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -148,10 +150,81 @@ def _box(origin: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.array(pos), np.array(nrm, np.float64)
 
 
+def _rotation(angles: str) -> np.ndarray:
+    """An entity's ``angles`` (pitch yaw roll, degrees) as the engine turns a model."""
+    try:
+        pitch, yaw, roll = (math.radians(float(v)) for v in (angles.split() + ["0"] * 3)[:3])
+    except ValueError:
+        pitch = yaw = roll = 0.0
+    cy, sy, cp, sp, cr, sr = (math.cos(yaw), math.sin(yaw), math.cos(pitch), math.sin(pitch),
+                              math.cos(roll), math.sin(roll))
+    rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+    ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+    rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+    return rz @ ry @ rx
+
+
+def _prop_batches(entities: list[dict[str, str]], find: Callable[[str], Path | None],
+                  work: Path, textures: dict[str, Path | None],
+                  modes: dict[str, str]) -> list[Batch]:
+    """The models entities show (props, cyclers …) posed at their places:
+    each model decompiled once, its ``sequence`` first frame and ``body``."""
+    from valve_qc_merger.services.base import CallbackReporter
+    from valve_qc_merger.services.decompile import DecompileOptions, run_decompile
+    from valve_qc_merger.studio.scene import build_scene
+    scenes: dict[str, ModelScene | None] = {}
+    batches: list[Batch] = []
+    for entity in entities:
+        model = entity.get("model", "").replace("\\", "/")
+        if not model.lower().endswith(".mdl"):
+            continue
+        key = model.lower()
+        if key not in scenes:
+            scenes[key] = None
+            found = find(model)
+            if found is not None:
+                target = work / "props" / str(len(scenes))
+                done = run_decompile(DecompileOptions(found, target), CallbackReporter())
+                qc = next(iter(sorted(target.rglob("*.qc"))), None)
+                if not done.exit_code and qc is not None:
+                    try:
+                        scenes[key] = build_scene(qc.parent)
+                    except Exception:  # noqa: BLE001 - a model that does not read is left out
+                        scenes[key] = None
+        scene = scenes[key]
+        origin = entity.get("origin", "0 0 0").split()
+        if scene is None or len(origin) < 3:
+            continue
+        try:
+            place = np.array([float(v) for v in origin[:3]])
+            sequence = int(float(entity.get("sequence", "0") or 0))
+            body = int(float(entity.get("body", "0") or 0))
+            scale = float(entity.get("scale", "1") or 1) or 1.0
+        except ValueError:
+            continue
+        sequence = sequence if 0 <= sequence < len(scene.sequences) else 0
+        pos, quats = scene.local_pose(sequence if scene.sequences else None, 0.0)
+        rot, trans = scene.world(pos, quats)
+        turn = _rotation(entity.get("angles", "0 0 0"))
+        prefix = f"{key}|"
+        for batch in scene.visible_batches(scene.decode_body(body)):
+            points, normals = scene.skin(batch, rot, trans)
+            material = prefix + batch.material
+            textures.setdefault(material, scene.textures.get(batch.material))
+            modes[material.lower()] = batch.render_mode
+            batches.append(Batch("props", material, batch.render_mode,
+                                 np.zeros(len(points), np.int64),
+                                 (points * scale) @ turn.T + place, normals @ turn.T,
+                                 batch.uv))
+    return batches
+
+
 def map_scene(bsp: B.Bsp, wads: list[WadIndex], entities: list[dict[str, str]],
-              work: Path, spawns: bool = True, light: bool = True) -> ModelScene:
+              work: Path, spawns: bool = True, light: bool = True,
+              find: Callable[[str], Path | None] | None = None) -> ModelScene:
     """The scene of ``bsp`` with ``entities`` (the planned ones); ``light``:
-    every face as bright as its lightmap says (on average)."""
+    every face as bright as its lightmap says (on average); ``find``: where a
+    model an entity names is (its props are drawn, posed and placed)."""
     geo = geometry(bsp)
     textures = _texture_files(bsp, wads, work)
     names = [t.name for t in geo.textures]
@@ -204,15 +277,16 @@ def map_scene(bsp: B.Bsp, wads: list[WadIndex], entities: list[dict[str, str]],
                 batches.append(Batch("spawns", material, "normal", np.zeros(len(points), np.int64),
                                      points, np.concatenate([b[1] for b in boxes]),
                                      np.zeros((len(points), 2))))
+    modes = {k.lower(): ("masked" if k.startswith("{") else "normal") for k in textures}
+    if find is not None:
+        batches += _prop_batches(entities, find, work, textures, modes)
     identity = np.array([[0.0, 0.0, 0.0, 1.0]])
     still = SequenceData("map", 1.0, True, np.zeros((1, 1, 3)), identity[None])
     return ModelScene(
         name=bsp.name, directory=work, bone_names=["world"], parents=np.array([-1]), order=[0],
         bind_positions=np.zeros((1, 3)), bind_quats=identity,
-        groups={"world": ["world"], "spawns": ["spawns"]}, batches=batches, sequences=[still],
-        textures={k: v for k, v in textures.items()},
-        render_modes={k.lower(): ("masked" if k.startswith("{") else "normal")
-                      for k in textures})
+        groups={"world": ["world"], "spawns": ["spawns"], "props": ["props"]},
+        batches=batches, sequences=[still], textures=dict(textures), render_modes=modes)
 
 
 __all__ = ["map_scene"]
