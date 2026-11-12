@@ -66,6 +66,8 @@ def test_entities_point_at_the_merged_model(tmp_path: Path) -> None:
     game = path.parent.parent
     result = merge_props([path], game, "zm_p_props", studiomdl=None, verify=False)
     assert {p.key for p in result.merged} == {"a_mini", "ext"}
+    ext = next(p for p in result.models if p.key == "ext")
+    assert ext.variant_of == "a_mini" and ext.skin == 0  # the same model again: its body
     assert len(result.parts) == 1 and result.parts[0].startswith("models/zm_p/zm_p_props_")
     assert result.slots_before == 4 and result.slots_after == 3
     saved = save_plan(result.plans[0], res=False)
@@ -73,7 +75,7 @@ def test_entities_point_at_the_merged_model(tmp_path: Path) -> None:
     entities = parse(B.Bsp.read(path).entity_text)
     a1, a2, b, ext = entities[1], entities[2], entities[3], entities[4]
     assert a1["model"] == a2["model"] == ext["model"] == result.parts[0]
-    assert {a1["body"], ext["body"]} == {"0", "1"} and a1["body"] == a2["body"]
+    assert a1["body"] == a2["body"] == ext["body"]
     assert ext["rendermode"] == "4" and ext["scale"] == "2"  # the rest stays
     assert b["model"] == "models/b/mini.mdl"  # skin 1: left as it was
     assert entities[7]["model"] == "models/a/mini.mdl"  # the cycler too
@@ -89,6 +91,7 @@ def test_compiled_props_stay_where_they_were(tmp_path: Path) -> None:
     result = merge_props([path], game, "zm_p_props", studiomdl=STUDIOMDL)
     assert {p.key for p in result.merged} == {"a_mini", "ext"}, [(p.key, p.reason)
                                                                   for p in result.models]
+    assert result.slots_after == 3
     part = game / result.parts[0]
     assert part.is_file() and part.read_bytes()[:4] == b"IDST"
     assert (game / "models" / "zm_p" / "zm_p_props.json").is_file()
@@ -97,3 +100,47 @@ def test_compiled_props_stay_where_they_were(tmp_path: Path) -> None:
     old = part.with_name("zm_p_props_00000000.mdl")
     old.write_bytes(b"IDST")
     assert stale_parts(game, "zm_p", "zm_p_props") == [old]  # no map names it
+
+
+def _recoloured(source: Path, target: Path) -> None:
+    """The model with every pixel of its first texture changed: the same
+    geometry, another look (a variant)."""
+    import struct
+    data = bytearray(source.read_bytes())
+    numtextures, textureindex = struct.unpack_from("<2i", data, 180)
+    _flags, width, height, index = struct.unpack_from("<4i", data, textureindex + 64)
+    for k in range(index, index + width * height):
+        data[k] = (data[k] + 7) % 256
+    target.write_bytes(bytes(data))
+
+
+def test_groups_sort_their_models_together(tmp_path: Path) -> None:
+    from valve_qc_merger.mapkit.props import _assign_groups
+    props = collect([_game(tmp_path)])
+    _assign_groups(props, {"cars": ["models/ext.mdl"]})
+    folders = {p.path: p.folder for p in props}
+    assert folders["models/ext.mdl"] == "g00_ext" and folders["models/a/mini.mdl"] == "a_mini"
+    assert next(p for p in props if p.path == "models/ext.mdl").group == "cars"
+
+
+@pytest.mark.skipif(STUDIOMDL is None, reason="no studiomdl for this platform")
+def test_look_alikes_become_skins_of_one_model(tmp_path: Path) -> None:
+    game = tmp_path / "cstrike"
+    (game / "maps").mkdir(parents=True)
+    (game / "models").mkdir()
+    shutil.copy(EXAMPLES / "mini.mdl", game / "models" / "car_red.mdl")
+    _recoloured(EXAMPLES / "mini.mdl", game / "models" / "car_blue.mdl")
+    entities = [{"classname": "worldspawn"}, _prop("models/car_red.mdl", 0),
+                _prop("models/car_blue.mdl", 100), _prop("models/car_blue.mdl", 200)]
+    path = game / "maps" / "zm_cars.bsp"
+    path.write_bytes(build_map(entities))
+    result = merge_props([path], game, "zm_cars_props", studiomdl=STUDIOMDL)
+    red = next(p for p in result.models if p.path == "models/car_red.mdl")
+    # car_blue comes first by name: car_red is its second skin
+    assert red.variant_of == "car_blue" and red.skin == 1 and not red.reason, red.reason
+    save_plan(result.plans[0], res=False)
+    after = parse(B.Bsp.read(path).entity_text)
+    assert after[1]["model"] == after[2]["model"] == after[3]["model"] == result.parts[0]
+    assert after[1]["skin"] == "1" and "skin" not in after[2]
+    text = (game / result.parts[0]).read_bytes()
+    assert text.count(b"car_red_") >= 1  # the red texture went in under its own name

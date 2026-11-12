@@ -165,6 +165,13 @@ class MapCommand(Command):
                            help="delete merged parts no map names any more")
         props.add_argument("--dry-run", action="store_true",
                            help="list what would merge, write nothing")
+        props.add_argument("--groups", type=Path, metavar="JSON",
+                           help="props_groups.json: {\"vehicles\": [\"models/car_red.mdl\", "
+                                "…]} — a group goes into one part side by side (default: "
+                                "maps/<map>_props_groups.json when there is one)")
+        props.add_argument("--no-variants", action="store_true",
+                           help="keep look-alikes (same geometry, other textures) as bodies of "
+                                "their own instead of skins of one")
         props.add_argument("--compare", action="store_true",
                            help="merge both ways (a model set a map, one for all) and compare "
                                 "slots and download size; writes nothing")
@@ -522,13 +529,21 @@ class MapCommand(Command):
             if studiomdl is None:
                 print("studiomdl not found: pass --studiomdl (or set VQM_STUDIOMDL)")
                 return EXIT_UNREADABLE
+            from valve_qc_merger.mapkit.props import read_groups
+            groups_file = args.groups or group[0].with_name(f"{group[0].stem}_props_groups.json")
+            groups = read_groups(groups_file) if groups_file.is_file() else None
             result = merge_props(group, out, name, folders=args.game, studiomdl=studiomdl,
-                                 folder=folder, keep_work=args.keep_work)
+                                 folder=folder, keep_work=args.keep_work, groups=groups,
+                                 variants=not args.no_variants)
             for line in result.log:
                 if line.startswith(("error", "studiomdl failed")) or "left as it was" in line:
                     print(f"  {line}")
             for prop in result.apart:
                 print(f"  apart: {prop.path} — {prop.reason}")
+            for prop in result.merged:
+                if prop.variant_of:
+                    print(f"  {prop.path}: " + (f"skin {prop.skin} of {prop.variant_of}"
+                                                if prop.skin else f"the same as {prop.variant_of}"))
             print(f"{', '.join(m.stem for m in group)}: {len(result.merged)} models -> "
                   f"{len(result.parts)} merged ({', '.join(result.parts) or 'none'}); "
                   f"model slots {result.slots_before} -> {result.slots_after}")
@@ -544,7 +559,9 @@ class MapCommand(Command):
             from valve_qc_merger.mapkit.props import unused_models
             spare = unused_models(result, out)
             if spare:
-                print(f"  no other map of {out / 'maps'} uses: {', '.join(spare)}")
+                more = f" (+{len(spare) - 6})" if len(spare) > 6 else ""
+                print(f"  {len(spare)} original models no other map of {out / 'maps'} uses "
+                      f"(they can go): {', '.join(spare[:6])}{more}")
             if args.gc:
                 for path in stale_parts(out, folder, name):
                     path.unlink()

@@ -34,6 +34,7 @@ import json
 import re
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -57,6 +58,10 @@ class PropModel:
     uses: list[tuple[int, int]] = field(default_factory=list)  # (map number, entity index)
     sequences: set[int] = field(default_factory=set)
     reason: str = ""  # why it stays as it is ("" = merged)
+    group: str = ""  # props_groups.json: models of a group go into one part, side by side
+    folder: str = ""  # the work folder / manifest name (the key, after its group)
+    variant_of: str = ""  # the same geometry as this model's folder: one of its skins
+    skin: int = 0
 
 
 @dataclass
@@ -127,10 +132,15 @@ def _sequence_labels(qc: Path) -> list[str]:
 def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] | None = None,
                 studiomdl: Path | None = None, classes: tuple[str, ...] = PROP_CLASSES,
                 folder: str | None = None, keep_work: Path | None = None,
-                reporter: Reporter | None = None, verify: bool = True) -> PropsResult:
+                reporter: Reporter | None = None, verify: bool = True,
+                groups: dict[str, list[str]] | None = None,
+                variants: bool = True) -> PropsResult:
     """Steps 3-7 of the module. ``out``: the game folder the merged models
     go to (``models/<folder>/``, default the first map's name); the plans
-    rewrite each map's entities (save them with :func:`fix.save_plan`)."""
+    rewrite each map's entities (save them with :func:`fix.save_plan`).
+    ``groups``: group name -> model paths that go into one part side by side
+    (``props_groups.json``); ``variants``: models with the same geometry and
+    other textures become skins of one model (``$texturegroup``)."""
     from valve_qc_merger.services.compile import CompileOptions, run_compile
     from valve_qc_merger.services.decompile import DecompileOptions, run_decompile
     from valve_qc_merger.services.merge_props import MergePropsOptions, run_merge_props
@@ -151,6 +161,8 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
         sources = work / "models"
         sources.mkdir(parents=True, exist_ok=True)
         labels: dict[str, list[str]] = {}
+        _assign_groups(result.models, groups or {})
+        decompiled: dict[str, Path] = {}
         for prop in result.models:
             if prop.reason or prop.file is None:
                 continue
@@ -161,9 +173,15 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
             if done.exit_code or not qcs:
                 prop.reason = "does not decompile"
                 continue
-            dest = sources / prop.key
-            shutil.copytree(qcs[0].parent, dest)
-            labels[prop.key] = _sequence_labels(next(dest.glob("*.qc")))
+            decompiled[prop.folder] = qcs[0].parent
+        if variants:
+            _find_variants([p for p in result.models if p.folder in decompiled], decompiled)
+        for prop in result.models:
+            if prop.folder not in decompiled or prop.reason:
+                continue
+            labels[prop.folder] = _sequence_labels(next(decompiled[prop.folder].glob("*.qc")))
+            if not prop.variant_of:
+                shutil.copytree(decompiled[prop.folder], sources / prop.folder)
         if not labels:
             result.log.append("no prop model to merge")
             return _finish(result, maps)
@@ -174,10 +192,12 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
         for failure in run.failures:
             result.log.append(f"merge: {failure}")
         for prop in result.models:
-            if not prop.reason and prop.key not in manifest:
+            rep = prop.variant_of or prop.folder
+            if not prop.reason and rep not in manifest:
                 prop.reason = "merge-props left it apart (too big or broken)"
         if not manifest:
             return _finish(result, maps)
+        _add_skins(result.models, manifest, run.outputs, decompiled, merged, log)
         built: dict[str, str] = {}  # part file name -> game path
         for qc in run.outputs:
             mdl = qc.with_suffix(".mdl")
@@ -187,8 +207,9 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
                     result.log.append(f"studiomdl failed for {qc.name}")
                     for key, entry in manifest.items():
                         if entry.get("model") == f"{qc.stem}.mdl":
-                            next(p for p in result.models if p.key == key).reason = \
-                                "the merged part does not compile"
+                            for prop in result.models:
+                                if key in (prop.folder, prop.variant_of):
+                                    prop.reason = "the merged part does not compile"
                     continue
                 mdl = done.outputs[0]
             if mdl.exists() and verify:
@@ -196,11 +217,13 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
                            if e.get("model") == f"{qc.stem}.mdl" and (sources / k).is_dir()}
                 for key, error in verify_part(mdl, members, manifest, labels).items():
                     if error > PLACE_TOLERANCE:
-                        prop = next(p for p in result.models if p.key == key)
-                        prop.reason = (f"moved {error:.2f} units in the merged model"
-                                       if error != float("inf") else "no vertices in the "
-                                       "merged model")
-                        result.log.append(f"{key}: {prop.reason} — left as it was")
+                        for prop in result.models:
+                            if key not in (prop.folder, prop.variant_of):
+                                continue
+                            prop.reason = (f"moved {error:.2f} units in the merged model"
+                                           if error != float("inf") else "no vertices in the "
+                                           "merged model")
+                            result.log.append(f"{prop.key}: {prop.reason} — left as it was")
             digest = hashlib.sha1(mdl.read_bytes() if mdl.exists()
                                   else qc.read_bytes()).hexdigest()[:8]
             game_path = f"models/{folder}/{qc.stem}_{digest}.mdl"
@@ -219,12 +242,12 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
         for prop in result.models:
             if prop.reason:
                 continue
-            entry = manifest[prop.key]
+            entry = manifest[prop.variant_of or prop.folder]
             part = built.get(str(entry.get("model", "")))
             if part is None:
                 prop.reason = prop.reason or "its part was not built"
                 continue
-            prop_labels = labels.get(prop.key, [])
+            prop_labels = labels.get(prop.variant_of or prop.folder, [])
             for number, index in prop.uses:
                 plan = _plan_for(result, maps, number)
                 ent = parse(B.Bsp.read(maps[number]).entity_text)[index]
@@ -241,10 +264,14 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
                 if new_seq is not None and str(new_seq) != str(old):
                     plan.add("entity.set", f"#{index} sequence: {old} -> {new_seq}", index,
                              key="sequence", value=str(new_seq))
+                if prop.skin:
+                    plan.add("entity.set", f"#{index} skin: {prop.skin} ({prop.path} is a skin "
+                             f"of {prop.variant_of})", index, key="skin", value=str(prop.skin))
         (out / f"models/{folder}").mkdir(parents=True, exist_ok=True)
         (out / f"models/{folder}/{name}.json").write_text(json.dumps(
             {"parts": result.parts, "models": {p.path: {"part": built.get(
-                str(manifest.get(p.key, {}).get("model", ""))), **manifest.get(p.key, {})}
+                str(manifest.get(p.variant_of or p.folder, {}).get("model", ""))),
+                **manifest.get(p.variant_of or p.folder, {}), "skin": p.skin}
                 for p in result.merged}}, indent=1), encoding="utf-8")
     finally:
         if keep_work is None:
@@ -253,6 +280,215 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
 
 
 PLACE_TOLERANCE = 0.05  # units: a merged model's first frame against its original
+
+
+def read_groups(path: Path) -> dict[str, list[str]]:
+    """``props_groups.json``: ``{"vehicles": ["models/car_red.mdl", …], …}``."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return {str(k): [str(m) for m in v] for k, v in data.items() if isinstance(v, list)}
+
+
+def _assign_groups(models: list[PropModel], groups: dict[str, list[str]]) -> None:
+    """Folder names that sort a group's models together (merge-props fills
+    its parts in that order); the rest after the groups."""
+    member = {m.replace("\\", "/").lower(): (i, g) for i, (g, ms) in enumerate(groups.items())
+              for m in ms}
+    for prop in models:
+        found = member.get(prop.path.lower())
+        if found is not None:
+            prop.group = found[1]
+            prop.folder = f"g{found[0]:02d}_{prop.key}"
+        else:
+            prop.folder = prop.key
+
+
+_NODE_NAME = re.compile(r'"[^"]*"')
+
+
+def _smd_digest(text: str, digest: object, materials: list[str] | None) -> None:
+    """Feed an SMD to ``digest`` without its bone names and texture names
+    (two models of one geometry whose bones are named apart still match);
+    the textures of its triangles go to ``materials``."""
+    section, count = "", 0
+    for line in text.splitlines():
+        word = line.strip()
+        if word in ("nodes", "skeleton", "triangles") and section in ("", "done"):
+            section, count = word, 0
+            digest.update(word.encode())  # type: ignore[attr-defined]
+            continue
+        if word == "end" and section:
+            section = "done"
+            continue
+        if section == "nodes":
+            line = _NODE_NAME.sub('""', line)
+        elif section == "triangles":
+            if count % 4 == 0:
+                if materials is not None:
+                    materials.append(word)
+                count += 1
+                continue
+            count += 1
+        digest.update(line.encode("latin-1"))  # type: ignore[attr-defined]
+
+
+def _triangles(directory: Path) -> tuple[str, list[str]]:
+    """(a hash of a decompiled model's geometry, skeleton and animations
+    without bone and texture names, the texture of every triangle in order)."""
+    digest = hashlib.sha1()
+    materials: list[str] = []
+    qc = next(directory.glob("*.qc"), None)
+    order = re.findall(r'(?im)^\s*(?:\$body\s+"?[^"\s]+"?|studio)\s+"?([^"\s]+)"?',
+                       qc.read_text(encoding="latin-1")) if qc else []
+    smds = [directory / f"{o.removesuffix('.smd')}.smd" for o in order]
+    smds = [p for p in smds if p.is_file()] or sorted(directory.glob("*.smd"))
+    for smd in smds:
+        _smd_digest(smd.read_text(encoding="latin-1"), digest, materials)
+    anims = directory / "anims"
+    for anim in sorted(anims.glob("*.smd")) if anims.is_dir() else []:
+        _smd_digest(anim.read_text(encoding="latin-1"), digest, None)
+    return digest.hexdigest(), materials
+
+
+def _texture_digest(directory: Path, materials: list[str]) -> str:
+    files = {p.name.lower(): p for p in directory.rglob("*") if p.is_file()}
+    digest = hashlib.sha1()
+    for name in materials:
+        found = files.get(name.lower())
+        digest.update(found.read_bytes() if found else name.encode())
+    return digest.hexdigest()
+
+
+def _find_variants(models: list[PropModel], decompiled: dict[str, Path]) -> None:
+    """Models with the same geometry, skeleton and animations as another:
+    with the same textures too a duplicate (its body, skin 0), with other
+    textures a skin of the first one."""
+    first: dict[str, tuple[PropModel, str]] = {}
+    skins: dict[str, dict[str, int]] = {}
+    for prop in sorted(models, key=lambda m: m.folder):
+        signature, materials = _triangles(decompiled[prop.folder])
+        if not materials:
+            continue
+        look = _texture_digest(decompiled[prop.folder], materials)
+        known = first.get(signature)
+        if known is None:
+            first[signature] = (prop, look)
+            skins[prop.folder] = {look: 0}
+            continue
+        rep, _rep_look = known
+        looks = skins[rep.folder]
+        if look not in looks:
+            looks[look] = len(looks)
+        prop.variant_of, prop.skin = rep.folder, looks[look]
+
+
+def _add_skins(models: list[PropModel], manifest: dict[str, dict[str, object]],
+               outputs: list[Path], decompiled: dict[str, Path], merged: Path,
+               log: Callable[[str], None]) -> None:
+    """Give each merged part the skins of its models' variants: the
+    variants' textures copied in, a ``$texturegroup`` row per skin."""
+    from valve_qc_merger.merge_player.merger import parse_texturegroups
+    by_rep: dict[str, list[PropModel]] = {}
+    for prop in models:
+        if prop.variant_of and prop.skin and not prop.reason:
+            by_rep.setdefault(prop.variant_of, []).append(prop)
+    for qc in outputs:
+        reps = [r for r in by_rep if manifest.get(r, {}).get("model") == f"{qc.stem}.mdl"]
+        if not reps:
+            continue
+        text = qc.read_text(encoding="latin-1")
+        if parse_texturegroups(text):
+            for rep in reps:
+                for prop in by_rep[rep]:
+                    prop.reason = "its model already has skins"
+            continue
+        columns: list[str] = []
+        rows: dict[int, dict[str, str]] = {}
+        for rep in reps:
+            merged_smd = next((p for p in (merged / rep, qc.parent / rep)
+                               if (p / "weapon.smd").is_file()), None)
+            if merged_smd is None:
+                continue
+            _sig, base = _triangles_of(merged_smd / "weapon.smd")
+            for prop in sorted(by_rep[rep], key=lambda m: m.skin):
+                mine = _merged_materials(decompiled[prop.folder])
+                if len(mine) != len(base):
+                    prop.reason = "its triangles do not line up with its look-alike's"
+                    continue
+                mapping: dict[str, str] = {}
+                for old, new in zip(base, mine, strict=True):
+                    if mapping.setdefault(old, new) != new:
+                        mapping = {}
+                        break
+                if not mapping:
+                    prop.reason = "its textures do not map onto its look-alike's"
+                    continue
+                for old, new in mapping.items():
+                    source = next((p for p in decompiled[prop.folder].rglob("*")
+                                   if p.name.lower() == new.lower()), None)
+                    if source is None:
+                        continue
+                    target = qc.parent / new
+                    if target.exists() and target.read_bytes() != source.read_bytes():
+                        target = qc.parent / f"{prop.folder}_{new}"
+                    shutil.copy2(source, target)
+                    if old not in columns:
+                        columns.append(old)
+                    rows.setdefault(prop.skin, {})[old] = target.name
+        if not columns or not rows:
+            continue
+        lines = ["$texturegroup skinfamilies", "{",
+                 "\t{ " + " ".join(f'"{c}"' for c in columns) + " }"]
+        for skin in range(1, max(rows) + 1):
+            row = rows.get(skin, {})
+            lines.append("\t{ " + " ".join(f'"{row.get(c, c)}"' for c in columns) + " }")
+        lines.append("}")
+        masked = set(re.findall(r'(?im)^\s*\$texrendermode\s+"?([^"\s]+)"?\s+masked', text))
+        extra = [f'$texrendermode "{row[c]}" masked' for row in rows.values() for c in row
+                 if c in masked]
+        anchor = re.search(r"(?im)^\s*\$sequence\b", text)
+        at = anchor.start() if anchor else len(text)
+        qc.write_text(text[:at] + "\n".join(extra + lines) + "\n\n" + text[at:],
+                      encoding="latin-1")
+        log(f"{qc.stem}: {max(rows)} skins for {', '.join(reps)}")
+
+
+def _merged_materials(directory: Path) -> list[str]:
+    """The textures of a model's triangles in the order merge-props joins
+    its submodels (the ones it takes, in its order)."""
+    from valve_qc_merger.merge_view.discovery import load_model
+    from valve_qc_merger.services.merge_props import prop_parts
+    stems = [stem for item in prop_parts(load_model(directory, require_anims=False))
+             .weapon_stems for stem in ([item] if isinstance(item, str) else item)]
+    out: list[str] = []
+    for stem in stems:
+        smd = directory / f"{stem}.smd"
+        if smd.is_file():
+            out += _triangles_of(smd)[1]
+    return out
+
+
+def _triangles_of(smd: Path) -> tuple[str, list[str]]:
+    """(the file, the texture of each triangle in order) — triangles with
+    three vertices at one point left out (merge-props adds those as
+    attachment carriers)."""
+    materials: list[str] = []
+    inside, block = False, list[str]()
+    for line in smd.read_text(encoding="latin-1").splitlines():
+        word = line.strip()
+        if word == "triangles":
+            inside, block = True, []
+            continue
+        if inside and word == "end":
+            inside = False
+            continue
+        if inside:
+            block.append(word)
+            if len(block) == 4:
+                points = {tuple(v.split()[1:4]) for v in block[1:]}
+                if len(points) > 1:
+                    materials.append(block[0])
+                block = []
+    return str(smd), materials
 
 
 def _frame0(directory: Path, body: int | None, sequence: int) -> np.ndarray:
@@ -372,4 +608,4 @@ def stale_parts(game: Path, folder: str, name: str) -> list[Path]:
 
 
 __all__ = ["PROP_CLASSES", "PropModel", "PropsResult", "collect", "merge_props", "model_key",
-           "find_studiomdl", "stale_parts", "unused_models", "verify_part"]
+           "find_studiomdl", "read_groups", "stale_parts", "unused_models", "verify_part"]
