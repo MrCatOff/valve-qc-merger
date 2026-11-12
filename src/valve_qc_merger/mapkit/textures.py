@@ -110,6 +110,24 @@ class TextureUse:
     wad: str = ""  # the WAD (file name) it is found in, for an external one
     faces: int = 0
     special: bool = False  # sky / trigger / clip …: no lightmap, not drawn as a surface
+    area: float = 0.0  # square units of the faces drawing it
+
+    @property
+    def prefixes(self) -> list[str]:
+        """What the name's prefix tells the engine."""
+        low = self.name.lower()
+        out = []
+        if low.startswith("{"):
+            out.append("transparent")
+        if low.startswith("!") or low.startswith("water"):
+            out.append("water")
+        if _ANIM.match(low):
+            out.append("animated" + (" (alternate)" if low[1].isalpha() else ""))
+        if low.startswith("-"):
+            out.append("random tiling")
+        if low.startswith("scroll"):
+            out.append("conveyor")
+        return out
 
     @property
     def found(self) -> bool:
@@ -139,13 +157,17 @@ def texture_uses(bsp: B.Bsp, wads: dict[str, WadIndex]) -> list[TextureUse]:
     geo = geometry(bsp)
     per_texture = (np.bincount(np.maximum(geo.face_texture(), 0), minlength=len(geo.textures))
                    if len(geo.faces) else np.zeros(len(geo.textures), np.int64))
+    areas = (np.bincount(np.maximum(geo.face_texture(), 0), weights=geo.face_areas(),
+                         minlength=len(geo.textures))
+             if len(geo.faces) else np.zeros(len(geo.textures)))
     out = []
     for tex in geo.textures:
         if tex.offset < 0:
             continue
         use = TextureUse(tex.index, tex.name, tex.width, tex.height, tex.embedded,
                          faces=int(per_texture[tex.index]) if tex.index < len(per_texture) else 0,
-                         special=is_special(tex.name))
+                         special=is_special(tex.name),
+                         area=float(areas[tex.index]) if tex.index < len(areas) else 0.0)
         if not tex.embedded:
             use.wad = next((name for name, index in wads.items()
                             if tex.name.lower() in index.entries), "")

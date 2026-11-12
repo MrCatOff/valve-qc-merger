@@ -186,7 +186,33 @@ def _companions(path: Path, rel: str) -> list[tuple[str, str]]:
     return out
 
 
-def _convert(kind: str, rel: str, data: bytes) -> tuple[bytes, list[str], list[str]]:
+SKY_MAX = 256
+TEXTURE_MAX = 512  # a model's skin larger than this: some clients refuse it
+
+
+def _tga24(rgba: object) -> bytes:
+    """An uncompressed 24-bit top-left TGA of an (h, w, 4) array."""
+    import numpy as np
+    image = np.asarray(rgba)
+    height, width = image.shape[:2]
+    head = struct.pack("<BBBHHBHHHHBB", 0, 0, 2, 0, 0, 0, 0, 0, width, height, 24, 0x20)
+    return head + image[..., [2, 1, 0]].astype(np.uint8).tobytes()
+
+
+def _shrink_sky(data: bytes) -> bytes | None:
+    from valve_qc_merger.mapkit.images import ImageError, read_image
+    from valve_qc_merger.sprite.wad import _resize
+    try:
+        rgba = read_image(data)
+    except (ImageError, ValueError, struct.error):
+        return None
+    height, width = rgba.shape[:2]
+    scale = SKY_MAX / max(width, height)
+    return _tga24(_resize(rgba, max(int(width * scale), 1), max(int(height * scale), 1)))
+
+
+def _convert(kind: str, rel: str, data: bytes, shrink_sky: bool = False
+             ) -> tuple[bytes, list[str], list[str]]:
     """(bytes to write, conversions done, problems left)."""
     done: list[str] = []
     left: list[str] = []
@@ -207,6 +233,10 @@ def _convert(kind: str, rel: str, data: bytes) -> tuple[bytes, list[str], list[s
                 done.append("studio version 9 -> 10")
         elif version != 10:
             left.append(f"studio version {version}: CS 1.6 loads only 10")
+        from valve_qc_merger.limits import MAX_MDL_BYTES
+        if len(data) > MAX_MDL_BYTES:
+            left.append(f"{len(data) / 1e6:.1f} MB: over the engine's 16 MB for a model")
+        _check_skins(data, left)
     elif low.endswith(".wav"):
         from valve_qc_merger.sound.wav import WavError, fix, problems, read_wav
         try:
@@ -223,14 +253,34 @@ def _convert(kind: str, rel: str, data: bytes) -> tuple[bytes, list[str], list[s
             left.append(f"sprite version {version}: CS 1.6 loads only 2")
     elif kind == "sky" and low.endswith(".tga") and len(data) >= 18:
         width, height = struct.unpack_from("<HH", data, 12)
-        if max(width, height) > 256:
-            left.append(f"sky side {width}x{height}: over 256 (some clients scale it down)")
+        if max(width, height) > SKY_MAX:
+            smaller = _shrink_sky(data) if shrink_sky else None
+            if smaller is not None:
+                data = smaller
+                done.append(f"sky side {width}x{height} -> at most {SKY_MAX}")
+            else:
+                left.append(f"sky side {width}x{height}: over {SKY_MAX} (some clients scale it "
+                            "down; --shrink-sky makes it smaller)")
     return data, done, left
+
+
+def _check_skins(data: bytes, left: list[str]) -> None:
+    """Skins over 512 a side (the model's own textures)."""
+    try:
+        numtextures, textureindex = struct.unpack_from("<2i", data, 180)
+        for i in range(min(max(numtextures, 0), 256)):
+            off = textureindex + i * 80
+            name = data[off:off + 64].split(b"\0", 1)[0].decode("latin-1")
+            _flags, width, height = struct.unpack_from("<3i", data, off + 64)
+            if max(width, height) > TEXTURE_MAX:
+                left.append(f"skin {name} {width}x{height}: over {TEXTURE_MAX}")
+    except struct.error:
+        left.append("truncated model")
 
 
 def import_map(map_name: str, index: SourceIndex, out: Path, *,
                base: list[Path] | None = None, overwrite: bool = False,
-               result: ImportResult | None = None) -> ImportResult:
+               result: ImportResult | None = None, shrink_sky: bool = False) -> ImportResult:
     """Import ``map_name`` (a name in the source, or a .bsp path) into game
     folder ``out`` (see the module)."""
     result = result or ImportResult()
@@ -244,6 +294,20 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
     stock: Finder | None = finder_for([b.resolve() for b in base]) if base else None
     out = Path(out)
     queue = _needs(index, bsp, source_map.stem)
+    world = next((e for e in parse(bsp.entity_text) if e.get("classname") == "worldspawn"), {})
+    sky = world.get("skyname", "").strip()
+    new_sky = sky
+    if sky and stock is not None:
+        # one side the base game has with other pixels: the whole sky gets a name of its own
+        for rel_side, kind_side in queue:
+            if kind_side != "sky":
+                continue
+            have, _exact = stock.find(rel_side)
+            mine = index.find(rel_side)
+            if have is not None and mine is not None and _sha1(have) != _sha1(mine):
+                new_sky = f"{sky}_cso"
+                break
+    wad_renames: dict[str, str] = {}
     seen: set[str] = set()
     while queue:
         rel, kind = queue.pop(0)
@@ -254,11 +318,15 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
         seen.add(key)
         found = index.find_named(rel, ".wad") if kind == "wad" else index.find(rel)
         target_rel = rel if kind == "wad" else key
+        if kind == "sky" and new_sky != sky:
+            target_rel = f"gfx/env/{new_sky.lower()}{key.rsplit(sky.lower(), 1)[-1]}"
         record = result.files.get(key) or ImportedFile(target_rel)
         result.files[key] = record
         if name not in record.maps:
             record.maps.append(name)
-        if stock is not None:
+        if kind == "sky" and new_sky != sky:
+            record.path, record.state = target_rel, "renamed"
+        elif stock is not None:
             have, _exact = stock.find(rel)
             if have is not None:
                 if found is None or _sha1(have) == _sha1(found):
@@ -270,6 +338,8 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
                 record.state = "renamed"
                 if kind in ("model", "sound"):
                     result.renames[rel] = target_rel
+                elif kind == "wad":
+                    wad_renames[rel.lower()] = target_rel
                 else:
                     result.notes.append(f"{rel}: the base game has another one — the map "
                                         "uses the base game's (a renamed copy is written)")
@@ -277,7 +347,7 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
             record.state = "missing"
             continue
         record.source = str(found)
-        data, done, left = _convert(kind, target_rel, found.read_bytes())
+        data, done, left = _convert(kind, target_rel, found.read_bytes(), shrink_sky)
         record.conversions = done
         result.notes += [f"{target_rel}: {p}" for p in left]
         record.sha1 = hashlib.sha1(data).hexdigest()
@@ -316,6 +386,14 @@ def import_map(map_name: str, index: SourceIndex, out: Path, *,
             if new != value:
                 plan.add("entity.set", f"#{index_} {key}: {value} -> {new}", index_, key=key,
                          value=new)
+    if wad_renames:
+        names = [wad_renames.get(n.lower(), n) for n in wad_names(world.get("wad", ""))]
+        plan.add("worldspawn.wad", f"wad: {', '.join(wad_renames.values())} (the base game's "
+                 "WADs of those names differ)", None, value=";".join(names) + ";")
+    if new_sky != sky:
+        index_world = next(i for i, e in enumerate(entities) if e.get("classname") == "worldspawn")
+        plan.add("entity.set", f"skyname: {sky} -> {new_sky} (the base game's sky of that name "
+                 "differs)", index_world, key="skyname", value=new_sky)
     save_plan(plan, folders=base, backup=False)
     if name not in result.maps:
         result.maps.append(name)

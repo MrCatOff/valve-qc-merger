@@ -391,7 +391,66 @@ def _prepend_wad(map_text: str, wad: str) -> str:
     return map_text[:match.start(1)] + wad + ";" + match.group(1) + map_text[match.end(1):]
 
 
-__all__ = ["COMPILERS", "CompileResult", "HINTS", "TOOLS", "Tool", "ToolRun", "compile_map",
-           "config_dir", "decompile_map", "find_tool", "load_settings", "open_in_editor",
-           "options_in_help", "parse_errors", "rescale_textures", "run_tool", "save_settings",
-           "settings_path", "shrink_textures", "tool_help", "install_map", "ShrinkResult"]
+
+
+def bspguy_commands(tool: Tool) -> list[str]:
+    """The commands this bspguy names in its usage text (they differ by
+    version: ``merge``, ``noclip``, ``simplify``, ``delete``, ``transform``,
+    ``unembed`` … — only what it lists is offered)."""
+    text = tool_help(tool)
+    known = ("merge", "info", "noclip", "simplify", "delete", "deleteents", "transform",
+             "unembed", "exportobj", "exportlit", "importlit", "exportrad", "cullfaces")
+    found = [c for c in known if re.search(rf"(?im)^\s*{c}\b", text)]
+    return found or sorted(set(re.findall(r"(?m)^\s{2,}([a-z][a-z_]+)\s", text)))
+
+
+def run_bspguy(bsp_path: Path, command: str, arguments: list[str], *,
+               reporter: Reporter | None = None,
+               settings: dict[str, dict[str, object]] | None = None) -> tuple[ToolRun, Path]:
+    """``bspguy <command> <copy of the map> [arguments]`` on a copy in a work
+    folder (bspguy writes over the file it is given); returns the run and
+    the copy."""
+    tool = find_tool("bspguy", settings)
+    work = Path(tempfile.mkdtemp(prefix="vqm_bspguy_"))
+    copy = work / bsp_path.name
+    shutil.copy2(bsp_path, copy)
+    run = run_tool(tool, [*tool.args, command, str(copy), *arguments], work, reporter)
+    return run, copy
+
+
+def recompile_subdivided(bsp_path: Path, subdivide: int = 240, *, folders: list[Path] |
+                         None = None, reporter: Reporter | None = None,
+                         settings: dict[str, dict[str, object]] | None = None) -> CompileResult:
+    """For "Bad surface extents": decompile and compile again with the
+    compilers' ``-subdivide`` (lit faces cut to at most ``subdivide`` texels),
+    passed only to the compilers whose usage lists it."""
+    from valve_qc_merger.mapkit import bsp as B
+    from valve_qc_merger.mapkit.analyze import map_wads
+
+    work = Path(tempfile.mkdtemp(prefix="vqm_extents_"))
+    map_file = work / f"{bsp_path.stem}.map"
+    run = decompile_map(bsp_path, map_file, reporter, settings)
+    result = CompileResult(runs=[run])
+    if not run.ok or not map_file.is_file():
+        result.notes.append("the decompiler wrote no .map")
+        return result
+    options: dict[str, list[str]] = {}
+    for step in COMPILERS:
+        tool = find_tool(step, settings)
+        if tool.available and "-subdivide" in options_in_help(tool_help(tool)):
+            options[step] = ["-subdivide", str(subdivide)]
+    if not options:
+        result.notes.append("no compiler lists -subdivide: compiled with its default")
+    wads = [w.path for w in map_wads(bsp_path, B.Bsp.read(bsp_path), folders)]
+    compiled = compile_map(map_file, options=options, wads=wads, reporter=reporter,
+                           settings=settings)
+    compiled.runs[:0] = result.runs
+    compiled.notes[:0] = result.notes
+    return compiled
+
+
+__all__ = ["COMPILERS", "CompileResult", "HINTS", "ShrinkResult", "TOOLS", "Tool", "ToolRun",
+           "bspguy_commands", "compile_map", "config_dir", "decompile_map", "find_tool",
+           "install_map", "load_settings", "open_in_editor", "options_in_help", "parse_errors",
+           "recompile_subdivided", "rescale_textures", "run_bspguy", "run_tool", "save_settings",
+           "settings_path", "shrink_textures", "tool_help"]

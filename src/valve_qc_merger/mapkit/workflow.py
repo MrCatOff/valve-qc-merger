@@ -33,6 +33,7 @@ class BuildOptions:
     studiomdl: Path | None = None
     props: bool | None = None  # None: the profile's ("props", default true)
     overwrite: bool = False
+    shrink_sky: bool = False
 
 
 @dataclass
@@ -86,7 +87,8 @@ def build_maps(maps: list[str], rules: Rules, options: BuildOptions,
                 if out is None:
                     raise ValueError("--out is needed to import from a source folder")
                 import_map(item, index, out, base=options.folders,
-                           overwrite=options.overwrite, result=imported)
+                           overwrite=options.overwrite, result=imported,
+                           shrink_sky=options.shrink_sky)
                 path = out / "maps" / f"{build.name.lower()}.bsp"
                 if not path.is_file():
                     raise ValueError(f"{item} is not in the source")

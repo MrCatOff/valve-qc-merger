@@ -118,6 +118,22 @@ class Geometry:
         out[ok] = self.texinfo["miptex"][ti[ok]]
         return out
 
+    def face_areas(self) -> np.ndarray:
+        """The area of every face (square units)."""
+        out = np.zeros(len(self.faces))
+        if not len(self.faces):
+            return out
+        index = self.face_vertex_indices()
+        counts = self.faces["numedges"].astype(np.int64)
+        starts = self.faces["firstedge"].astype(np.int64)
+        for k in range(1, int(np.max(counts)) - 1):
+            has = counts > k + 1
+            a = self.vertices[index[starts[has]]].astype(np.float64)
+            b = self.vertices[index[starts[has] + k]].astype(np.float64)
+            c = self.vertices[index[starts[has] + k + 1]].astype(np.float64)
+            out[has] += 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
+        return out
+
     def model_faces(self, model: int = 0) -> np.ndarray:
         m = self.models[model]
         return np.arange(int(m["firstface"]), int(m["firstface"]) + int(m["numfaces"]))

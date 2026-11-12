@@ -30,6 +30,7 @@ GREY = (128, 128, 128)
 CT_COLOUR = (80, 150, 255)
 T_COLOUR = (255, 90, 80)
 MARK_COLOUR = (255, 210, 40)
+OLD_COLOUR = (150, 150, 150)
 GRID = 512.0
 FLOOR_NZ = 0.3
 MARGIN = 16
@@ -162,10 +163,13 @@ def _cross(image: np.ndarray, cx: float, cy: float, size: float) -> None:
 def render_plan(bsp: B.Bsp, *, size: int = 1024, wads: list[WadIndex] | None = None,
                 entities: list[dict[str, str]] | None = None, spawns: bool = True,
                 marks: list[int] | None = None, zmin: float | None = None,
-                zmax: float | None = None, grid: bool = True) -> Plan:
+                zmax: float | None = None, grid: bool = True,
+                grey_spawns_before: int | None = None) -> Plan:
     """The plan of ``bsp`` with its longest side ``size`` pixels (see the
     module). ``entities``: the entity list to draw spawns and ``marks``
-    (entity indices) from — default the map's own."""
+    (entity indices) from — default the map's own. ``grey_spawns_before``:
+    spawns of entities before this index are drawn grey (the map's own,
+    the new ones in colour)."""
     from valve_qc_merger.server.entities import parse
 
     geo = geometry(bsp)
@@ -226,9 +230,12 @@ def render_plan(bsp: B.Bsp, *, size: int = 1024, wads: list[WadIndex] | None = N
     if grid:
         _grid(plan)
     if spawns:
-        for entity in entities:
+        for number, entity in enumerate(entities):
             colour = {"info_player_start": CT_COLOUR,
                       "info_player_deathmatch": T_COLOUR}.get(entity.get("classname", ""))
+            if colour is not None and grey_spawns_before is not None \
+                    and number < grey_spawns_before:
+                colour = OLD_COLOUR
             origin = _xyz(entity.get("origin", ""))
             if colour is None or origin is None:
                 continue

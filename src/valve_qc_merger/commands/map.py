@@ -22,6 +22,8 @@
     valve-qc-merger map compile MAP.map --into GAME_DIR [--name NAME] [--steps hlcsg,...]
     valve-qc-merger map edit MAP.map
     valve-qc-merger map shrink MAP.bsp [--size 256] [--texture NAME ...] [--game DIR]
+    valve-qc-merger map bspguy MAP.bsp [COMMAND ARGS...]
+    valve-qc-merger map extents MAP.bsp [--subdivide 240]
 
 ``--game`` adds a game folder the map's files are looked up in (a clean
 ``cstrike``; ``valve`` next to it is searched too). Exit codes of
@@ -80,6 +82,8 @@ class MapCommand(Command):
         preview.add_argument("--no-spawns", action="store_true", help="leave the spawns out")
         preview.add_argument("--zmin", type=float, help="only floors at this height or above")
         preview.add_argument("--zmax", type=float, help="only floors at this height or below")
+        preview.add_argument("--issues", action="store_true",
+                             help="mark the entities the check finds a problem with (yellow)")
         fix = actions.add_parser("fix", help="fix a map without recompiling it: entities, "
                                  "spawns, .res (the CRC stays)",
                                  description="fix a map without recompiling it")
@@ -110,6 +114,9 @@ class MapCommand(Command):
         fix.add_argument("--mapcycle", type=Path, help="point this mapcycle at a renamed map")
         fix.add_argument("--no-res", action="store_true", help="do not write maps/<map>.res")
         fix.add_argument("--dry-run", action="store_true", help="print the plan, write nothing")
+        fix.add_argument("--preview", type=Path, metavar="PNG",
+                         help="draw the plan from above: the map's spawns grey, new ones in "
+                              "colour")
 
         tex = actions.add_parser("textures", help="list, replace, embed or extract a map's "
                                  "textures", description="a map's textures")
@@ -158,6 +165,9 @@ class MapCommand(Command):
                            help="delete merged parts no map names any more")
         props.add_argument("--dry-run", action="store_true",
                            help="list what would merge, write nothing")
+        props.add_argument("--compare", action="store_true",
+                           help="merge both ways (a model set a map, one for all) and compare "
+                                "slots and download size; writes nothing")
 
         imp = actions.add_parser("import", help="copy a map with every file it needs from "
                                  "unpacked CSO / Nexon folders into a game folder",
@@ -171,6 +181,8 @@ class MapCommand(Command):
                          help="the base game: its files are not copied (repeatable)")
         imp.add_argument("--overwrite", action="store_true",
                          help="replace files the game folder has with other content")
+        imp.add_argument("--shrink-sky", action="store_true",
+                         help="make sky sides over 256 smaller (256 at most)")
         build = actions.add_parser("build", help="the whole way: import, check, fix, props, "
                                    ".res, check", description="build maps for a server")
         build.add_argument("maps", nargs="+", metavar="MAP",
@@ -186,6 +198,8 @@ class MapCommand(Command):
         build.add_argument("--studiomdl", type=Path, help="studiomdl for the props")
         build.add_argument("--no-props", action="store_true", help="do not merge props")
         build.add_argument("--overwrite", action="store_true")
+        build.add_argument("--shrink-sky", action="store_true",
+                           help="import: sky sides over 256 made smaller")
         build.add_argument("--json", type=Path, metavar="OUT", help="write the reports as JSON")
 
         tools = actions.add_parser("tools", help="the external map tools (compilers, bspguy, a "
@@ -221,6 +235,19 @@ class MapCommand(Command):
         shrink.add_argument("--size", type=int, default=256)
         shrink.add_argument("--texture", action="append", default=[], metavar="NAME")
         shrink.add_argument("--game", type=Path, action="append", default=[], metavar="DIR")
+        guy = actions.add_parser("bspguy", help="run a bspguy command on a copy of a map "
+                                 "(merge, noclip, simplify, delete, transform … — what your "
+                                 "bspguy lists); the result is checked and saved as <map>_sp",
+                                 description="run bspguy on a copy of a map")
+        guy.add_argument("map", type=Path, metavar="MAP")
+        guy.add_argument("command", nargs="?", help="the bspguy command (none: list them)")
+        guy.add_argument("args", nargs=argparse.REMAINDER, help="its arguments")
+        guy.add_argument("--game", type=Path, action="append", default=[], metavar="DIR")
+        ext = actions.add_parser("extents", help="Bad surface extents: decompile and compile "
+                                 "again with -subdivide", description="recompile subdivided")
+        ext.add_argument("map", type=Path, metavar="MAP")
+        ext.add_argument("--subdivide", type=int, default=240)
+        ext.add_argument("--game", type=Path, action="append", default=[], metavar="DIR")
 
     def run(self, args: argparse.Namespace) -> int:
         if args.action == "check":
@@ -237,7 +264,8 @@ class MapCommand(Command):
             return self._import(args)
         if args.action == "build":
             return self._build(args)
-        if args.action in ("tools", "decompile", "compile", "edit", "shrink"):
+        if args.action in ("tools", "decompile", "compile", "edit", "shrink", "bspguy",
+                           "extents"):
             return self._external(args)
         return self._preview(args)
 
@@ -287,8 +315,13 @@ class MapCommand(Command):
         except BspError as exc:
             print(exc)
             return EXIT_UNREADABLE
+        marks = None
+        if args.issues:
+            from valve_qc_merger.mapkit.analyze import check_map, marked_entities
+            marks = marked_entities(check_map(args.map, args.game))
         plan = render_plan(bsp, size=args.size, wads=map_wads(args.map, bsp, args.game),
-                           spawns=not args.no_spawns, zmin=args.zmin, zmax=args.zmax)
+                           spawns=not args.no_spawns, zmin=args.zmin, zmax=args.zmax,
+                           marks=marks)
         plan.save(args.out)
         print(f"{args.out} ({plan.image.shape[1]}x{plan.image.shape[0]}, "
               f"{1 / plan.scale:.1f} units a pixel)" + "".join(f"; {n}" for n in plan.notes))
@@ -333,6 +366,18 @@ class MapCommand(Command):
             print(f"  spawn.generate   {counts['spawn.generate']} spawns added")
         for note in plan.notes:
             print(f"  note: {note}")
+        if args.preview:
+            from valve_qc_merger.mapkit.analyze import map_wads
+            from valve_qc_merger.mapkit.bsp import Bsp
+            from valve_qc_merger.mapkit.render import render_plan
+            from valve_qc_merger.server.entities import parse
+            bsp = Bsp.read(args.map)
+            before = parse(bsp.entity_text)
+            after = plan.apply(before)
+            kept = len([op for op in plan.active if op.code in ("spawn.generate", "entity.add")])
+            render_plan(bsp, wads=map_wads(args.map, bsp, args.game), entities=after,
+                        grey_spawns_before=len(after) - kept).save(args.preview)
+            print(f"  plan: {args.preview}")
         if args.dry_run:
             return EXIT_CLEAN
         result = save_plan(plan, out_dir=args.out, ent=args.ent, res=not args.no_res,
@@ -376,17 +421,20 @@ class MapCommand(Command):
                 uses = [u for u in uses if not u.faces]
             for u in uses:
                 source = "embedded" if u.embedded else (u.wad or "MISSING")
-                print(f"{u.name:<16} {u.width:>4}x{u.height:<4} {source:<22} {u.faces:>5} faces"
-                      + ("  special" if u.special else ""))
+                print(f"{u.name:<16} {u.width:>4}x{u.height:<4} {source:<22} {u.faces:>5} faces "
+                      f"{u.area:>12,.0f} u²" + ("  special" if u.special else "")
+                      + "".join(f"  {p}" for p in u.prefixes))
             print(f"{len(uses)} textures")
             return EXIT_CLEAN
         try:
             if args.op == "replace":
-                if len(args.names) != 2:
-                    print("replace NAME IMAGE")
+                if len(args.names) < 2 or len(args.names) % 2:
+                    print("replace NAME IMAGE [NAME IMAGE ...] (an animated texture: +0NAME "
+                          "NAME_0.png — NAME_1.png … follow)")
                     return EXIT_UNREADABLE
-                plan = F.plan_replace_texture(args.map, args.names[0], Path(args.names[1]),
-                                              args.game)
+                pairs = [(args.names[i], Path(args.names[i + 1]))
+                         for i in range(0, len(args.names), 2)]
+                plan = F.plan_replace_textures(args.map, pairs, args.game)
             elif args.op == "embed":
                 plan = F.plan_embed(args.map, args.names or None, args.missing_only, args.game)
             elif args.op == "extract":
@@ -457,6 +505,8 @@ class MapCommand(Command):
         if not maps:
             print("no .bsp files found")
             return EXIT_UNREADABLE
+        if args.compare:
+            return self._props_compare(args, maps)
         groups = [maps] if args.shared or len(maps) == 1 else [[m] for m in maps]
         code = EXIT_CLEAN
         for group in groups:
@@ -491,6 +541,10 @@ class MapCommand(Command):
                 saved = save_plan(plan, out_dir=args.out, folders=args.game)
                 print(f"  {saved.map_name}: {len(plan.active)} entity changes, CRC "
                       f"{saved.crc_before} -> {saved.crc_after}")
+            from valve_qc_merger.mapkit.props import unused_models
+            spare = unused_models(result, out)
+            if spare:
+                print(f"  no other map of {out / 'maps'} uses: {', '.join(spare)}")
             if args.gc:
                 for path in stale_parts(out, folder, name):
                     path.unlink()
@@ -511,7 +565,7 @@ class MapCommand(Command):
         result = ImportResult()
         for name in args.maps:
             import_map(name, index, args.out, base=args.game, overwrite=args.overwrite,
-                       result=result)
+                       result=result, shrink_sky=args.shrink_sky)
         states: dict[str, int] = {}
         for record in result.files.values():
             states[record.state] = states.get(record.state, 0) + 1
@@ -544,7 +598,7 @@ class MapCommand(Command):
         options = BuildOptions(out=args.out, sources=args.source, folders=args.game,
                                studiomdl=args.studiomdl,
                                props=False if args.no_props else None,
-                               overwrite=args.overwrite)
+                               overwrite=args.overwrite, shrink_sky=args.shrink_sky)
         results = build_maps(items, rules, options)
         code = EXIT_CLEAN
         for build in results:
@@ -622,6 +676,40 @@ class MapCommand(Command):
             for issue in report.of_level("critical"):
                 print(f"  critical {issue.code:<18} {issue.text}")
             return EXIT_CRITICAL if report.level == "critical" else EXIT_CLEAN
+        if args.action == "bspguy":
+            tool = X.find_tool("bspguy")
+            if not tool.available:
+                print(f"bspguy is not set up — {tool.hint}")
+                return EXIT_UNREADABLE
+            commands = X.bspguy_commands(tool)
+            if not args.command:
+                print("bspguy commands: " + (", ".join(commands) or "(its usage lists none)"))
+                return EXIT_CLEAN
+            if commands and args.command not in commands:
+                print(f"this bspguy has no '{args.command}' (it has: {', '.join(commands)})")
+                return EXIT_UNREADABLE
+            run, copy = X.run_bspguy(args.map, args.command, list(args.args))
+            if not run.ok:
+                print(f"bspguy failed (exit {run.code})")
+                return EXIT_CRITICAL
+            if args.command in ("info", "exportobj", "exportlit", "exportrad"):
+                return EXIT_CLEAN
+            dest = X.install_map(copy, game_folder(args.map), args.map.stem)
+            report = check_map(dest, args.game)
+            print(f"{dest}: {report.level.upper()}")
+            return EXIT_CRITICAL if report.level == "critical" else EXIT_CLEAN
+        if args.action == "extents":
+            result = X.recompile_subdivided(args.map, args.subdivide, folders=args.game)
+            for note in result.notes:
+                print(f"  note: {note}")
+            if result.bsp is None:
+                return EXIT_CRITICAL
+            dest = X.install_map(result.bsp, game_folder(args.map), args.map.stem)
+            report = check_map(dest, args.game)
+            left = [i for i in report.issues if i.code == "bad_extents"]
+            print(f"{dest}: {report.level.upper()}"
+                  + (f", still {left[0].text}" if left else ", no bad extents"))
+            return EXIT_CRITICAL if report.level == "critical" else EXIT_CLEAN
         result = X.shrink_textures(args.map, args.size, args.texture or None,
                                    folders=args.game)
         for name, size in result.shrunk.items():
@@ -637,6 +725,41 @@ class MapCommand(Command):
         dest = X.install_map(result.bsp, game, args.map.stem)
         print(f"{dest}: {check_map(dest, args.game).level.upper()} (a new map: its .res lists "
               f"{result.wad.name if result.wad else ''})")
+        return EXIT_CLEAN
+
+    def _props_compare(self, args: argparse.Namespace, maps: list[Path]) -> int:
+        import tempfile
+
+        from valve_qc_merger.mapkit.props import find_studiomdl, merge_props
+
+        studiomdl = find_studiomdl(args.studiomdl)
+        if studiomdl is None:
+            print("studiomdl not found: pass --studiomdl (or set VQM_STUDIOMDL)")
+            return EXIT_UNREADABLE
+        with tempfile.TemporaryDirectory(prefix="vqm_compare_") as tmp:
+            rows = []
+            total = {"per map": 0, "shared": 0}
+            for path in maps:
+                one = merge_props([path], Path(tmp) / "one" / path.stem, f"{path.stem}_props",
+                                  folders=args.game, studiomdl=studiomdl)
+                size = sum((Path(tmp) / "one" / path.stem / p).stat().st_size
+                           for p in one.parts if (Path(tmp) / "one" / path.stem / p).is_file())
+                rows.append((path.stem, one.slots_before, one.slots_after, size))
+                total["per map"] += size
+            shared = merge_props(maps, Path(tmp) / "shared", "shared_props", folders=args.game,
+                                 studiomdl=studiomdl, folder="shared")
+            parts = {p: (Path(tmp) / "shared" / p).stat().st_size for p in shared.parts
+                     if (Path(tmp) / "shared" / p).is_file()}
+            total["shared"] = sum(parts.values())
+        print(f"{'map':<20} {'models':>6} {'per map':>8} {'shared':>7}")
+        merged = {m.path.lower() for m in shared.merged}
+        for (name, before, after, _size), path in zip(rows, maps, strict=True):
+            from valve_qc_merger.mapkit.props import collect
+            own = {p.path.lower() for p in collect([path], args.game)}
+            shared_slots = len(own - merged) + (len(shared.parts) if own & merged else 0)
+            print(f"{name:<20} {before:>6} {after:>8} {shared_slots:>7}")
+        print(f"download without a cache: per map {total['per map'] / 1e6:.1f} MB (each map "
+              f"its own), shared {total['shared'] / 1e6:.1f} MB (once for every map)")
         return EXIT_CLEAN
 
 

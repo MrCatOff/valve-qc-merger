@@ -310,6 +310,67 @@ def plan_replace_texture(path: Path, name: str, image: Path,
     return plan
 
 
+def animation_frames(path: Path, name: str) -> list[str]:
+    """The frames of animated texture ``name`` (``+0lava`` or ``lava``) in
+    order: ``+0lava``, ``+1lava`` …"""
+    from valve_qc_merger.mapkit.geometry import geometry
+    base = name[2:] if name.startswith("+") and len(name) > 2 else name
+    names = {t.name.lower(): t.name for t in geometry(B.Bsp.read(path)).textures
+             if t.offset >= 0}
+    frames = []
+    for k in range(10):
+        found = names.get(f"+{k}{base}".lower())
+        if found is None:
+            break
+        frames.append(found)
+    return frames
+
+
+def frame_images(image: Path) -> list[Path]:
+    """``fire_0.png`` -> ``fire_0.png``, ``fire_1.png`` … as long as they exist."""
+    stem = image.stem
+    if not stem[-2:-1] == "_" or not stem[-1:].isdigit():
+        return [image]
+    head = stem[:-1]
+    out = []
+    for k in range(int(stem[-1]), 10):
+        candidate = image.with_name(f"{head}{k}{image.suffix}")
+        if not candidate.is_file():
+            break
+        out.append(candidate)
+    return out
+
+
+def plan_replace_textures(path: Path, pairs: list[tuple[str, Path]],
+                          folders: list[Path] | None = None) -> FixPlan:
+    """Several textures at once (see :func:`plan_replace_texture`); an
+    animated one (``+0name``, or a set of pictures ``name_0.png``,
+    ``name_1.png`` …) is every frame in turn. External textures of one WAD
+    land in one copy of it."""
+    plan = FixPlan(path)
+    expanded: list[tuple[str, Path]] = []
+    for name, image in pairs:
+        frames = animation_frames(path, name)
+        images = frame_images(image)
+        if frames and (len(images) > 1 or name.startswith("+")):
+            if len(images) < len(frames):
+                plan.notes.append(f"{frames[0]}: {len(frames)} frames, {len(images)} pictures "
+                                  "— the last frames keep theirs")
+            expanded += list(zip(frames, images, strict=False))
+        else:
+            expanded.append((name, image))
+    seen_wad: set[str] = set()
+    for name, image in expanded:
+        one = plan_replace_texture(path, name, image, folders)
+        for op in one.operations:
+            if op.code == "worldspawn.wad":
+                if op.data["value"] in seen_wad:
+                    continue
+                seen_wad.add(str(op.data["value"]))
+            plan.operations.append(op)
+    return plan
+
+
 def plan_embed(path: Path, names: list[str] | None = None, missing_only: bool = False,
                folders: list[Path] | None = None) -> FixPlan:
     """Embed external textures (all, ``names``, or only those whose WAD a
@@ -523,6 +584,7 @@ def _write_wads(plan: FixPlan, bsp: B.Bsp, target_game: Path, result: SaveResult
     """Texture operations that write a WAD next to the map's game folder."""
     from valve_qc_merger.mapkit import textures as tx
     from valve_qc_merger.sprite.wad import Texture, miptex_lump, write_wad
+    copies: dict[tuple[str, str], dict[str, object]] = {}
     for op in plan.active:
         if op.code == "textures.extract":
             names = op.data.get("names")
@@ -530,24 +592,27 @@ def _write_wads(plan: FixPlan, bsp: B.Bsp, target_game: Path, result: SaveResult
             path = target_game / str(op.data["wad"])
             path.write_bytes(write_wad(textures))
             result.written.append(path)
-        elif op.code == "textures.wad_copy":
-            new = op.data["texture"]
-            if not isinstance(new, Texture):
-                continue
-            source = WadIndex.read(Path(str(op.data["source"])))
-            lumps = []
-            for key, (offset, size) in sorted(source.entries.items(), key=lambda kv: kv[1][0]):
-                with open(source.path, "rb") as handle:
-                    handle.seek(offset)
-                    raw = handle.read(size)
-                name = raw[:16].split(b"\0", 1)[0].decode("latin-1") or key
-                if key == str(op.data["name"]).lower():
+        elif op.code == "textures.wad_copy" and isinstance(op.data.get("texture"), Texture):
+            target = (str(op.data["source"]), str(op.data["wad"]))
+            copies.setdefault(target, {})[str(op.data["name"]).lower()] = op.data["texture"]
+    for (source_path, wad), replaced in copies.items():
+        # every replacement in one WAD goes into one copy of it
+        source = WadIndex.read(Path(source_path))
+        lumps = []
+        with open(source.path, "rb") as handle:
+            for entry, (offset, size) in sorted(source.entries.items(),
+                                                key=lambda kv: kv[1][0]):
+                handle.seek(offset)
+                raw = handle.read(size)
+                name = raw[:16].split(b"\0", 1)[0].decode("latin-1") or entry
+                new = replaced.get(entry)
+                if isinstance(new, Texture):
                     new.name = name
                     raw = miptex_lump(new)
                 lumps.append((name, raw))
-            path = target_game / str(op.data["wad"])
-            path.write_bytes(tx.wad_of_lumps(lumps))
-            result.written.append(path)
+        path = target_game / wad
+        path.write_bytes(tx.wad_of_lumps(lumps))
+        result.written.append(path)
 
 
 def _write_res(map_path: Path, game: Path, folders: list[Path] | None) -> Path | None:
@@ -562,4 +627,5 @@ def _write_res(map_path: Path, game: Path, folders: list[Path] | None) -> Path |
 
 
 __all__ = ["FixOptions", "FixPlan", "NEW_NAME_SUFFIX", "Operation", "SaveResult", "next_name",
-           "plan_embed", "plan_extract", "plan_fixes", "plan_replace_texture", "save_plan"]
+           "animation_frames", "frame_images", "plan_embed", "plan_extract", "plan_fixes",
+           "plan_replace_texture", "plan_replace_textures", "save_plan"]
