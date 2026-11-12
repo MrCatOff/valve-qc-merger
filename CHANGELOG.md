@@ -65,6 +65,23 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
   view with W A S D flight, Entities, Textures (drop a picture to replace),
   Props, Build; every change goes into an undoable plan that says whether the
   CRC is kept and which name Apply writes. Server ▸ Maps opens a map in it.
+- **Walk a map** (Map Workshop ▸ 3D ▸ Walk from spawn): appear at a spawn as a
+  player and run around — mouse look, W A S D, jump, crouch, noclip — with the
+  engine's movement cut down (hull traces, 18-unit steps, 45-unit jumps,
+  sliding along walls), told where a player gets stuck; the 3D view draws
+  faces as bright as their lightmaps and the models entities show.
+- Props: look-alikes (same geometry, other textures) become skins of one
+  model, `props_groups.json` groups, `--compare` (a set a map vs one for all),
+  the original models no map needs any more listed.
+- Textures: area and prefixes in `list`, animated textures replaced frame by
+  frame (`name_0.png` …), replacements of one WAD in one copy, before / after
+  in the workshop.
+- Import: names `[a-z0-9_]`, `<model>T.mdl` with the engine's capital T, WADs
+  and skies the base game has otherwise renamed `_cso`, `--shrink-sky`, model
+  size and skin checks.
+- `map preview --issues`, `map fix --preview`, `map bspguy` (the commands your
+  bspguy lists), `map extents` (recompile with `-subdivide`); the workshop got
+  progress and Cancel, issue → plan, Server ▸ Entities ▸ Open in Map Workshop.
 - New `mapkit` package (no Qt): BSP v30 read / write lump by lump (an
   unchanged map writes back byte for byte, a resized lump moves the ones
   after it), the engine's map CRC, faces, surface extents, hull 0-3 point

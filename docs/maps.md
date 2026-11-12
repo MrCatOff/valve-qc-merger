@@ -21,6 +21,8 @@ valve-qc-merger map decompile MAP.bsp --out MAP.map
 valve-qc-merger map compile MAP.map --into GAME_DIR [--name NAME] [--steps hlcsg,hlbsp,hlvis,hlrad] [--wad WAD]
 valve-qc-merger map edit MAP.map
 valve-qc-merger map shrink MAP.bsp [--size 256] [--texture NAME ...] [--game DIR]
+valve-qc-merger map bspguy MAP.bsp [COMMAND ARGS ...]
+valve-qc-merger map extents MAP.bsp [--subdivide 240]
 ```
 
 ## Where files are looked up
@@ -76,7 +78,8 @@ The map from above: floors and slopes (sky, triggers and clips left out) in
 their textures' average colours (embedded, or from the map's WADs — pass
 `--game` for the stock ones; grey when not found), shaded by height, the
 highest floor on top; a 512-unit grid; CT spawns blue and T spawns red with an
-arrow where they face. `--zmin` / `--zmax` keep one storey.
+arrow where they face. `--zmin` / `--zmax` keep one storey; `--issues` marks the
+entities the check finds a problem with in yellow.
 
 ## `map fix`
 
@@ -110,7 +113,8 @@ writes `maps/<map>.ent` for ReHLDS (`sv_use_entity_file 1`) and leaves the BSP
 as it is. A change players must see (a new texture WAD) saves the map as
 `<map>_sp` (`_sp2` …) with its `.txt`, detail list, overview and `.ent`, and
 `--mapcycle` is pointed at the new name. After writing, the map is checked
-again; the exit code is 2 while critical issues remain.
+again; the exit code is 2 while critical issues remain. `--preview plan.png`
+draws the plan from above: the map's own spawns grey, the new ones in colour.
 
 ## `map textures`
 
@@ -119,8 +123,8 @@ the pixels come from the first WAD of worldspawn's `wad` that has it).
 
 | Op | What | Map name |
 |---|---|---|
-| `list` | name, size, embedded / which WAD / MISSING, faces drawing it; `--missing`, `--big` (over 256), `--unused` | — |
-| `replace NAME IMAGE` | a PNG / TGA / BMP resized to the texture's own size, 256 colours (a `{` texture: 255 + see-through where the picture is) — embedded: in the BSP; external: in a copy of its WAD named `<wad>_<map>.wad` that the map then lists | new (`_sp`) |
+| `list` | name, size, embedded / which WAD / MISSING, faces drawing it and their area, what the prefix means (transparent, water, animated, random tiling, conveyor); `--missing`, `--big` (over 256), `--unused` | — |
+| `replace NAME IMAGE [NAME IMAGE …]` | a PNG / TGA / BMP resized to the texture's own size, 256 colours (a `{` texture: 255 + see-through where the picture is) — embedded: in the BSP; external: in a copy of its WAD named `<wad>_<map>.wad` that the map then lists (several of one WAD: one copy); an animated texture (`+0name`, or pictures `name_0.png`, `name_1.png` …) frame by frame | new (`_sp`) |
 | `embed [NAME …]` | external textures copied into the BSP from the map's WADs (`--missing-only`: those not in Half-Life's own WADs); WADs nothing comes from any more leave the list | new |
 | `extract OUT.wad` | the embedded textures written to a WAD in the game folder; `--strip` leaves the map their names and lists the WAD | same / new with `--strip` |
 | `prune-wads` | WADs no texture comes from leave worldspawn's list | same |
@@ -162,7 +166,21 @@ or two model slots instead of one per model (the CSO ZM pack: zm_forbidden
 Left as they are, with the reason printed: models an entity shows with `body`
 or `skin` other than 0, models not found, models merge-props cannot fit,
 anything `cycler` shows (ReGameDLL stops a `cycler`'s animation when its
-`sequence` is not 0). `--shared NAME` merges the props of all the maps given
+`sequence` is not 0).
+
+- **Look-alikes**: models with the same geometry, skeleton and animations
+  (bone names aside) and other textures become skins of one model — its
+  `$texturegroup` gets their textures, their entities `skin` (zm_forbidden:
+  `bp_barrel_fire` is skin 1 of `bp_barrel`); with the same textures too, the
+  same body. `--no-variants` keeps them apart.
+- **Groups**: `props_groups.json` (`--groups`, or `maps/<map>_props_groups.json`
+  next to the map — Map Workshop's Props tab writes it) lists models that go
+  into one part side by side: `{"vehicles": ["models/car_red.mdl", …]}`.
+- After merging, the original models no other map of the game folder names
+  are listed (they can go).
+- `--compare` merges both ways — a set for each map and one for all of them —
+  and prints the model slots each map takes either way and what a player
+  without a cache downloads. `--shared NAME` merges the props of all the maps given
 into one set (`models/NAME/`); `--gc` deletes parts no map of the game folder
 names any more; `--dry-run` lists what would merge.
 
@@ -180,11 +198,17 @@ wins — this tool never opens the client's archives) into a game folder:
 - a file the base game (`--game`) has with the same content is not copied;
   with other content it is written as `<name>_cso.<ext>` and the entities point
   at it;
-- names go to lower case (Linux servers and FastDL hosts are case sensitive),
-  the entities follow; WADs keep the map's spelling;
+- names go to lower case and `[a-z0-9_]` (`models/Props/apc_back-arctic.mdl` →
+  `models/props/apc_back_arctic.mdl`: Linux servers and FastDL hosts are case
+  sensitive), the entities follow; a model's texture file is written as
+  `<model>T.mdl`, the capital T the engine asks for; WADs keep the map's
+  spelling, and sounds a model's events play keep theirs (the model names them);
+- a WAD or a sky the base game has under the same name with other content is
+  written as `<name>_cso` and worldspawn's `wad` / `skyname` point at it;
 - CSO's version 9 models (version 10's layout) get version 10; sounds the
-  engine does not play are converted to 16-bit mono PCM; sprites other than
-  version 2 and sky sides over 256 are reported;
+  engine does not play are converted to 16-bit mono PCM; sky sides over 256 are
+  made 256 with `--shrink-sky` (else reported); models over 16 MB, skins over
+  512 and sprites other than version 2 are reported;
 - a file the game folder has with other content is kept (`--overwrite`
   replaces it).
 
@@ -233,6 +257,12 @@ beyond `<compiler> [options] <map>`.
   TrenchBroom, compile (on a copy in a work folder; compiler lines with
   `Error`, `Exceeded MAX_MAP_*`, `leak` are reported). A compiled map is
   checked and copied into `maps/`, under `_sp` when the name is taken.
+- `map bspguy MAP [COMMAND ARGS]`: runs bspguy on a copy of the map — only
+  the commands your bspguy's usage lists (`merge`, `noclip`, `simplify`,
+  `delete`, `transform` …; none given: it lists them) — and installs the result
+  as `<map>_sp` after a check (moving geometry back inside ±4096, cleaning).
+- `map extents MAP`: for "Bad surface extents": decompiled and compiled again
+  with `-subdivide` (240 by default), given to the compilers whose usage lists it.
 - `map shrink`: textures over `--size` halved until they fit, written to
   `<map>_small.wad`; the decompiled `.map` gets their scale multiplied (offsets
   divided) so they look as big as before and lists the WAD first; then it is
@@ -252,16 +282,18 @@ folder are the folders files are looked up in.
 
 | Tab | What |
 |---|---|
-| Overview | counts, slots, spawns; the issues — *Fix selected* / *Fix all* add their fixes to the plan, a double click goes to the entity or texture; *Export report…* |
+| Overview | counts, slots, spawns; the issues — *Fix selected* / *Fix all* add their fixes to the plan, a double click centres the plan on the issue's entities (yellow rings) or goes to the texture; *Export report…* |
 | Plan | the map from above with its spawns as planned: drag one to move it, right click to remove or turn it, Ctrl+click adds a CT spawn, Ctrl+Shift+click a T one (on the floor under the cursor); a red ring where a player does not fit; a height range for one storey; *Autospawns…* |
-| 3D | the map with its textures and the spawns as boxes: orbit, pan, zoom with the mouse, W A S D / Q E to fly |
+| 3D | the map with its textures, as bright as its lightmaps make each face, the spawns as boxes and the models entities show at their places: orbit, pan, zoom with the mouse, W A S D / Q E to fly. **Walk from spawn**: you appear at the spawn picked as a player — the mouse looks, W A S D run, Space jumps, Ctrl crouches, V flies through walls, Esc stops; the movement is the engine's cut down (gravity 800, 250 u/s, 18-unit steps, 45-unit jumps, sliding along walls through hull 1 / hull 3), the line under the view tells your place, speed and STUCK where a player does not fit. Doors and func_walls are walked through |
 | Entities | every entity by class or search (unknown classes amber, missing files red); edit a value, add or remove a key, remove entities |
-| Textures | thumbnails (every / embedded / external / missing / over 256); drop a picture on one to replace it; embed, extract to a WAD, prune WADs |
-| Props | which models merge and why the others stay; *Merge props* (the merged model is written to `models/<map>/` at once, the entities follow in the plan) |
+| Textures | thumbnails (every / embedded / external / missing / over 256); drop a picture on one to replace it (`name_0.png` … for an animation); before / after side by side; embed, extract to a WAD, prune WADs |
+| Props | which models merge and why the others stay, a group column (written to `maps/<map>_props_groups.json`), which look-alike became which skin; *Merge props* (the merged model is written to `models/<map>/` at once, the entities follow in the plan) |
 | Build | the plan — untick a change to leave it out, remove it; a ReHLDS `.ent` instead of the BSP; another game folder to write into; the external tools; the log |
 
 Under the tabs: the plan's size, whether the CRC is kept and the name Apply
-writes (`<map>_sp` when a change needs it), Undo / Redo and **Apply**. Nothing
+writes (`<map>_sp` when a change needs it), a progress bar and Cancel while a
+job runs, Undo / Redo and **Apply**. Server ▸ Maps and Server ▸ Entities open
+their map here. Nothing
 is written before Apply (except merged prop models); after it the written map
 is checked again and gets a fresh plan.
 
