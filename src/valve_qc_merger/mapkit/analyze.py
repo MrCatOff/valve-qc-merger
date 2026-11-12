@@ -34,6 +34,7 @@ from valve_qc_merger.mapkit.geometry import Geometry, geometry
 from valve_qc_merger.mapkit.hull import EMPTY, STAND, point_contents
 from valve_qc_merger.mapkit.rules import RESOURCE_KEYS, Rules, known_class
 from valve_qc_merger.mapkit.textures import (
+    SPECIAL,
     WadIndex,
     broken_animations,
     find_wads,
@@ -360,13 +361,13 @@ def _textures(report: MapReport, bsp: B.Bsp, finder: Finder, rules: Rules) -> No
                    + (f" ({len(needed)} textures are in no other WAD of the map)"
                       if needed else " (no texture needs it)"), "worldspawn.wad" if not needed
                    else "textures.embed", wad=name)
+    lost = [u.name for u in uses if not u.found and not u.name.lower().startswith(SPECIAL)]
+    if lost:
+        text = (f"{len(lost)} textures are in none of the map's WADs"
+                + (f" (missing: {', '.join(missing_wads)})" if missing_wads else "")
+                + ": " + ", ".join(lost[:8]) + (" …" if len(lost) > 8 else ""))
+        report.add("critical", "missing_texture", text, "textures.embed", textures=lost)
     for use in uses:
-        if not use.found:
-            text = f"texture {use.name} is in none of the map's WADs"
-            if missing_wads:
-                text += f" (missing: {', '.join(missing_wads)})"
-            report.add("critical", "missing_texture", text, "textures.embed",
-                       texture=use.name)
         side = max(use.width, use.height)
         if side > 2 * rules.texture_warn:
             report.add("critical", "texture_size", f"texture {use.name} is {use.width}x"

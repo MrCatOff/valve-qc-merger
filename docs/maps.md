@@ -8,6 +8,8 @@ Qt), so the same checks run from the command line, in tests and in Studio.
 ```bash
 valve-qc-merger map check   MAP.bsp|FOLDER ... [--game DIR] [--json OUT] [--profile zp] [--rules FILE] [--all]
 valve-qc-merger map preview MAP.bsp --out plan.png [--size 1024] [--game DIR] [--no-spawns] [--zmin Z] [--zmax Z]
+valve-qc-merger map fix     MAP.bsp [--spawns 48] [--spread uniform|near_existing] [--cso-entities remove|keep]
+                            [--markers NAME:COUNT] [--source DIR] [--ent] [--out GAME_DIR] [--mapcycle FILE] [--dry-run]
 ```
 
 ## Where files are looked up
@@ -64,6 +66,40 @@ their textures' average colours (embedded, or from the map's WADs — pass
 `--game` for the stock ones; grey when not found), shaded by height, the
 highest floor on top; a 512-unit grid; CT spawns blue and T spawns red with an
 arrow where they face. `--zmin` / `--zmax` keep one storey.
+
+## `map fix`
+
+Fixes a map without recompiling it: only the entity lump changes, so the CRC
+stays and players with the original map still join. It checks the map,
+prints the plan (each operation in words) and, unless `--dry-run`, writes it:
+
+| Operation | What |
+|---|---|
+| `cso.remove` / `cso.replace` | classes CS 1.6 drops are removed; a brush one becomes `func_wall` (`func_illusionary` when see-through) so its geometry stays (`--cso-entities keep` leaves them) |
+| `entity.remove` | an entity whose model / sprite is in no folder (the server would not load the map); `--keep-missing` keeps them |
+| `file.copy` | a missing file found in a `--source` folder (a decompiled Nexon / CSO client) is copied in instead |
+| `entity.set` | a file named in another case than on disk gets the disk's spelling |
+| `spawn.fix` | a spawn a player does not fit at moves to the nearest spot within 32 units that fits (or goes) |
+| `spawn.generate` | spawns are added until each team has `--spawns` (default: the profile's, `zp` 48) |
+| `entity.add` | `--markers zp_supply:24`: `info_target` markers named for a plugin, placed like spawns |
+| `worldspawn.wad` | the WAD list with bare names and without WADs no texture comes from (`--keep-wads` leaves it) |
+| `res.write` | `maps/<map>.res` written for what the map needs (`--no-res` skips it) |
+
+Generated spawns stand on floors (faces looking up) where a standing player
+fits and is not in water, lava, a hurting / moving / breakable brush or next to
+a model; they must be reachable from the map's own spawns — walking (up stairs
+and slopes, down drops), through water, up ladders — so skyboxes, roofs and
+closed rooms get none; each new one goes as far as can be from every spawn
+(at least 64 units), CT and T alternating, facing the longest free run. The
+same map always gets the same spawns.
+
+Where it is written: by default over the map (the original kept as
+`<map>.bsp.bak`); `--out GAME_DIR` writes into another game folder; `--ent`
+writes `maps/<map>.ent` for ReHLDS (`sv_use_entity_file 1`) and leaves the BSP
+as it is. A change players must see (a new texture WAD) saves the map as
+`<map>_sp` (`_sp2` …) with its `.txt`, detail list, overview and `.ent`, and
+`--mapcycle` is pointed at the new name. After writing, the map is checked
+again; the exit code is 2 while critical issues remain.
 
 ## Maps and the CRC
 

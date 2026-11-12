@@ -17,12 +17,22 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
   case-insensitive file system finds, textures over 256, model / sound slots
   near 512 with ReGameDLL's own. Rules and profiles from a JSON file
   (`configs/mapkit.json`). Exit code 0 / 1 / 2 / 3.
+- **`map fix MAP [--spawns 48] [--markers zp_supply:24] [--ent] [--out DIR]`**:
+  fixes without recompiling (the CRC stays): CSO classes removed (brush ones
+  kept as `func_wall`), entities with missing models removed or the files
+  copied from `--source`, names put in the disk's case, stuck spawns moved,
+  spawns generated up to the count a team (reachable on foot, through water
+  and up ladders; apart; facing open space; the same every run), plugin
+  markers, the WAD list tidied, `.res` written; the BSP (with a `.bak`) or a
+  ReHLDS `.ent`. All 8 maps of the CSO ZM pack: 48 + 48 spawns, no critical
+  issue, CRC unchanged.
 - **`map preview MAP --out plan.png`**: the map from above in its textures'
   colours, shaded by height, with the spawns and where they face.
 - New `mapkit` package (no Qt): BSP v30 read / write lump by lump (an
   unchanged map writes back byte for byte, a resized lump moves the ones
   after it), the engine's map CRC, faces, surface extents, hull 0-3 point
-  contents. Server ▸ Maps / Budget read maps through it.
+  contents, hull traces as the engine's. Server ▸ Maps / Budget read maps
+  through it.
 
 ## [0.22.0] - 2026-11-08
 
