@@ -59,6 +59,12 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
   by decompiling, rescaling them in the `.map` and recompiling.
 - **`map preview MAP --out plan.png`**: the map from above in its textures'
   colours, shaded by height, with the spawns and where they face.
+- **Map Workshop** (Project ▸ Map Workshop…, Ctrl+Shift+M): open maps or
+  import them from CSO folders; Overview with one-click fixes, a Plan from
+  above where spawns are dragged, added, turned and removed, a textured 3D
+  view with W A S D flight, Entities, Textures (drop a picture to replace),
+  Props, Build; every change goes into an undoable plan that says whether the
+  CRC is kept and which name Apply writes. Server ▸ Maps opens a map in it.
 - New `mapkit` package (no Qt): BSP v30 read / write lump by lump (an
   unchanged map writes back byte for byte, a resized lump moves the ones
   after it), the engine's map CRC, faces, surface extents, hull 0-3 point

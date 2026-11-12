@@ -622,6 +622,11 @@ from the command line (exit code 2 when any result has a ✕ problem).
 Swap-hands assets also carry the retarget's `revision`: one made by an older
 retarget shows ▲ *made by an older retarget* and builds re-make it.
 
+## Map Workshop
+
+Project ▸ Map Workshop… (Ctrl+Shift+M): check, fix and build maps — see
+[maps.md](maps.md#map-workshop-studio).
+
 ## Command line (project)
 
 Everything the window does with builds also runs without it — from a script,

@@ -290,6 +290,10 @@ class MainWindow(QMainWindow):
         self.act_previews = project_menu.addAction("Weapon previews…", self.make_previews)
         self.act_server = project_menu.addAction("Server tools…", self.show_server,
                                                  QKeySequence("Ctrl+Shift+S"))
+        self.act_workshop = project_menu.addAction("Map Workshop…", self.show_map_workshop,
+                                                   QKeySequence("Ctrl+Shift+M"))
+        self.act_workshop.setToolTip("Check, fix and build maps: spawns, entities, textures, "
+                                     "props; import maps from CSO folders")
         self.act_settings = project_menu.addAction("Settings…", self.edit_settings)
         self.act_reveal = project_menu.addAction("Show project folder",
                                                  lambda: self._open_path(self.project.root))
@@ -780,6 +784,29 @@ class MainWindow(QMainWindow):
             self.toast.show_message("success", "Server package exported", detail)
         self._open_path(out)
 
+    def show_map_workshop(self, path: Path | None = None) -> None:
+        """Project ▸ Map Workshop (works without a project too: then only
+        the maps you open). ``path``: a map to open in it."""
+        from valve_qc_merger.studio.map_workshop import MapWorkshop
+        window = getattr(self, "map_workshop", None)
+        if window is None:
+            folders: list[Path] = []
+            maps_folder = None
+            if self.project is not None:
+                settings = self.project.settings
+                for folder in (settings.game_install, settings.game_dir):
+                    if folder and Path(folder).is_dir():
+                        folders.append(Path(folder))
+                if settings.game_dir and (Path(settings.game_dir) / "maps").is_dir():
+                    maps_folder = Path(settings.game_dir) / "maps"
+            window = MapWorkshop(folders, self, maps_folder)
+            self.map_workshop = window
+        if path is not None:
+            window.open_map(Path(path))
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
     def show_server(self) -> None:
         """Project ▸ Server: precache budget per map + the mod-folder doctor
         (one window, refreshed every time it is shown)."""
@@ -908,6 +935,10 @@ class MainWindow(QMainWindow):
         if window is not None:  # it belongs to the previous project
             window.close()
             self.server_window = None
+        workshop = getattr(self, "map_workshop", None)
+        if workshop is not None:  # its game folders were the previous project's
+            workshop.close()
+            self.map_workshop = None
         self.project = project
         self._info_cache.clear()
         self._scene_cache.clear()

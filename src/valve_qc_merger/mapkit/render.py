@@ -42,6 +42,18 @@ class Plan:
     left: float  # world x at pixel column 0
     top: float  # world y at pixel row 0 (y grows up in the world, down in the image)
     notes: list[str] = field(default_factory=list)
+    heights: np.ndarray | None = None  # (H, W) floor height under each pixel, -inf: none
+
+    def floor_at(self, x: float, y: float) -> float | None:
+        """The height of the floor drawn at world ``x``, ``y`` (None: none)."""
+        if self.heights is None:
+            return None
+        column, row = self.to_pixel(x, y)
+        r, c = int(row), int(column)
+        if not (0 <= r < self.heights.shape[0] and 0 <= c < self.heights.shape[1]):
+            return None
+        value = float(self.heights[r, c])
+        return value if np.isfinite(value) else None
 
     def to_pixel(self, x: float, y: float) -> tuple[float, float]:
         return (x - self.left) * self.scale, (self.top - y) * self.scale
@@ -210,7 +222,7 @@ def render_plan(bsp: B.Bsp, *, size: int = 1024, wads: list[WadIndex] | None = N
         _fill(image, zbuf, np.stack([px, py], axis=1), (a, b, c),
               np.array([*rgb, 255], np.uint8))
     _level(image, np.isfinite(zbuf))
-    plan = Plan(image, scale, left, top)
+    plan = Plan(image, scale, left, top, heights=zbuf)
     if grid:
         _grid(plan)
     if spawns:

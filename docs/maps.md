@@ -241,6 +241,30 @@ beyond `<compiler> [options] <map>`.
 A decompile is approximate (uneven brushes, holes, the light set up again):
 this is the exception, not the way.
 
+## Map Workshop (Studio)
+
+Project ▸ **Map Workshop…** (Ctrl+Shift+M; Server ▸ Maps ▸ *Open in Map
+Workshop*) does all of the above in one window, without a project too. Maps
+on the left (✓ ok, ▲ warnings, ✕ critical; the number of planned changes),
+*Open BSP…*, *Add folder…*, *Import…* (from unpacked CSO folders) and *Build
+selected* (the profile's whole way). The project's Game install and game
+folder are the folders files are looked up in.
+
+| Tab | What |
+|---|---|
+| Overview | counts, slots, spawns; the issues — *Fix selected* / *Fix all* add their fixes to the plan, a double click goes to the entity or texture; *Export report…* |
+| Plan | the map from above with its spawns as planned: drag one to move it, right click to remove or turn it, Ctrl+click adds a CT spawn, Ctrl+Shift+click a T one (on the floor under the cursor); a red ring where a player does not fit; a height range for one storey; *Autospawns…* |
+| 3D | the map with its textures and the spawns as boxes: orbit, pan, zoom with the mouse, W A S D / Q E to fly |
+| Entities | every entity by class or search (unknown classes amber, missing files red); edit a value, add or remove a key, remove entities |
+| Textures | thumbnails (every / embedded / external / missing / over 256); drop a picture on one to replace it; embed, extract to a WAD, prune WADs |
+| Props | which models merge and why the others stay; *Merge props* (the merged model is written to `models/<map>/` at once, the entities follow in the plan) |
+| Build | the plan — untick a change to leave it out, remove it; a ReHLDS `.ent` instead of the BSP; another game folder to write into; the external tools; the log |
+
+Under the tabs: the plan's size, whether the CRC is kept and the name Apply
+writes (`<map>_sp` when a change needs it), Undo / Redo and **Apply**. Nothing
+is written before Apply (except merged prop models); after it the written map
+is checked again and gets a fresh plan.
+
 ## Maps and the CRC
 
 A client compares its copy of a map with the server's by a CRC of every lump

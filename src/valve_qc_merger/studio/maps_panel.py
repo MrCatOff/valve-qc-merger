@@ -101,9 +101,13 @@ class MapsPanel(QWidget):
                                         "Write .res for selected")
         theme.set_primary(self.write_button)
         self.write_button.clicked.connect(lambda: self.write_selected())
-        for button in (copy, self.write_button):
+        workshop = QPushButton(icon("map"), "Open in Map Workshop")
+        workshop.setToolTip("Fix the selected map's spawns, entities, textures and props")
+        workshop.clicked.connect(self._open_in_workshop)
+        for button in (copy, self.write_button, workshop):
             button.setAutoDefault(False)
         bottom.addWidget(self.status, 1)
+        bottom.addWidget(workshop)
         bottom.addWidget(copy)
         bottom.addWidget(self.write_button)
         layout.addLayout(bottom)
@@ -112,6 +116,17 @@ class MapsPanel(QWidget):
         super().showEvent(event)
         if not self._scanned:
             self.scan()
+
+    def _open_in_workshop(self) -> None:
+        name, game = self.current(), self.game_dir()
+        if not name or game is None:
+            return
+        # the main window owns the workshop (Project ▸ Map Workshop)
+        owner = self.window().parent()
+        while owner is not None and not hasattr(owner, "show_map_workshop"):
+            owner = owner.parent()
+        if owner is not None:
+            owner.show_map_workshop(game / "maps" / f"{name}.bsp")
 
     def game_dir(self) -> Path | None:
         game = self.project.settings.game_dir
