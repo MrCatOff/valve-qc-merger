@@ -40,6 +40,17 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
   units), named `models/<map>/<name>_<hash8>.mdl` so clients re-download a
   changed set; entities get `model` / `body` / `sequence`, the CRC stays. The
   CSO ZM pack: 16 → 1, 14 → 1, 7 → 1, 20 → 2 model slots.
+- **`map import MAPNAMES --source DIR --out GAME_DIR [--game DIR]`**: a map
+  with everything it needs from unpacked CSO / Nexon folders (WADs found
+  anywhere, sky, detail and overview files, models with their companions and
+  event sounds, sprites, sounds); files the base game has are skipped (or
+  renamed `_cso` when different), names lower-cased with the entities, v9
+  models made v10, sounds converted to 16-bit mono PCM; `import.json`; the
+  source listing cached in the user's cache folder.
+- **`map build MAPS --profile zp [--source DIR] [--out GAME_DIR]`**: import →
+  check → fix → props → `.res` → check for every map, JSON report with each
+  step. The CSO ZM pack into an empty `cstrike`: all 8 maps without a
+  critical issue in 18 s.
 - **`map preview MAP --out plan.png`**: the map from above in its textures'
   colours, shaded by height, with the spawns and where they face.
 - New `mapkit` package (no Qt): BSP v30 read / write lump by lump (an

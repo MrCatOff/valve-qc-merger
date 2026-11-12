@@ -13,6 +13,10 @@
     valve-qc-merger map shared-wad MAP.bsp ... --out pack.wad
     valve-qc-merger map props MAP.bsp ... [--out GAME_DIR] [--name NAME] [--shared NAME]
                               [--studiomdl PATH] [--gc] [--dry-run]
+    valve-qc-merger map import MAPNAME ... --source DIR [--source DIR] --out GAME_DIR
+                               [--game DIR] [--overwrite]
+    valve-qc-merger map build  MAP ... [--profile zp] [--source DIR] [--out GAME_DIR]
+                               [--game DIR] [--no-props] [--json OUT]
 
 ``--game`` adds a game folder the map's files are looked up in (a clean
 ``cstrike``; ``valve`` next to it is searched too). Exit codes of
@@ -150,6 +154,35 @@ class MapCommand(Command):
         props.add_argument("--dry-run", action="store_true",
                            help="list what would merge, write nothing")
 
+        imp = actions.add_parser("import", help="copy a map with every file it needs from "
+                                 "unpacked CSO / Nexon folders into a game folder",
+                                 description="import maps with their files")
+        imp.add_argument("maps", nargs="+", metavar="MAPNAME",
+                         help="map names in the source (or .bsp files)")
+        imp.add_argument("--source", type=Path, action="append", required=True, metavar="DIR",
+                         help="an unpacked client / pack folder (repeatable, first wins)")
+        imp.add_argument("--out", type=Path, required=True, metavar="GAME_DIR")
+        imp.add_argument("--game", type=Path, action="append", default=[], metavar="DIR",
+                         help="the base game: its files are not copied (repeatable)")
+        imp.add_argument("--overwrite", action="store_true",
+                         help="replace files the game folder has with other content")
+        build = actions.add_parser("build", help="the whole way: import, check, fix, props, "
+                                   ".res, check", description="build maps for a server")
+        build.add_argument("maps", nargs="+", metavar="MAP",
+                           help="BSP files / folders, or map names with --source")
+        build.add_argument("--profile", help="the rules profile (default: zp)")
+        build.add_argument("--rules", type=Path, metavar="FILE", help="a rules file (JSON)")
+        build.add_argument("--source", type=Path, action="append", default=[], metavar="DIR",
+                           help="unpacked CSO / Nexon folders to import from (repeatable)")
+        build.add_argument("--out", type=Path, metavar="GAME_DIR",
+                           help="the game folder to build into (default: each map's own)")
+        build.add_argument("--game", type=Path, action="append", default=[], metavar="DIR",
+                           help="the base game (repeatable)")
+        build.add_argument("--studiomdl", type=Path, help="studiomdl for the props")
+        build.add_argument("--no-props", action="store_true", help="do not merge props")
+        build.add_argument("--overwrite", action="store_true")
+        build.add_argument("--json", type=Path, metavar="OUT", help="write the reports as JSON")
+
     def run(self, args: argparse.Namespace) -> int:
         if args.action == "check":
             return self._check(args)
@@ -161,6 +194,10 @@ class MapCommand(Command):
             return self._shared_wad(args)
         if args.action == "props":
             return self._props(args)
+        if args.action == "import":
+            return self._import(args)
+        if args.action == "build":
+            return self._build(args)
         return self._preview(args)
 
     def _check(self, args: argparse.Namespace) -> int:
@@ -417,6 +454,72 @@ class MapCommand(Command):
                 for path in stale_parts(out, folder, name):
                     path.unlink()
                     print(f"  deleted {path} (no map names it)")
+        return code
+
+    def _import(self, args: argparse.Namespace) -> int:
+        from valve_qc_merger.mapkit.analyze import check_map
+        from valve_qc_merger.mapkit.nexon import (
+            ImportResult,
+            SourceIndex,
+            import_map,
+            write_record,
+        )
+
+        index = SourceIndex.build(args.source)
+        print(f"source: {len(index.files)} files")
+        result = ImportResult()
+        for name in args.maps:
+            import_map(name, index, args.out, base=args.game, overwrite=args.overwrite,
+                       result=result)
+        states: dict[str, int] = {}
+        for record in result.files.values():
+            states[record.state] = states.get(record.state, 0) + 1
+        print(", ".join(f"{v} {k}" for k, v in sorted(states.items())))
+        for record in result.files.values():
+            if record.conversions:
+                print(f"  converted {record.path}: {'; '.join(record.conversions)}")
+            if record.state in ("missing", "renamed", "kept"):
+                print(f"  {record.state:<8} {record.path}")
+        for note in result.notes:
+            print(f"  note: {note}")
+        print(f"record: {write_record(result, args.out)}")
+        code = EXIT_CLEAN if result.maps else EXIT_UNREADABLE
+        for name in result.maps:
+            report = check_map(args.out / "maps" / f"{name}.bsp", args.game)
+            print(f"{name}: {report.level.upper()} after import")
+            for issue in report.of_level("critical"):
+                print(f"  critical {issue.code:<18} {issue.text}")
+            if report.level == "critical":
+                code = max(code, EXIT_CRITICAL)
+        return code
+
+    def _build(self, args: argparse.Namespace) -> int:
+        from valve_qc_merger.mapkit.rules import Rules
+        from valve_qc_merger.mapkit.workflow import BuildOptions, build_maps, write_report
+
+        rules = Rules.load(args.rules, args.profile)
+        items = [str(p) for p in _maps([Path(m) for m in args.maps if Path(m).exists()])]
+        items += [m for m in args.maps if not Path(m).exists()]
+        options = BuildOptions(out=args.out, sources=args.source, folders=args.game,
+                               studiomdl=args.studiomdl,
+                               props=False if args.no_props else None,
+                               overwrite=args.overwrite)
+        results = build_maps(items, rules, options)
+        code = EXIT_CLEAN
+        for build in results:
+            for step in build.steps:
+                print(f"  {build.name}: {step}")
+            if build.error:
+                code = max(code, EXIT_UNREADABLE)
+                continue
+            if build.after is not None:
+                left = build.after.of_level("critical")
+                for issue in left:
+                    print(f"  {build.name}: critical {issue.code} {issue.text}")
+                code = max(code, EXIT_CRITICAL if left else
+                           EXIT_WARNINGS if build.after.level == "warning" else EXIT_CLEAN)
+        if args.json:
+            print(f"report: {write_report(results, args.json)}")
         return code
 
 

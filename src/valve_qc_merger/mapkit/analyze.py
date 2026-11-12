@@ -144,6 +144,17 @@ def finder_for(folders: list[Path]) -> Finder:
     return _FINDERS[key]
 
 
+def forget(folder: Path | None = None) -> None:
+    """Drop the scanned listings of ``folder`` (all with None): call after
+    writing files into a game folder."""
+    if folder is None:
+        _FINDERS.clear()
+        return
+    target = Path(folder).resolve()
+    for key in [k for k in _FINDERS if target in k]:
+        del _FINDERS[key]
+
+
 # -- resources ----------------------------------------------------------------
 
 def entity_resources(entities: list[dict[str, str]]) -> tuple[dict[str, list[int]],
@@ -436,4 +447,5 @@ def check_maps(paths: list[Path], folders: list[Path] | None = None,
 
 
 __all__ = ["Finder", "Issue", "LEVELS", "MapReport", "check_map", "check_maps",
-           "entity_resources", "game_folder", "map_wads", "marked_entities", "search_folders"]
+           "entity_resources", "forget", "game_folder", "map_wads", "marked_entities",
+           "search_folders"]

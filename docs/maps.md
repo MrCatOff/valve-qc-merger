@@ -14,6 +14,8 @@ valve-qc-merger map textures MAP.bsp list [--missing|--big|--unused] | replace N
                              | extract OUT.wad [--strip] | prune-wads   [--game DIR] [--out GAME_DIR] [--dry-run]
 valve-qc-merger map shared-wad MAP.bsp|FOLDER ... --out pack.wad [--game DIR]
 valve-qc-merger map props MAP.bsp|FOLDER ... [--out GAME_DIR] [--name NAME] [--shared NAME] [--studiomdl PATH] [--gc] [--dry-run]
+valve-qc-merger map import MAPNAME ... --source DIR [--source DIR] --out GAME_DIR [--game DIR] [--overwrite]
+valve-qc-merger map build  MAP|MAPNAME ... [--profile zp] [--source DIR] [--out GAME_DIR] [--game DIR] [--no-props] [--json OUT]
 ```
 
 ## Where files are looked up
@@ -158,6 +160,50 @@ anything `cycler` shows (ReGameDLL stops a `cycler`'s animation when its
 `sequence` is not 0). `--shared NAME` merges the props of all the maps given
 into one set (`models/NAME/`); `--gc` deletes parts no map of the game folder
 names any more; `--dry-run` lists what would merge.
+
+## `map import`
+
+Copies maps with every file they need from unpacked CSO / Nexon folders (a
+client's folder or its `cstrike`, a map pack; several `--source`, the first
+wins — this tool never opens the client's archives) into a game folder:
+
+- worldspawn's WADs (found by file name anywhere in the source), the sky's
+  six TGAs, `maps/<map>.txt`, the detail-texture list and its textures, the
+  overview and its picture, every model, sprite and sound the entities name,
+  and for a model its `<name>t.mdl` / `<name>01.mdl` and the sounds its events
+  play;
+- a file the base game (`--game`) has with the same content is not copied;
+  with other content it is written as `<name>_cso.<ext>` and the entities point
+  at it;
+- names go to lower case (Linux servers and FastDL hosts are case sensitive),
+  the entities follow; WADs keep the map's spelling;
+- CSO's version 9 models (version 10's layout) get version 10; sounds the
+  engine does not play are converted to 16-bit mono PCM; sprites other than
+  version 2 and sky sides over 256 are reported;
+- a file the game folder has with other content is kept (`--overwrite`
+  replaces it).
+
+`import.json` in the game folder lists every file with its source, SHA-1,
+conversions and the maps needing it; each map is checked afterwards. The
+source listing is cached in the user's cache folder (`~/.cache/valve-qc-merger`,
+`%LOCALAPPDATA%` on Windows), never in the repository.
+
+## `map build`
+
+The whole way for each map: import (with `--source`) → check → fix (as `map
+fix`) → props (as `map props`, when the profile wants them and studiomdl is
+found) → `.res` → check. Only the entity lump changes: maps keep their names
+and CRCs. A profile can say more than thresholds:
+
+```json
+{"profiles": {"zp": {"min_spawns": 48, "props": true, "markers": ["zp_supply:24"],
+                     "cso_entities": "remove"}}}
+```
+
+`--json` writes each map's steps and its report before and after (with the
+traceback of a map that failed — the others go on). The CSO ZM pack imported
+into an empty `cstrike` over a Steam install: all 8 maps without a critical
+issue, 48 + 48 spawns, props in one model slot each, in 18 s.
 
 ## Maps and the CRC
 

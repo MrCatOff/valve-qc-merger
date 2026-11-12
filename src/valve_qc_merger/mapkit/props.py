@@ -214,6 +214,8 @@ def merge_props(maps: list[Path], out: Path, name: str, *, folders: list[Path] |
                 shutil.copytree(qc.parent, dest.with_suffix(""), dirs_exist_ok=True)
             built[f"{qc.stem}.mdl"] = game_path
             result.parts.append(game_path)
+            from valve_qc_merger.mapkit.analyze import forget
+            forget(out)
         for prop in result.models:
             if prop.reason:
                 continue

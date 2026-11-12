@@ -410,9 +410,10 @@ def _companions(game: Path, old: str) -> list[tuple[Path, str]]:
 
 def save_plan(plan: FixPlan, *, out_dir: Path | None = None, ent: bool = False,
               res: bool = True, folders: list[Path] | None = None,
-              mapcycle: Path | None = None) -> SaveResult:
+              mapcycle: Path | None = None, backup: bool = True) -> SaveResult:
     """Apply ``plan`` and write the map (see the module). ``out_dir``: a
-    game folder to write into instead of the map's own."""
+    game folder to write into instead of the map's own; ``backup``: keep
+    ``<map>.bsp.bak`` when the map is written over."""
     source = plan.map_path
     game = game_folder(source)
     target_game = Path(out_dir) if out_dir else game
@@ -455,11 +456,11 @@ def save_plan(plan: FixPlan, *, out_dir: Path | None = None, ent: bool = False,
         bsp.set_entity_text(entity_text(entities))
         _apply_lump_ops(plan, bsp, wads, result)
         target = maps / f"{name}.bsp"
-        if target.exists() and target.resolve() == source.resolve():
-            backup = source.with_name(source.name + ".bak")
-            if not backup.exists():
-                shutil.copy2(source, backup)
-                result.written.append(backup)
+        if backup and target.exists() and target.resolve() == source.resolve():
+            kept = source.with_name(source.name + ".bak")
+            if not kept.exists():
+                shutil.copy2(source, kept)
+                result.written.append(kept)
         target.write_bytes(bsp.write())
         result.written.append(target)
         result.crc_after = f"{bsp.crc():08x}"
@@ -477,6 +478,8 @@ def save_plan(plan: FixPlan, *, out_dir: Path | None = None, ent: bool = False,
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, dest)
                 result.written.append(dest)
+    from valve_qc_merger.mapkit.analyze import forget
+    forget(target_game)
     if res:
         res_path = _write_res(maps / f"{name}.bsp", target_game, [game, *(folders or [])])
         if res_path is not None:
