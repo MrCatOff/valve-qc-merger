@@ -5,6 +5,12 @@
     valve-qc-merger map fix     MAP.bsp [--spawns 48] [--cso-entities remove|keep] [--ent]
                                 [--out GAME_DIR] [--source DIR] [--markers NAME:COUNT]
                                 [--dry-run]
+    valve-qc-merger map textures MAP.bsp list [--missing|--big|--unused]
+    valve-qc-merger map textures MAP.bsp replace NAME IMAGE
+    valve-qc-merger map textures MAP.bsp embed [NAME ...] [--missing-only]
+    valve-qc-merger map textures MAP.bsp extract OUT.wad [--strip]
+    valve-qc-merger map textures MAP.bsp prune-wads
+    valve-qc-merger map shared-wad MAP.bsp ... --out pack.wad
 
 ``--game`` adds a game folder the map's files are looked up in (a clean
 ``cstrike``; ``valve`` next to it is searched too). Exit codes of
@@ -94,11 +100,42 @@ class MapCommand(Command):
         fix.add_argument("--no-res", action="store_true", help="do not write maps/<map>.res")
         fix.add_argument("--dry-run", action="store_true", help="print the plan, write nothing")
 
+        tex = actions.add_parser("textures", help="list, replace, embed or extract a map's "
+                                 "textures", description="a map's textures")
+        tex.add_argument("map", type=Path, metavar="MAP")
+        tex.add_argument("op", choices=("list", "replace", "embed", "extract", "prune-wads"))
+        tex.add_argument("names", nargs="*", metavar="ARG",
+                         help="replace: NAME IMAGE; embed: texture names (default all); "
+                              "extract: OUT.wad")
+        tex.add_argument("--game", type=Path, action="append", default=[], metavar="DIR",
+                         help="a game folder holding the map's WADs (repeatable)")
+        filters = tex.add_mutually_exclusive_group()
+        filters.add_argument("--missing", action="store_true", help="list: not found")
+        filters.add_argument("--big", action="store_true", help="list: a side over 256")
+        filters.add_argument("--unused", action="store_true", help="list: no face draws it")
+        tex.add_argument("--missing-only", action="store_true",
+                         help="embed: only textures not in Half-Life's own WADs")
+        tex.add_argument("--strip", action="store_true",
+                         help="extract: leave the map only the names (it lists the WAD)")
+        tex.add_argument("--out", type=Path, metavar="GAME_DIR",
+                         help="write into this game folder instead of the map's own")
+        tex.add_argument("--mapcycle", type=Path, help="point this mapcycle at a renamed map")
+        tex.add_argument("--dry-run", action="store_true", help="print the plan, write nothing")
+        shared = actions.add_parser("shared-wad", help="one WAD with every texture a pack of "
+                                    "maps draws", description="one WAD for a pack of maps")
+        shared.add_argument("maps", nargs="+", type=Path, metavar="MAP")
+        shared.add_argument("--out", type=Path, required=True, help="the WAD to write")
+        shared.add_argument("--game", type=Path, action="append", default=[], metavar="DIR")
+
     def run(self, args: argparse.Namespace) -> int:
         if args.action == "check":
             return self._check(args)
         if args.action == "fix":
             return self._fix(args)
+        if args.action == "textures":
+            return self._textures(args)
+        if args.action == "shared-wad":
+            return self._shared_wad(args)
         return self._preview(args)
 
     def _check(self, args: argparse.Namespace) -> int:
@@ -213,6 +250,95 @@ class MapCommand(Command):
         for issue in left:
             print(f"  critical {issue.code:<18} {issue.text}")
         return EXIT_CRITICAL if left else EXIT_CLEAN
+
+    def _textures(self, args: argparse.Namespace) -> int:
+        from valve_qc_merger.mapkit import fix as F
+        from valve_qc_merger.mapkit.analyze import map_wads
+        from valve_qc_merger.mapkit.bsp import Bsp, BspError
+        from valve_qc_merger.mapkit.textures import texture_uses
+
+        try:
+            bsp = Bsp.read(args.map)
+        except BspError as exc:
+            print(exc)
+            return EXIT_UNREADABLE
+        if args.op == "list":
+            wads = {w.path.name: w for w in map_wads(args.map, bsp, args.game)}
+            uses = texture_uses(bsp, wads)
+            if args.missing:
+                uses = [u for u in uses if not u.found]
+            elif args.big:
+                uses = [u for u in uses if max(u.width, u.height) > 256]
+            elif args.unused:
+                uses = [u for u in uses if not u.faces]
+            for u in uses:
+                source = "embedded" if u.embedded else (u.wad or "MISSING")
+                print(f"{u.name:<16} {u.width:>4}x{u.height:<4} {source:<22} {u.faces:>5} faces"
+                      + ("  special" if u.special else ""))
+            print(f"{len(uses)} textures")
+            return EXIT_CLEAN
+        try:
+            if args.op == "replace":
+                if len(args.names) != 2:
+                    print("replace NAME IMAGE")
+                    return EXIT_UNREADABLE
+                plan = F.plan_replace_texture(args.map, args.names[0], Path(args.names[1]),
+                                              args.game)
+            elif args.op == "embed":
+                plan = F.plan_embed(args.map, args.names or None, args.missing_only, args.game)
+            elif args.op == "extract":
+                if len(args.names) != 1:
+                    print("extract OUT.wad")
+                    return EXIT_UNREADABLE
+                plan = F.plan_extract(args.map, args.names[0], args.strip)
+            else:
+                from valve_qc_merger.mapkit.analyze import check_map
+                plan = F.plan_fixes(check_map(args.map, args.game),
+                                    F.FixOptions(spawns=0, cso_entities="keep",
+                                                 remove_missing=False))
+                plan.operations = [op for op in plan.operations if op.code == "worldspawn.wad"]
+        except (KeyError, ValueError, OSError) as exc:
+            print(exc.args[0] if exc.args else exc)
+            return EXIT_UNREADABLE
+        for op in plan.active:
+            print(f"  {op.code:<18} {op.text}")
+        for note in plan.notes:
+            print(f"  note: {note}")
+        print("the CRC stays" if plan.crc_safe else "the CRC changes",
+              "-> a new map name" if plan.needs_new_name else "")
+        if args.dry_run or not plan.active:
+            return EXIT_CLEAN
+        result = F.save_plan(plan, out_dir=args.out, folders=args.game, mapcycle=args.mapcycle)
+        for path in result.written:
+            print(f"  wrote {path}")
+        for note in result.notes:
+            print(f"  note: {note}")
+        print(f"CRC {result.crc_before} -> {result.crc_after}"
+              + (f", saved as {result.map_name}" if result.new_name else ""))
+        return EXIT_CLEAN
+
+    def _shared_wad(self, args: argparse.Namespace) -> int:
+        from valve_qc_merger.mapkit.analyze import map_wads
+        from valve_qc_merger.mapkit.bsp import Bsp, BspError
+        from valve_qc_merger.mapkit.textures import shared_wad, wad_of_lumps
+
+        maps = []
+        for path in _maps(args.maps):
+            try:
+                bsp = Bsp.read(path)
+            except BspError as exc:
+                print(exc)
+                return EXIT_UNREADABLE
+            maps.append((bsp, map_wads(path, bsp, args.game)))
+        result = shared_wad(maps)
+        args.out.write_bytes(wad_of_lumps(result.lumps))
+        print(f"{args.out}: {len(result.textures)} textures for {len(maps)} maps "
+              f"({args.out.stat().st_size / 1e6:.1f} MB)")
+        for name in result.conflicts:
+            print(f"  conflict: {name} differs between {', '.join(result.used_by[name])}")
+        for item in result.missing:
+            print(f"  missing: {item}")
+        return EXIT_WARNINGS if result.conflicts or result.missing else EXIT_CLEAN
 
 
 __all__ = ["MapCommand"]

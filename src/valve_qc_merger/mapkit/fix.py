@@ -36,6 +36,7 @@ from valve_qc_merger.mapkit import bsp as B
 from valve_qc_merger.mapkit.analyze import MapReport, game_folder, search_folders
 from valve_qc_merger.mapkit.rules import Rules
 from valve_qc_merger.mapkit.spawns import SpawnOptions, fix_stuck, generate, sample_spots
+from valve_qc_merger.mapkit.textures import WadIndex
 from valve_qc_merger.server.bsp import wad_names
 from valve_qc_merger.server.entities import entity_text, parse
 
@@ -270,6 +271,103 @@ def _xyz(text: str) -> np.ndarray | None:
         return None
 
 
+# -- texture plans --------------------------------------------------------------
+
+def plan_replace_texture(path: Path, name: str, image: Path,
+                         folders: list[Path] | None = None) -> FixPlan:
+    """Replace texture ``name`` of map ``path`` with a picture (resized to the
+    texture's size). An embedded one changes the BSP (a new map name); an
+    external one is replaced in a copy of its WAD under a new name the map's
+    ``wad`` then lists (players must see it: a new map name too)."""
+    from valve_qc_merger.mapkit.analyze import map_wads
+    from valve_qc_merger.mapkit.geometry import geometry
+    from valve_qc_merger.mapkit.images import read_image
+    from valve_qc_merger.mapkit.textures import texture_from_image
+
+    bsp = B.Bsp.read(path)
+    tex = next((t for t in geometry(bsp).textures
+                if t.offset >= 0 and t.name.lower() == name.lower()), None)
+    if tex is None:
+        raise KeyError(f"{path.stem} has no texture {name}")
+    texture = texture_from_image(tex.name, read_image(image), tex.width, tex.height)
+    plan = FixPlan(path)
+    if tex.embedded:
+        plan.add("textures.replace", f"replace embedded {tex.name} ({tex.width}x{tex.height}) "
+                 f"with {image.name}", None, crc_safe=False, name=tex.name, texture=texture)
+        return plan
+    wad = next((w for w in map_wads(path, bsp, folders) if tex.name.lower() in w.entries), None)
+    if wad is None:
+        raise KeyError(f"{tex.name} is in none of the map's WADs")
+    new_wad = f"{wad.path.stem}_{path.stem}.wad"
+    plan.add("textures.wad_copy", f"{tex.name} replaced with {image.name} in {new_wad} (a copy "
+             f"of {wad.path.name})", None, client_visible=True, source=str(wad.path),
+             wad=new_wad, name=tex.name, texture=texture)
+    world = next((e for e in parse(bsp.entity_text) if e.get("classname") == "worldspawn"), {})
+    names = [new_wad if n.lower() == wad.path.name.lower() else n
+             for n in wad_names(world.get("wad", ""))]
+    plan.add("worldspawn.wad", f"wad: {wad.path.name} -> {new_wad}", None, client_visible=True,
+             value=";".join(names) + ";")
+    return plan
+
+
+def plan_embed(path: Path, names: list[str] | None = None, missing_only: bool = False,
+               folders: list[Path] | None = None) -> FixPlan:
+    """Embed external textures (all, ``names``, or only those whose WAD a
+    player may not have) — the map then needs fewer WADs."""
+    from valve_qc_merger.mapkit.analyze import map_wads
+    from valve_qc_merger.mapkit.geometry import geometry
+
+    bsp = B.Bsp.read(path)
+    wads = map_wads(path, bsp, folders)
+    external = [t for t in geometry(bsp).textures if t.offset >= 0 and not t.embedded]
+    if names:
+        wanted = {n.lower() for n in names}
+        external = [t for t in external if t.name.lower() in wanted]
+    elif missing_only:
+        stock = {w.path.name.lower() for w in wads if w.path.parent.name.lower() == "valve"}
+        external = [t for t in external
+                    if not any(t.name.lower() in w.entries for w in wads
+                               if w.path.name.lower() in stock)]
+    found = [t for t in external if any(t.name.lower() in w.entries for w in wads)]
+    plan = FixPlan(path)
+    if not found:
+        plan.notes.append("no external texture to embed (found in the map's WADs)")
+        return plan
+    plan.add("textures.embed", f"embed {len(found)} textures from the map's WADs", None,
+             crc_safe=False, names=[t.name for t in found])
+    still = {t.name.lower() for t in geometry(bsp).textures
+             if t.offset >= 0 and not t.embedded} - {t.name.lower() for t in found}
+    world = next((e for e in parse(bsp.entity_text) if e.get("classname") == "worldspawn"), {})
+    keep = [w.path.name for w in wads if still & set(w.entries)]
+    listed = wad_names(world.get("wad", ""))
+    kept = [n for n in listed if n.lower() in {k.lower() for k in keep}
+            or not any(w.path.name.lower() == n.lower() for w in wads)]
+    if kept != listed:
+        plan.add("worldspawn.wad", f"wad: {len(listed)} -> {len(kept)} WADs (the rest are "
+                 "embedded)", None, value=";".join(kept) + (";" if kept else ""))
+    return plan
+
+
+def plan_extract(path: Path, wad: str, strip: bool = False,
+                 names: list[str] | None = None) -> FixPlan:
+    """Write the embedded textures to ``wad`` (in the game folder); with
+    ``strip`` the map keeps only their names and lists the WAD."""
+    bsp = B.Bsp.read(path)
+    plan = FixPlan(path)
+    plan.add("textures.extract", f"write the embedded textures to {wad}", None, wad=wad,
+             names=names)
+    if strip:
+        plan.add("textures.strip", "the map keeps only their names", None, crc_safe=False,
+                 names=names)
+        world = next((e for e in parse(bsp.entity_text) if e.get("classname") == "worldspawn"),
+                     {})
+        listed = wad_names(world.get("wad", ""))
+        if wad.lower() not in {n.lower() for n in listed}:
+            plan.add("worldspawn.wad", f"wad: + {wad}", None, client_visible=True,
+                     value=";".join([*listed, wad]) + ";")
+    return plan
+
+
 # -- saving -------------------------------------------------------------------
 
 @dataclass
@@ -337,6 +435,10 @@ def save_plan(plan: FixPlan, *, out_dir: Path | None = None, ent: bool = False,
             if not dest.exists():
                 shutil.copy2(str(op.data["source"]), dest)
                 result.written.append(dest)
+    _write_wads(plan, bsp, target_game, result)
+    if any(op.code in LUMP_OPS for op in plan.active) and ent:
+        result.notes.append("textures change the BSP: the BSP is written (not a .ent)")
+        ent = False
     name = result.map_name
     if ent:
         path = maps / f"{name}.ent"
@@ -347,7 +449,11 @@ def save_plan(plan: FixPlan, *, out_dir: Path | None = None, ent: bool = False,
             result.written.append(maps / f"{name}.bsp")
         result.crc_after = result.crc_before
     else:
+        original = B.Bsp.parse(bsp.write(), bsp.name)
+        wads = _wads_of(source, original, folders) if any(
+            op.code == "textures.embed" for op in plan.active) else []
         bsp.set_entity_text(entity_text(entities))
+        _apply_lump_ops(plan, bsp, wads, result)
         target = maps / f"{name}.bsp"
         if target.exists() and target.resolve() == source.resolve():
             backup = source.with_name(source.name + ".bak")
@@ -357,6 +463,13 @@ def save_plan(plan: FixPlan, *, out_dir: Path | None = None, ent: bool = False,
         target.write_bytes(bsp.write())
         result.written.append(target)
         result.crc_after = f"{bsp.crc():08x}"
+        reread = B.Bsp.read(target)
+        touched = {B.ENTITIES} | ({B.TEXTURES} if any(op.code in LUMP_OPS
+                                                      for op in plan.active) else set())
+        moved = [B.LUMP_NAMES[i] for i in range(B.LUMPS)
+                 if i not in touched and reread.lumps[i] != original.lumps[i]]
+        if moved:  # pragma: no cover - the writer copies other lumps byte for byte
+            result.notes.append(f"lumps changed unexpectedly: {', '.join(moved)}")
     if new_name or out_dir:
         for path, rel in _companions(game, source.stem):
             dest = target_game / rel.format(name=name)
@@ -378,6 +491,62 @@ def save_plan(plan: FixPlan, *, out_dir: Path | None = None, ent: bool = False,
     return result
 
 
+LUMP_OPS = ("textures.replace", "textures.embed", "textures.strip")
+
+
+def _wads_of(path: Path, bsp: B.Bsp, folders: list[Path] | None) -> list[WadIndex]:
+    """The WADs the map lists as read (before its worldspawn is changed)."""
+    from valve_qc_merger.mapkit.analyze import map_wads
+    return map_wads(path, bsp, folders)
+
+
+def _apply_lump_ops(plan: FixPlan, bsp: B.Bsp, wads: list[WadIndex],
+                    result: SaveResult) -> None:
+    """Texture operations that rewrite the textures lump, in plan order."""
+    from valve_qc_merger.mapkit import textures as tx
+    for op in plan.active:
+        if op.code == "textures.replace":
+            tx.replace_embedded(bsp, str(op.data["name"]), op.data["texture"])  # type: ignore[arg-type]
+        elif op.code == "textures.embed":
+            names = op.data.get("names")
+            done = tx.embed(bsp, wads, list(names) if isinstance(names, list) else None)
+            result.notes.append(f"embedded {len(done)} textures")
+        elif op.code == "textures.strip":
+            names = op.data.get("names")
+            tx.extract(bsp, list(names) if isinstance(names, list) else None, strip=True)
+
+
+def _write_wads(plan: FixPlan, bsp: B.Bsp, target_game: Path, result: SaveResult) -> None:
+    """Texture operations that write a WAD next to the map's game folder."""
+    from valve_qc_merger.mapkit import textures as tx
+    from valve_qc_merger.sprite.wad import Texture, miptex_lump, write_wad
+    for op in plan.active:
+        if op.code == "textures.extract":
+            names = op.data.get("names")
+            textures = tx.extract(bsp, list(names) if isinstance(names, list) else None)
+            path = target_game / str(op.data["wad"])
+            path.write_bytes(write_wad(textures))
+            result.written.append(path)
+        elif op.code == "textures.wad_copy":
+            new = op.data["texture"]
+            if not isinstance(new, Texture):
+                continue
+            source = WadIndex.read(Path(str(op.data["source"])))
+            lumps = []
+            for key, (offset, size) in sorted(source.entries.items(), key=lambda kv: kv[1][0]):
+                with open(source.path, "rb") as handle:
+                    handle.seek(offset)
+                    raw = handle.read(size)
+                name = raw[:16].split(b"\0", 1)[0].decode("latin-1") or key
+                if key == str(op.data["name"]).lower():
+                    new.name = name
+                    raw = miptex_lump(new)
+                lumps.append((name, raw))
+            path = target_game / str(op.data["wad"])
+            path.write_bytes(tx.wad_of_lumps(lumps))
+            result.written.append(path)
+
+
 def _write_res(map_path: Path, game: Path, folders: list[Path] | None) -> Path | None:
     if not map_path.exists():
         return None
@@ -390,4 +559,4 @@ def _write_res(map_path: Path, game: Path, folders: list[Path] | None) -> Path |
 
 
 __all__ = ["FixOptions", "FixPlan", "NEW_NAME_SUFFIX", "Operation", "SaveResult", "next_name",
-           "plan_fixes", "save_plan"]
+           "plan_embed", "plan_extract", "plan_fixes", "plan_replace_texture", "save_plan"]

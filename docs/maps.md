@@ -10,6 +10,9 @@ valve-qc-merger map check   MAP.bsp|FOLDER ... [--game DIR] [--json OUT] [--prof
 valve-qc-merger map preview MAP.bsp --out plan.png [--size 1024] [--game DIR] [--no-spawns] [--zmin Z] [--zmax Z]
 valve-qc-merger map fix     MAP.bsp [--spawns 48] [--spread uniform|near_existing] [--cso-entities remove|keep]
                             [--markers NAME:COUNT] [--source DIR] [--ent] [--out GAME_DIR] [--mapcycle FILE] [--dry-run]
+valve-qc-merger map textures MAP.bsp list [--missing|--big|--unused] | replace NAME IMAGE | embed [NAME ...] [--missing-only]
+                             | extract OUT.wad [--strip] | prune-wads   [--game DIR] [--out GAME_DIR] [--dry-run]
+valve-qc-merger map shared-wad MAP.bsp|FOLDER ... --out pack.wad [--game DIR]
 ```
 
 ## Where files are looked up
@@ -100,6 +103,32 @@ as it is. A change players must see (a new texture WAD) saves the map as
 `<map>_sp` (`_sp2` …) with its `.txt`, detail list, overview and `.ent`, and
 `--mapcycle` is pointed at the new name. After writing, the map is checked
 again; the exit code is 2 while critical issues remain.
+
+## `map textures`
+
+A map's textures are embedded (pixels in the BSP) or external (only a name;
+the pixels come from the first WAD of worldspawn's `wad` that has it).
+
+| Op | What | Map name |
+|---|---|---|
+| `list` | name, size, embedded / which WAD / MISSING, faces drawing it; `--missing`, `--big` (over 256), `--unused` | — |
+| `replace NAME IMAGE` | a PNG / TGA / BMP resized to the texture's own size, 256 colours (a `{` texture: 255 + see-through where the picture is) — embedded: in the BSP; external: in a copy of its WAD named `<wad>_<map>.wad` that the map then lists | new (`_sp`) |
+| `embed [NAME …]` | external textures copied into the BSP from the map's WADs (`--missing-only`: those not in Half-Life's own WADs); WADs nothing comes from any more leave the list | new |
+| `extract OUT.wad` | the embedded textures written to a WAD in the game folder; `--strip` leaves the map their names and lists the WAD | same / new with `--strip` |
+| `prune-wads` | WADs no texture comes from leave worldspawn's list | same |
+
+Why the size stays: a face's texture coordinates are texels, and its
+lightmap is laid out from the same vectors — another size would tile the
+texture differently, rescaling the vectors would move the light. Shrinking a
+texture over 256 needs a recompile.
+
+The writer checks itself: after writing, every lump but the entities and the
+textures must be byte for byte the original's.
+
+`map shared-wad` writes one WAD with every texture a pack of maps draws
+(embedded or from their WADs), each once: the same pixels under one name are
+kept once; one name with other pixels is reported as a conflict (the first
+map's is kept). Lumps are copied as they are (no mip levels redone).
 
 ## Maps and the CRC
 

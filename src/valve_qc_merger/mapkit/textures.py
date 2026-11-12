@@ -23,6 +23,7 @@ import numpy as np
 
 from valve_qc_merger.mapkit import bsp as B
 from valve_qc_merger.mapkit.geometry import MipTex, geometry
+from valve_qc_merger.sprite.wad import Texture
 
 MIPTEX = 0x43
 SPECIAL = ("sky", "aaatrigger", "clip", "null", "origin", "bevel", "hint", "skip",
@@ -177,5 +178,223 @@ def embedded_colour(bsp: B.Bsp, tex: MipTex) -> tuple[int, int, int] | None:
     return miptex_colour(bsp.lumps[B.TEXTURES][tex.offset:])
 
 
-__all__ = ["SPECIAL", "TextureUse", "WadIndex", "broken_animations", "embedded_colour",
-           "find_wads", "is_special", "miptex_colour", "texture_uses"]
+
+
+# -- changing textures ----------------------------------------------------------
+#
+# A texture keeps its size: its texture coordinates are texels (vecs), and the
+# lightmaps are laid out from the same vecs — another size would tile it
+# differently, scaling the vecs would move the light. A new picture is resized
+# to the texture's own W x H.
+
+
+def texture_from_image(name: str, rgba: np.ndarray, width: int, height: int) -> Texture:
+    """A miptex texture ``name`` from an RGBA picture, resized to ``width`` x
+    ``height``: 256 colours, or 255 + the key colour at index 255 where the
+    picture is see-through for a ``{`` texture."""
+    from valve_qc_merger.sprite.spr import quantize
+    from valve_qc_merger.sprite.wad import KEY_COLOUR, MIPTEX, _resize
+
+    image = _resize(rgba, width, height) if rgba.shape[:2] != (height, width) else rgba
+    transparent = name.startswith("{")
+    solid = image[..., 3] >= 128 if transparent else np.ones((height, width), bool)
+    shown = image[..., :3][solid]
+    count = 255 if transparent else 256
+    palette, _ = quantize(shown[:, None, :] if len(shown) else np.zeros((1, 1, 3), np.uint8),
+                          count)
+    pal = palette.astype(np.int32)
+    flat = image[..., :3].reshape(-1, 3).astype(np.int32)
+    indices = np.empty(len(flat), np.uint8)
+    for start in range(0, len(flat), 4096):
+        chunk = flat[start:start + 4096]
+        indices[start:start + 4096] = ((chunk[:, None, :] - pal[None]) ** 2).sum(2).argmin(1)
+    grid = indices.reshape(height, width)
+    colours = [tuple(int(c) for c in p) for p in palette]
+    if transparent:
+        grid[~solid] = 255
+        colours += [(0, 0, 0)] * (255 - len(colours)) + [KEY_COLOUR]
+    else:
+        colours += [(0, 0, 0)] * (256 - len(colours))
+    return Texture(name, width, height, grid.tobytes(), colours, MIPTEX)  # type: ignore[arg-type]
+
+
+def external_entry(name: str, width: int, height: int) -> bytes:
+    """A textures-lump entry with no pixels (found by name in the WADs)."""
+    return struct.pack("<16s2I4I", name.encode("latin-1")[:15].ljust(16, b"\0"), width,
+                       height, 0, 0, 0, 0)
+
+
+def lump_entries(bsp: B.Bsp) -> list[bytes | None]:
+    """Each texture's bytes in the textures lump as stored (None: an empty slot)."""
+    lump = bsp.lumps[B.TEXTURES]
+    table = geometry(bsp).textures
+    offsets = sorted({t.offset for t in table if t.offset >= 0} | {len(lump)})
+    out: list[bytes | None] = []
+    for tex in table:
+        if tex.offset < 0:
+            out.append(None)
+            continue
+        end = offsets[offsets.index(tex.offset) + 1]
+        out.append(lump[tex.offset:end] if tex.embedded else lump[tex.offset:tex.offset + 40])
+    return out
+
+
+def build_lump(entries: list[bytes | None]) -> bytes:
+    """A textures lump of ``entries`` (each 4-byte aligned, in order)."""
+    head = 4 + 4 * len(entries)
+    body = bytearray()
+    offsets = []
+    for entry in entries:
+        if entry is None:
+            offsets.append(-1)
+            continue
+        while (head + len(body)) % 4:
+            body += b"\0"
+        offsets.append(head + len(body))
+        body += entry
+    return struct.pack(f"<i{len(entries)}i", len(entries), *offsets) + bytes(body)
+
+
+def _index_of(bsp: B.Bsp, name: str) -> int:
+    for tex in geometry(bsp).textures:
+        if tex.offset >= 0 and tex.name.lower() == name.lower():
+            return tex.index
+    raise KeyError(f"the map has no texture {name}")
+
+
+def replace_embedded(bsp: B.Bsp, name: str, texture: Texture) -> None:
+    """Put ``texture``'s pixels into embedded texture ``name`` (same size)."""
+    from valve_qc_merger.sprite.wad import miptex_lump
+
+    index = _index_of(bsp, name)
+    tex = geometry(bsp).textures[index]
+    if (texture.width, texture.height) != (tex.width, tex.height):
+        raise ValueError(f"{name} is {tex.width}x{tex.height}, the picture "
+                         f"{texture.width}x{texture.height}")
+    entries = lump_entries(bsp)
+    texture.name = tex.name
+    entries[index] = miptex_lump(texture)
+    bsp.set_lump(B.TEXTURES, build_lump(entries))
+
+
+def embed(bsp: B.Bsp, wads: list[WadIndex], names: list[str] | None = None) -> list[str]:
+    """Copy external textures (all, or ``names``) from ``wads`` into the
+    map. Returns the names embedded."""
+    entries = lump_entries(bsp)
+    wanted = {n.lower() for n in names} if names else None
+    done = []
+    for tex in geometry(bsp).textures:
+        if tex.offset < 0 or tex.embedded or (wanted is not None
+                                              and tex.name.lower() not in wanted):
+            continue
+        for wad in wads:
+            lump = wad.lump(tex.name)
+            if lump is not None:
+                entries[tex.index] = tex.name.encode("latin-1")[:15].ljust(16, b"\0") + lump[16:]
+                done.append(tex.name)
+                break
+    if done:
+        bsp.set_lump(B.TEXTURES, build_lump(entries))
+    return done
+
+
+def extract(bsp: B.Bsp, names: list[str] | None = None, strip: bool = False) -> list[Texture]:
+    """The embedded textures (all, or ``names``) as WAD textures; ``strip``
+    leaves them external in the map (their pixels then come from a WAD)."""
+    from valve_qc_merger.sprite.wad import read_miptex
+
+    entries = lump_entries(bsp)
+    wanted = {n.lower() for n in names} if names else None
+    out = []
+    for tex in geometry(bsp).textures:
+        entry = entries[tex.index] if tex.offset >= 0 else None
+        if entry is None or not tex.embedded or (wanted is not None
+                                                  and tex.name.lower() not in wanted):
+            continue
+        out.append(read_miptex(entry, tex.name, MIPTEX))
+        if strip:
+            entries[tex.index] = external_entry(tex.name, tex.width, tex.height)
+    if strip and out:
+        bsp.set_lump(B.TEXTURES, build_lump(entries))
+    return out
+
+
+def pixel_hash(texture: Texture) -> str:
+    import hashlib
+    digest = hashlib.sha1(texture.indices)
+    digest.update(bytes(int(c) for rgb in texture.palette for c in rgb))
+    return digest.hexdigest()
+
+
+def wad_of_lumps(lumps: list[tuple[str, bytes]]) -> bytes:
+    """A WAD3 of miptex lumps written as they are (no mip levels redone)."""
+    directory = 12 + sum(len(lump) for _n, lump in lumps)
+    out = [struct.pack("<4s2i", b"WAD3", len(lumps), directory)]
+    entries, position = [], 12
+    for name, lump in lumps:
+        raw = name.encode("latin-1")[:15].ljust(16, b"\0")
+        entries.append(struct.pack("<3iBBH16s", position, len(lump), len(lump), MIPTEX, 0, 0,
+                                   raw))
+        out.append(lump)
+        position += len(lump)
+    return b"".join(out + entries)
+
+
+@dataclass
+class SharedWad:
+    textures: list[Texture] = field(default_factory=list)
+    lumps: list[tuple[str, bytes]] = field(default_factory=list)  # as found, for the WAD
+    used_by: dict[str, list[str]] = field(default_factory=dict)  # texture -> maps
+    conflicts: list[str] = field(default_factory=list)  # one name, other pixels
+    missing: list[str] = field(default_factory=list)  # "map: texture" found nowhere
+
+
+def shared_wad(maps: list[tuple[B.Bsp, list[WadIndex]]]) -> SharedWad:
+    """One WAD for a pack of maps: every texture they draw (embedded or
+    from their WADs) once — the same pixels under one name are kept once,
+    one name with other pixels is a conflict (the first map's is kept; tool
+    textures — sky, clip, null … — are not drawn and never conflict)."""
+    from valve_qc_merger.sprite.wad import read_miptex
+
+    result = SharedWad()
+    seen: dict[str, str] = {}
+    for bsp, wads in maps:
+        entries = lump_entries(bsp)
+        for tex in geometry(bsp).textures:
+            if tex.offset < 0 or not tex.name:
+                continue
+            texture, raw = None, b""
+            if tex.embedded and entries[tex.index] is not None:
+                raw = entries[tex.index] or b""
+                texture = read_miptex(raw, tex.name, MIPTEX)
+            else:
+                for wad in wads:
+                    lump = wad.lump(tex.name)
+                    if lump is not None:
+                        raw = lump
+                        texture = read_miptex(lump, tex.name, MIPTEX)
+                        break
+            if texture is None:
+                if not tex.name.lower().startswith(SPECIAL):
+                    result.missing.append(f"{bsp.name}: {tex.name}")
+                continue
+            key = tex.name.lower()
+            result.used_by.setdefault(tex.name, [])
+            if bsp.name not in result.used_by[tex.name]:
+                result.used_by[tex.name].append(bsp.name)
+            digest = pixel_hash(texture)
+            if key in seen:
+                if seen[key] != digest and tex.name not in result.conflicts \
+                        and not key.startswith(SPECIAL):
+                    result.conflicts.append(tex.name)
+                continue
+            seen[key] = digest
+            result.textures.append(texture)
+            result.lumps.append((tex.name, raw))
+    return result
+
+
+__all__ = ["SPECIAL", "SharedWad", "TextureUse", "WadIndex", "broken_animations", "build_lump",
+           "embed", "embedded_colour", "external_entry", "extract", "find_wads", "is_special",
+           "lump_entries", "miptex_colour", "pixel_hash", "replace_embedded", "shared_wad",
+           "texture_from_image", "texture_uses", "wad_of_lumps"]

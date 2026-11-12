@@ -26,6 +26,14 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
   markers, the WAD list tidied, `.res` written; the BSP (with a `.bak`) or a
   ReHLDS `.ent`. All 8 maps of the CSO ZM pack: 48 + 48 spawns, no critical
   issue, CRC unchanged.
+- **`map textures MAP list | replace NAME IMAGE | embed | extract OUT.wad
+  [--strip] | prune-wads`** and **`map shared-wad MAPS --out pack.wad`**:
+  texture replacement at the texture's own size (PNG / TGA / BMP read
+  without Pillow; `{` textures keep see-through), embedded or in a copy of
+  its WAD; embedding from the map's WADs, extraction to a WAD; one WAD for a
+  pack with duplicates kept once and name conflicts reported. Changes the
+  CRC → the map is saved as `<map>_sp`; every other lump checked byte for
+  byte after writing.
 - **`map preview MAP --out plan.png`**: the map from above in its textures'
   colours, shaded by height, with the spawns and where they face.
 - New `mapkit` package (no Qt): BSP v30 read / write lump by lump (an
