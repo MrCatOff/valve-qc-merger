@@ -34,6 +34,12 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
   pack with duplicates kept once and name conflicts reported. Changes the
   CRC → the map is saved as `<map>_sp`; every other lump checked byte for
   byte after writing.
+- **`map props MAPS [--shared NAME] [--gc]`**: a map's prop models
+  (`cycler_sprite`, `env_sprite`) merged with merge-props into one model,
+  compiled, each checked against its original (first frame within 0.05
+  units), named `models/<map>/<name>_<hash8>.mdl` so clients re-download a
+  changed set; entities get `model` / `body` / `sequence`, the CRC stays. The
+  CSO ZM pack: 16 → 1, 14 → 1, 7 → 1, 20 → 2 model slots.
 - **`map preview MAP --out plan.png`**: the map from above in its textures'
   colours, shaded by height, with the spawns and where they face.
 - New `mapkit` package (no Qt): BSP v30 read / write lump by lump (an

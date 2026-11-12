@@ -11,6 +11,8 @@
     valve-qc-merger map textures MAP.bsp extract OUT.wad [--strip]
     valve-qc-merger map textures MAP.bsp prune-wads
     valve-qc-merger map shared-wad MAP.bsp ... --out pack.wad
+    valve-qc-merger map props MAP.bsp ... [--out GAME_DIR] [--name NAME] [--shared NAME]
+                              [--studiomdl PATH] [--gc] [--dry-run]
 
 ``--game`` adds a game folder the map's files are looked up in (a clean
 ``cstrike``; ``valve`` next to it is searched too). Exit codes of
@@ -127,6 +129,27 @@ class MapCommand(Command):
         shared.add_argument("--out", type=Path, required=True, help="the WAD to write")
         shared.add_argument("--game", type=Path, action="append", default=[], metavar="DIR")
 
+        props = actions.add_parser("props", help="merge a map's prop models into one model "
+                                   "(merge-props): fewer model slots, the CRC stays",
+                                   description="merge a map's prop models into one model")
+        props.add_argument("maps", nargs="+", type=Path, metavar="MAP")
+        props.add_argument("--out", type=Path, metavar="GAME_DIR",
+                           help="the game folder the merged models and maps go to "
+                                "(default: the map's own)")
+        props.add_argument("--name", help="the merged model's name (default <map>_props)")
+        props.add_argument("--shared", metavar="NAME",
+                           help="one set of merged models for all the maps given")
+        props.add_argument("--studiomdl", type=Path, help="studiomdl to compile with "
+                           "(default: VQM_STUDIOMDL, PATH, the bundled one)")
+        props.add_argument("--game", type=Path, action="append", default=[], metavar="DIR",
+                           help="a game folder to find the models in (repeatable)")
+        props.add_argument("--keep-work", type=Path, metavar="DIR",
+                           help="keep the decompiled and merged sources here")
+        props.add_argument("--gc", action="store_true",
+                           help="delete merged parts no map names any more")
+        props.add_argument("--dry-run", action="store_true",
+                           help="list what would merge, write nothing")
+
     def run(self, args: argparse.Namespace) -> int:
         if args.action == "check":
             return self._check(args)
@@ -136,6 +159,8 @@ class MapCommand(Command):
             return self._textures(args)
         if args.action == "shared-wad":
             return self._shared_wad(args)
+        if args.action == "props":
+            return self._props(args)
         return self._preview(args)
 
     def _check(self, args: argparse.Namespace) -> int:
@@ -339,6 +364,60 @@ class MapCommand(Command):
         for item in result.missing:
             print(f"  missing: {item}")
         return EXIT_WARNINGS if result.conflicts or result.missing else EXIT_CLEAN
+
+    def _props(self, args: argparse.Namespace) -> int:
+        from valve_qc_merger.mapkit.analyze import game_folder
+        from valve_qc_merger.mapkit.fix import save_plan
+        from valve_qc_merger.mapkit.props import (
+            collect,
+            find_studiomdl,
+            merge_props,
+            stale_parts,
+        )
+
+        maps = _maps(args.maps)
+        if not maps:
+            print("no .bsp files found")
+            return EXIT_UNREADABLE
+        groups = [maps] if args.shared or len(maps) == 1 else [[m] for m in maps]
+        code = EXIT_CLEAN
+        for group in groups:
+            name = args.shared or args.name or f"{group[0].stem}_props"
+            folder = args.shared or group[0].stem
+            out = args.out or game_folder(group[0])
+            if args.dry_run:
+                for prop in collect(group, args.game):
+                    print(f"  {prop.path:<40} {len(prop.uses):>4} entities  "
+                          + (f"apart: {prop.reason}" if prop.reason else "merge"))
+                continue
+            studiomdl = find_studiomdl(args.studiomdl)
+            if studiomdl is None:
+                print("studiomdl not found: pass --studiomdl (or set VQM_STUDIOMDL)")
+                return EXIT_UNREADABLE
+            result = merge_props(group, out, name, folders=args.game, studiomdl=studiomdl,
+                                 folder=folder, keep_work=args.keep_work)
+            for line in result.log:
+                if line.startswith(("error", "studiomdl failed")) or "left as it was" in line:
+                    print(f"  {line}")
+            for prop in result.apart:
+                print(f"  apart: {prop.path} — {prop.reason}")
+            print(f"{', '.join(m.stem for m in group)}: {len(result.merged)} models -> "
+                  f"{len(result.parts)} merged ({', '.join(result.parts) or 'none'}); "
+                  f"model slots {result.slots_before} -> {result.slots_after}")
+            if not result.parts:
+                code = max(code, EXIT_WARNINGS)
+                continue
+            for plan in result.plans:
+                if not plan.active:
+                    continue
+                saved = save_plan(plan, out_dir=args.out, folders=args.game)
+                print(f"  {saved.map_name}: {len(plan.active)} entity changes, CRC "
+                      f"{saved.crc_before} -> {saved.crc_after}")
+            if args.gc:
+                for path in stale_parts(out, folder, name):
+                    path.unlink()
+                    print(f"  deleted {path} (no map names it)")
+        return code
 
 
 __all__ = ["MapCommand"]

@@ -13,6 +13,7 @@ valve-qc-merger map fix     MAP.bsp [--spawns 48] [--spread uniform|near_existin
 valve-qc-merger map textures MAP.bsp list [--missing|--big|--unused] | replace NAME IMAGE | embed [NAME ...] [--missing-only]
                              | extract OUT.wad [--strip] | prune-wads   [--game DIR] [--out GAME_DIR] [--dry-run]
 valve-qc-merger map shared-wad MAP.bsp|FOLDER ... --out pack.wad [--game DIR]
+valve-qc-merger map props MAP.bsp|FOLDER ... [--out GAME_DIR] [--name NAME] [--shared NAME] [--studiomdl PATH] [--gc] [--dry-run]
 ```
 
 ## Where files are looked up
@@ -129,6 +130,34 @@ textures must be byte for byte the original's.
 (embedded or from their WADs), each once: the same pixels under one name are
 kept once; one name with other pixels is reported as a conflict (the first
 map's is kept). Lumps are copied as they are (no mip levels redone).
+
+## `map props`
+
+A map's prop models — the `.mdl` its `cycler_sprite` and `env_sprite`
+entities show — merged into one model (or a few) with
+[`merge-props`](merge-props.md): `body` picks the model. The map then takes one
+or two model slots instead of one per model (the CSO ZM pack: zm_forbidden
+16 → 1, zm_requiem 14 → 1, zm_rest 7 → 1, zm_shoreline 20 → 2).
+
+1. The models are decompiled (CSO v9 too) and merged; each part is compiled
+   with studiomdl (`--studiomdl`, `VQM_STUDIOMDL`, `PATH` or the bundled one).
+2. Every merged model's first frame in the compiled part is compared with its
+   original: a model more than 0.05 units off is left as it was.
+3. A part is written as `models/<map>/<name>_<hash8>.mdl` (with
+   `<name>.json`: which model is which `body` and sequence). The hash is the
+   file's: a changed set of props is a new file name, so clients that cached
+   the old one download the new one (they never re-download a file of the
+   same name).
+4. The entities are rewritten: `model` the part, `body` the model's number in
+   it, `sequence` its sequence's new number; `rendermode`, `scale`, `angles` …
+   stay. Only the entity lump changes: the map keeps its name and CRC.
+
+Left as they are, with the reason printed: models an entity shows with `body`
+or `skin` other than 0, models not found, models merge-props cannot fit,
+anything `cycler` shows (ReGameDLL stops a `cycler`'s animation when its
+`sequence` is not 0). `--shared NAME` merges the props of all the maps given
+into one set (`models/NAME/`); `--gc` deletes parts no map of the game folder
+names any more; `--dry-run` lists what would merge.
 
 ## Maps and the CRC
 
