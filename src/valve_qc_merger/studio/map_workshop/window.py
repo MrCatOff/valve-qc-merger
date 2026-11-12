@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QImage, QKeyEvent, QPen, QPixmap
+from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QCursor, QImage, QKeyEvent, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -61,6 +61,7 @@ from valve_qc_merger.mapkit.hull import EMPTY, STAND, point_contents
 from valve_qc_merger.mapkit.render import Plan, render_plan
 from valve_qc_merger.mapkit.rules import known_class
 from valve_qc_merger.mapkit.spawns import CT, SpawnOptions, T, generate
+from valve_qc_merger.mapkit.walk import Controls, Walker
 from valve_qc_merger.studio import dialog_kit as kit
 from valve_qc_merger.studio import theme
 from valve_qc_merger.studio.icons import icon
@@ -247,13 +248,91 @@ class PlanView(QGraphicsView):
 
 class MapViewport(Viewport):
     """The 3D view: orbit / pan / zoom with the mouse, fly with W A S D
-    (Q / E down / up, Shift faster)."""
+    (Q / E down / up, Shift faster) — or walk the map as a player
+    (:meth:`start_walk`): the mouse looks, W A S D run, Space jumps, Ctrl
+    crouches, V flies through walls (noclip), Esc stops."""
+
+    walk_status = Signal(str)
+    walk_stopped = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.walker: Walker | None = None
+        self._keys: set[int] = set()
+        self._clock = QElapsedTimer()
+        self._tick = QTimer(self)
+        self._tick.setInterval(16)
+        self._tick.timeout.connect(self._walk_step)
+        self.sensitivity = 0.15
+
+    # -- walking ------------------------------------------------------------------
+
+    def start_walk(self, walker: Walker) -> None:
+        self.walker = walker
+        self._keys.clear()
+        self.state.show_grid = False
+        self._place_camera()
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.BlankCursor)
+        self.setFocus()
+        self._centre_cursor()
+        self._clock.start()
+        self._tick.start()
+        self.walk_status.emit(walker.status())
+
+    def stop_walk(self) -> None:
+        if self.walker is None:
+            return
+        self._tick.stop()
+        self.walker = None
+        self.state.camera.walk_eye = None
+        self.setMouseTracking(False)
+        self.unsetCursor()
+        self.frame_model()
+        self.walk_stopped.emit()
+
+    def _centre_cursor(self) -> None:
+        QCursor.setPos(self.mapToGlobal(self.rect().center()))
+
+    def _place_camera(self) -> None:
+        assert self.walker is not None
+        eye = self.walker.eye
+        look = eye + self.walker.forward() * 64.0
+        self.state.camera.walk_eye = (float(eye[0]), float(eye[1]), float(eye[2]))
+        self.state.camera.target = (float(look[0]), float(look[1]), float(look[2]))
+
+    def _walk_step(self) -> None:
+        if self.walker is None:
+            return
+        dt = self._clock.restart() / 1000.0
+        keys = self._keys
+        controls = Controls(
+            forward=float((Qt.Key.Key_W in keys) - (Qt.Key.Key_S in keys)),
+            side=float((Qt.Key.Key_D in keys) - (Qt.Key.Key_A in keys)),
+            up=float((Qt.Key.Key_Space in keys) - (Qt.Key.Key_Control in keys)),
+            jump=Qt.Key.Key_Space in keys,
+            duck=Qt.Key.Key_Control in keys or Qt.Key.Key_C in keys)
+        turn = float((Qt.Key.Key_Right in keys) - (Qt.Key.Key_Left in keys))
+        if turn:
+            self.walker.look(-turn * 120.0 * dt, 0.0)
+        self.walker.step(dt, controls)
+        self._place_camera()
+        self.walk_status.emit(self.walker.status())
+        self.update()
+
+    # -- input --------------------------------------------------------------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt override
+        if self.walker is not None:
+            key = event.key()
+            if key == Qt.Key.Key_Escape:
+                self.stop_walk()
+            elif key == Qt.Key.Key_V and not event.isAutoRepeat():
+                self.walker.noclip = not self.walker.noclip
+            elif not event.isAutoRepeat():
+                self._keys.add(key)
+            return
         camera = self.state.camera
         step = max(camera.distance * 0.05, 16.0) * (4 if event.modifiers()
                                                     & Qt.KeyboardModifier.ShiftModifier else 1)
@@ -272,6 +351,40 @@ class MapViewport(Viewport):
         tx, ty, tz = camera.target
         camera.target = (tx + move[0] * step, ty + move[1] * step, tz + move[2] * step)
         self.update()
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt override
+        if self.walker is not None and not event.isAutoRepeat():
+            self._keys.discard(event.key())
+            return
+        super().keyReleaseEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if self.walker is None:
+            super().mouseMoveEvent(event)
+            return
+        centre = self.rect().center()
+        dx = event.position().x() - centre.x()
+        dy = event.position().y() - centre.y()
+        if abs(dx) < 1 and abs(dy) < 1:
+            return
+        self.walker.look(-dx * self.sensitivity, dy * self.sensitivity)
+        self._centre_cursor()
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if self.walker is None:
+            super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if self.walker is None:
+            super().mouseDoubleClickEvent(event)
+
+    def wheelEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if self.walker is None:
+            super().wheelEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        self._keys.clear()
+        super().focusOutEvent(event)
 
 
 # -- dialogs -----------------------------------------------------------------------
@@ -660,16 +773,62 @@ class MapWorkshop(QDialog):
         load.clicked.connect(self._show_3d)
         self.show_spawns = QCheckBox("Spawns")
         self.show_spawns.setChecked(True)
-        row.addWidget(load)
-        row.addWidget(self.show_spawns)
+        self.show_light = QCheckBox("Light")
+        self.show_light.setChecked(True)
+        self.show_light.setToolTip("Faces as bright as the map's lightmaps make them")
+        self.spawn_box = QComboBox()
+        self.spawn_box.setMinimumWidth(200)
+        walk = QPushButton(icon("play"), "Walk from spawn")
+        walk.setToolTip("Appear at the spawn as a player and run around: the mouse looks, "
+                        "W A S D run, Space jumps, Ctrl crouches, V noclip, Esc stops")
+        walk.clicked.connect(self._walk)
+        for widget in (load, self.show_spawns, self.show_light):
+            row.addWidget(widget)
         row.addStretch(1)
-        row.addWidget(kit.hint("Left drag: orbit · right drag: pan · wheel: zoom · W A S D, "
-                               "Q / E: fly (Shift: faster) · double click: whole map"))
+        row.addWidget(self.spawn_box)
+        row.addWidget(walk)
         column.addLayout(row)
+        column.addWidget(kit.hint(
+            "Orbit: left drag · pan: right drag · zoom: wheel · W A S D, Q / E fly · double "
+            "click: the whole map.  Walking: the mouse looks, W A S D run, Space jumps, Ctrl "
+            "crouches, V noclip, Esc stops. Doors and func_walls are walked through."))
         self.viewport = MapViewport()
         self.viewport.state.show_grid = False
+        self.viewport.walk_status.connect(lambda text: self.walk_label.setText(text))
+        self.viewport.walk_stopped.connect(lambda: self.walk_label.setText(""))
         column.addWidget(self.viewport, 1)
+        self.walk_label = QLabel("")
+        self.walk_label.setStyleSheet("font-family: Menlo, Consolas, monospace;")
+        column.addWidget(self.walk_label)
         return page
+
+    def _fill_spawns(self, state: MapState) -> None:
+        self.spawn_box.clear()
+        for index, entity in enumerate(state.planned_entities()):
+            cls = entity.get("classname")
+            if cls in (CT, T) and _origin(entity) is not None:
+                self.spawn_box.addItem(f"{'CT' if cls == CT else 'T'} #{index}  "
+                                       f"{entity.get('origin')}", index)
+
+    def _walk(self) -> None:
+        from valve_qc_merger.mapkit.walk import Walker as MapWalker
+        state = self.current()
+        if state is None:
+            return
+        if self.viewport.scene is None or self.viewport.scene.name != state.name:
+            self._show_3d()
+        index = self.spawn_box.currentData()
+        entities = state.planned_entities()
+        if index is None or index >= len(entities):
+            self._notes(["the map has no spawn to walk from"])
+            return
+        entity = entities[int(index)]
+        origin = _origin(entity)
+        if origin is None:
+            return
+        parts = (entity.get("angles", "0 0 0").split() + ["0", "0", "0"])
+        walker = MapWalker.at_spawn(state.bsp, origin, float(parts[1]))
+        self.viewport.start_walk(walker)
 
     def _show_3d(self) -> None:
         from valve_qc_merger.studio.map_workshop.scene3d import map_scene
@@ -677,8 +836,10 @@ class MapWorkshop(QDialog):
         if state is None:
             return
         wads = map_wads(state.path, state.bsp, self.state.folders)
+        self.viewport.stop_walk()
         scene = map_scene(state.bsp, wads, state.planned_entities(),
-                          self._work / state.name, self.show_spawns.isChecked())
+                          self._work / state.name, self.show_spawns.isChecked(),
+                          self.show_light.isChecked())
         self.viewport.set_scene(scene)
         self.viewport.state.camera.pitch = 40.0
         self.viewport.setFocus()
@@ -1443,6 +1604,8 @@ class MapWorkshop(QDialog):
         index = self.tabs.currentIndex()
         if index == 1:
             self._show_plan(state)
+        elif index == 2:
+            self._fill_spawns(state)
         elif index == 3:
             self._show_entities(state)
         elif index == 4:

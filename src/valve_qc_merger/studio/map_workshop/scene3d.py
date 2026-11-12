@@ -21,6 +21,10 @@ from valve_qc_merger.sprite.wad import MIPTEX, read_miptex
 from valve_qc_merger.studio.scene import Batch, ModelScene, SequenceData
 
 CT_BOX, T_BOX = "spawn_ct", "spawn_t"
+LIGHT_LEVELS = 8  # the light of a face, rounded to one of these (a texture drawn darker)
+LIGHT_GAMMA = 2.2  # the engine brightens lightmaps by a gamma curve (lightgamma 2.5)
+LIGHT_SCALE = 1.6
+LIGHT_MIN, LIGHT_MAX = 0.3, 1.9
 BOX_COLOURS = {CT_BOX: (80, 150, 255), T_BOX: (255, 90, 80)}
 HIDDEN = SPECIAL + ("aaatrigger", "trigger")
 
@@ -51,6 +55,63 @@ def _texture_files(bsp: B.Bsp, wads: list[WadIndex], folder: Path) -> dict[str, 
         path = folder / f"{name}.bmp"
         path.write_bytes(write_bmp8(Bmp8(1, 1, [colour] + [(0, 0, 0)] * 255, bytearray(1))))
         out[name] = path
+    return out
+
+
+def face_light(bsp: B.Bsp) -> np.ndarray:
+    """The average light of every face from the map's lightmaps (0.3..1.9,
+    1 = as the texture is; -1: no lightmap, drawn full bright)."""
+    from valve_qc_merger.mapkit.geometry import TEX_SPECIAL
+    geo = geometry(bsp)
+    lighting = np.frombuffer(bsp.lumps[B.LIGHTING], np.uint8)
+    out = np.full(len(geo.faces), -1.0)
+    if not len(lighting) or not len(geo.faces):
+        return out
+    extents = geo.surface_extents()
+    flags = geo.texinfo["flags"][np.minimum(geo.faces["texinfo"], len(geo.texinfo) - 1)]
+    for face in range(len(geo.faces)):
+        offset = int(geo.faces[face]["lightofs"])
+        if offset < 0 or flags[face] & TEX_SPECIAL or geo.faces[face]["styles"][0] == 255:
+            continue
+        w, h = int(extents[face, 0]) // 16 + 1, int(extents[face, 1]) // 16 + 1
+        samples = lighting[offset:offset + w * h * 3]
+        if len(samples):
+            value = (float(samples.mean()) / 255.0) ** (1.0 / LIGHT_GAMMA) * LIGHT_SCALE
+            out[face] = min(max(value, LIGHT_MIN), LIGHT_MAX)
+    return out
+
+
+def _level(light: float) -> int:
+    """A face's light -> one of ``LIGHT_LEVELS`` (the full-bright level when -1)."""
+    if light < 0:
+        return LIGHT_LEVELS
+    return int(round((light - LIGHT_MIN) / (LIGHT_MAX - LIGHT_MIN) * (LIGHT_LEVELS - 1)))
+
+
+def _level_factor(level: int) -> float:
+    if level >= LIGHT_LEVELS:
+        return 1.0
+    return LIGHT_MIN + level / (LIGHT_LEVELS - 1) * (LIGHT_MAX - LIGHT_MIN)
+
+
+def _lit_textures(textures: dict[str, Path | None], wanted: set[tuple[str, int]],
+                  folder: Path) -> dict[str, Path | None]:
+    """``<texture>@<level>`` BMPs: each texture's palette scaled by a light level."""
+    from valve_qc_merger.merge_view.bmp8 import read_bmp8
+    out: dict[str, Path | None] = {}
+    for name, level in sorted(wanted):
+        source = textures.get(name)
+        key = f"{name}@{level}"
+        if source is None:
+            out[key] = None
+            continue
+        image = read_bmp8(source.read_bytes())
+        factor = _level_factor(level)
+        palette = [tuple(min(int(c * factor), 255) for c in rgb) for rgb in image.palette]
+        path = folder / f"{source.stem}_{level}.bmp"
+        path.write_bytes(write_bmp8(Bmp8(image.width, image.height, palette,  # type: ignore[arg-type]
+                                         image.pixels)))
+        out[key] = path
     return out
 
 
@@ -88,13 +149,15 @@ def _box(origin: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def map_scene(bsp: B.Bsp, wads: list[WadIndex], entities: list[dict[str, str]],
-              work: Path, spawns: bool = True) -> ModelScene:
-    """The scene of ``bsp`` with ``entities`` (the planned ones)."""
+              work: Path, spawns: bool = True, light: bool = True) -> ModelScene:
+    """The scene of ``bsp`` with ``entities`` (the planned ones); ``light``:
+    every face as bright as its lightmap says (on average)."""
     geo = geometry(bsp)
     textures = _texture_files(bsp, wads, work)
     names = [t.name for t in geo.textures]
     normals = geo.face_normals()
     tex_of = geo.face_texture()
+    lights = face_light(bsp) if light else np.full(len(geo.faces), -1.0)
     per_texture: dict[str, tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]] = {}
     for face, offset in _model_faces(bsp, entities):
         t = int(tex_of[face])
@@ -111,10 +174,14 @@ def map_scene(bsp: B.Bsp, wads: list[WadIndex], entities: list[dict[str, str]],
         tt = (poly @ vecs[1, :3] + vecs[1, 3]) / height
         uv = np.column_stack([s, 1.0 - tt])
         fan = np.array([[0, k, k + 1] for k in range(1, len(poly) - 1)]).ravel()
-        pos, nrm, uvs = per_texture.setdefault(names[t], ([], [], []))
+        material = f"{names[t]}@{_level(float(lights[face]))}" if light else names[t]
+        pos, nrm, uvs = per_texture.setdefault(material, ([], [], []))
         pos.append(poly[fan] + offset)
         nrm.append(np.repeat(normals[face][None], len(fan), axis=0))
         uvs.append(uv[fan])
+    if light:
+        wanted = {(m.rsplit("@", 1)[0], int(m.rsplit("@", 1)[1])) for m in per_texture}
+        textures.update(_lit_textures(textures, wanted, work))
     batches = []
     for name, (pos, nrm, uvs) in per_texture.items():
         points = np.concatenate(pos)

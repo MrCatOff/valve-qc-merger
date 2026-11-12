@@ -133,3 +133,55 @@ def test_the_main_window_opens_it(app, tmp_path: Path) -> None:  # noqa: ANN001
     finally:
         window.map_workshop.close()
         window.close()
+
+
+def test_walking_from_a_spawn(workshop, app, tmp_path: Path) -> None:  # noqa: ANN001
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    from valve_qc_merger.mapkit.walk import Controls, Walker
+    state = workshop.open_map(_map(tmp_path))
+    workshop.tabs.setCurrentIndex(2)
+    app.processEvents()
+    assert workshop.spawn_box.count() == 2
+    viewport = workshop.viewport
+    walker = Walker.at_spawn(state.bsp, (-400.0, 0.0, 36.0), 0.0)
+    viewport.start_walk(walker)
+    start = walker.origin.copy()
+    viewport.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_W,
+                                     Qt.KeyboardModifier.NoModifier))
+    for _ in range(30):
+        viewport._clock.restart()
+        walker.step(1 / 60, Controls(forward=1))
+    viewport._walk_step()
+    assert walker.origin[0] > start[0] + 50
+    assert viewport.state.camera.walk_eye is not None
+    assert "on the ground" in workshop.walk_label.text()
+    viewport.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                     Qt.KeyboardModifier.NoModifier))
+    assert viewport.walker is None and viewport.state.camera.walk_eye is None
+
+
+def test_issue_focus_texture_compare_and_groups(workshop, app, tmp_path: Path) -> None:  # noqa: ANN001
+    from valve_qc_merger.preview.render import encode_png
+    path = _map(tmp_path)
+    workshop.open_map(path)
+    row = next(r for r in range(workshop.issues.rowCount())
+               if workshop.issues.item(r, 1).text() == "missing_model")
+    workshop._reveal_issue(row, 0)
+    assert workshop.tabs.currentIndex() == 1
+    rings = [i for i in workshop.plan_view.scene().items() if i.zValue() == 20]
+    assert rings
+    picture = tmp_path / "x.png"
+    rgba = np.zeros((16, 16, 4), np.uint8)
+    rgba[..., 1], rgba[..., 3] = 200, 255
+    picture.write_bytes(encode_png(rgba))
+    workshop._texture_dropped("floor_b", str(picture))
+    before, after = workshop._texture_versions("floor_b")
+    assert before is not None and after is not None and after.rgba()[0, 0, 1] > 150
+    workshop.tabs.setCurrentIndex(5)
+    app.processEvents()
+    if workshop.props_table.rowCount():
+        workshop.props_table.item(0, 2).setText("junk")
+        groups = path.with_name("zm_ws_props_groups.json")
+        assert groups.is_file() and "junk" in groups.read_text()

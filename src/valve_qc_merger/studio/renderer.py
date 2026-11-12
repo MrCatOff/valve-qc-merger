@@ -191,8 +191,12 @@ class Camera:
     # hands are often tuned for 84
     fp_fov: float = FP_FOV
     first_person: bool = False
+    # walking a map: the eye is here and looks at ``target`` (the map workshop)
+    walk_eye: tuple[float, float, float] | None = None
 
     def eye(self) -> QVector3D:
+        if self.walk_eye is not None:
+            return QVector3D(*self.walk_eye)
         if self.first_person:
             return QVector3D(0.0, 0.0, 0.0)
         y, p = math.radians(self.yaw), math.radians(self.pitch)
@@ -203,7 +207,9 @@ class Camera:
 
     def view(self) -> QMatrix4x4:
         m = QMatrix4x4()
-        if self.first_person:
+        if self.walk_eye is not None:
+            m.lookAt(QVector3D(*self.walk_eye), QVector3D(*self.target), QVector3D(0, 0, 1))
+        elif self.first_person:
             # a view model faces -Y in SMD space (+X in game)
             m.lookAt(QVector3D(0, 0, 0), QVector3D(0, -1, 0), QVector3D(0, 0, 1))
         else:
@@ -212,6 +218,9 @@ class Camera:
 
     def projection(self, aspect: float) -> QMatrix4x4:
         m = QMatrix4x4()
+        if self.walk_eye is not None:
+            m.perspective(self.fov, max(aspect, 1e-3), 2.0, 16000.0)
+            return m
         near = 0.5 if self.first_person else max(self.distance * 0.01, 0.05)
         far = 4000.0 if self.first_person else max(self.distance * 20.0, 100.0)
         fov = self.fp_fov if self.first_person else self.fov

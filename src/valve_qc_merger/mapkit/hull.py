@@ -146,7 +146,11 @@ def trace_hull(bsp: B.Bsp, start: np.ndarray, end: np.ndarray, hull: int = STAND
                model: int = 0) -> Trace:
     """Move ``hull``'s box from ``start`` to ``end`` through brush model
     ``model``: where it stops and the wall it hit."""
-    tree = _Hull(bsp, hull, model)
+    key = f"hull{hull}:{model}"
+    tree = bsp._cache.get(key)
+    if not isinstance(tree, _Hull):
+        tree = _Hull(bsp, hull, model)
+        bsp._cache[key] = tree
     a = np.asarray(start, np.float64)
     b = np.asarray(end, np.float64)
     trace = Trace(end=b.copy())
