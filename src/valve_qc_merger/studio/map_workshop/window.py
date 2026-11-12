@@ -9,6 +9,7 @@ import json
 import math
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -53,7 +55,7 @@ from valve_qc_merger.mapkit.fix import (
     plan_embed,
     plan_extract,
     plan_fixes,
-    plan_replace_texture,
+    plan_replace_textures,
 )
 from valve_qc_merger.mapkit.hull import EMPTY, STAND, point_contents
 from valve_qc_merger.mapkit.render import Plan, render_plan
@@ -159,6 +161,24 @@ class PlanView(QGraphicsView):
         if self._fitted != state.path:  # a new map: the whole of it; edits keep the zoom
             self._fitted = state.path
             self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def focus_on(self, origin: tuple[float, float, float],
+                 others: list[tuple[float, float, float] | None] | None = None) -> None:
+        """Centre the plan on ``origin`` and ring it (and ``others``) in yellow."""
+        if self.plan is None:
+            return
+        pen = QPen(QColor(255, 210, 40), 3.0)
+        radius = max(24 * self.plan.scale, 8.0)
+        for point in [origin, *(others or [])]:
+            if point is None:
+                continue
+            x, y = self.plan.to_pixel(point[0], point[1])
+            ring = self.scene().addEllipse(x - radius, y - radius, 2 * radius, 2 * radius, pen)
+            ring.setZValue(20)
+        x, y = self.plan.to_pixel(origin[0], origin[1])
+        self.resetTransform()
+        self.scale(2.0, 2.0)
+        self.centerOn(x, y)
 
     def _fits(self, origin: tuple[float, float, float]) -> bool:
         if self.state is None:
@@ -350,6 +370,7 @@ class MapWorkshop(QDialog):
         self._work = Path(tempfile.mkdtemp(prefix="vqm_workshop_"))
         self._plan_image: Plan | None = None
         self._pending: dict[str, object] = {}
+        self._prop_status: dict[str, str] = {}
         layout = kit.dialog_layout(self)
         layout.addWidget(kit.header(
             "Map Workshop", "Check a map, fix its entities and spawns, replace textures, "
@@ -544,9 +565,16 @@ class MapWorkshop(QDialog):
         if issue is None:
             return
         entities = issue.where.get("entities")
-        if isinstance(entities, list) and entities:
-            self.tabs.setCurrentIndex(3)
-            self._select_entity(int(entities[0]))
+        state = self.current()
+        if isinstance(entities, list) and entities and state is not None:
+            listed = state.entities()
+            origin = _origin(listed[int(entities[0])])
+            if origin is not None:
+                self.tabs.setCurrentIndex(1)
+                self.plan_view.focus_on(origin, [_origin(listed[int(i)]) for i in entities])
+            else:
+                self.tabs.setCurrentIndex(3)
+                self._select_entity(int(entities[0]))
         elif "texture" in issue.where or "textures" in issue.where:
             self.tabs.setCurrentIndex(4)
 
@@ -835,8 +863,20 @@ class MapWorkshop(QDialog):
         self.texture_list.currentItemChanged.connect(lambda *_a: self._texture_selected())
         column.addWidget(self.texture_list, 1)
         self.texture_info = kit.hint("Drop a PNG / TGA / BMP on a texture to replace it "
-                                     "(resized to its size).")
-        column.addWidget(self.texture_info)
+                                     "(resized to its size; name_0.png … for an animation).")
+        compare = QHBoxLayout()
+        self.texture_before = QLabel()
+        self.texture_after = QLabel()
+        for label in (self.texture_before, self.texture_after):
+            label.setFixedSize(160, 160)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet(f"border: 1px solid {theme.color('border').name()};")
+        compare.addWidget(kit.hint("Before"))
+        compare.addWidget(self.texture_before)
+        compare.addWidget(kit.hint("After"))
+        compare.addWidget(self.texture_after)
+        compare.addWidget(self.texture_info, 1)
+        column.addLayout(compare)
         buttons = QHBoxLayout()
         for text, name, slot in (("Replace…", "image-plus", self._replace_texture),
                                  ("Embed all", "package-plus", lambda: self._embed(False)),
@@ -890,8 +930,43 @@ class MapWorkshop(QDialog):
 
     def _texture_selected(self) -> None:
         item = self.texture_list.currentItem()
-        if item is not None:
-            self.texture_info.setText(item.toolTip())
+        self.texture_before.clear()
+        self.texture_after.clear()
+        if item is None:
+            return
+        self.texture_info.setText(item.toolTip())
+        before, after = self._texture_versions(str(item.data(Qt.ItemDataRole.UserRole)))
+        for label, texture in ((self.texture_before, before), (self.texture_after, after)):
+            if texture is not None:
+                label.setPixmap(QPixmap.fromImage(_qimage(texture.rgba())).scaled(
+                    156, 156, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
+            else:
+                label.setText("—" if label is self.texture_after else "not found")
+
+    def _texture_versions(self, name: str) -> tuple[Any, Any]:
+        """(the texture as the map has it, the planned replacement or None)."""
+        from valve_qc_merger.mapkit.geometry import geometry
+        from valve_qc_merger.mapkit.textures import lump_entries
+        from valve_qc_merger.sprite.wad import MIPTEX, read_miptex
+        state = self.current()
+        if state is None:
+            return None, None
+        after = next((op.data["texture"] for op in reversed(state.plan.active)
+                      if op.code in ("textures.replace", "textures.wad_copy")
+                      and str(op.data["name"]).lower() == name.lower()), None)
+        tex = next((t for t in geometry(state.bsp).textures
+                    if t.offset >= 0 and t.name.lower() == name.lower()), None)
+        if tex is None:
+            return None, after
+        raw = lump_entries(state.bsp)[tex.index] if tex.embedded else next(
+            (lump for w in map_wads(state.path, state.bsp, self.state.folders)
+             if (lump := w.lump(tex.name)) is not None), None)
+        try:
+            before = read_miptex(raw, tex.name, MIPTEX) if raw else None
+        except (ValueError, IndexError):
+            before = None
+        return before, after
 
     def _replace_texture(self) -> None:
         item = self.texture_list.currentItem()
@@ -908,7 +983,7 @@ class MapWorkshop(QDialog):
         if state is None:
             return
         try:
-            plan = plan_replace_texture(state.path, name, Path(path), self.state.folders)
+            plan = plan_replace_textures(state.path, [(name, Path(path))], self.state.folders)
         except (KeyError, ValueError, OSError) as exc:
             self._notes([str(exc.args[0] if exc.args else exc)])
             return
@@ -951,11 +1026,14 @@ class MapWorkshop(QDialog):
             "The models cycler_sprite / env_sprite entities show, merged into one model with "
             "merge-props (body picks the model): the map takes one or two model slots. The "
             "merged model is written to models/<map>/ now; the entities follow in the plan."))
-        self.props_table = QTableWidget(0, 3)
-        self.props_table.setHorizontalHeaderLabels(["Model", "Entities", "Status"])
+        self.props_table = QTableWidget(0, 4)
+        self.props_table.setHorizontalHeaderLabels(["Model", "Entities", "Group", "Status"])
         self.props_table.verticalHeader().setVisible(False)
         self.props_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch)
+            3, QHeaderView.ResizeMode.Stretch)
+        self.props_table.setToolTip("Type a group name (vehicles, trees …): a group's models "
+                                    "go into one merged part side by side")
+        self.props_table.itemChanged.connect(self._group_edited)
         column.addWidget(self.props_table, 1)
         row = QHBoxLayout()
         merge = QPushButton(icon("boxes"), "Merge props")
@@ -967,17 +1045,49 @@ class MapWorkshop(QDialog):
         column.addLayout(row)
         return page
 
+    def _groups_file(self, state: MapState) -> Path:
+        return state.path.with_name(f"{state.name}_props_groups.json")
+
+    def _groups(self, state: MapState) -> dict[str, list[str]]:
+        from valve_qc_merger.mapkit.props import read_groups
+        path = self._groups_file(state)
+        try:
+            return read_groups(path) if path.is_file() else {}
+        except (OSError, ValueError):
+            return {}
+
     def _show_props(self, state: MapState) -> None:
         from valve_qc_merger.mapkit.props import collect
         props = collect([state.path], self.state.folders)
+        member = {m.lower(): g for g, ms in self._groups(state).items() for m in ms}
+        self.props_table.blockSignals(True)
         self.props_table.setRowCount(len(props))
         for row, prop in enumerate(props):
             self.props_table.setItem(row, 0, _cell(prop.path))
             self.props_table.setItem(row, 1, _cell(len(prop.uses)))
-            self.props_table.setItem(row, 2, _cell(prop.reason or "merges",
+            self.props_table.setItem(row, 2, QTableWidgetItem(member.get(prop.path.lower(), "")))
+            status = self._prop_status.get(prop.path.lower(), "")
+            self.props_table.setItem(row, 3, _cell(prop.reason or status or "merges",
                                                    "warning" if prop.reason else "success"))
+        self.props_table.blockSignals(False)
         self.props_summary.setText(f"{sum(not p.reason for p in props)} of {len(props)} "
-                                   "models can merge")
+                                   "models can merge (look-alikes become skins of one)")
+
+    def _group_edited(self, item: QTableWidgetItem) -> None:
+        state = self.current()
+        if state is None or item.column() != 2:
+            return
+        groups: dict[str, list[str]] = {}
+        for row in range(self.props_table.rowCount()):
+            cell = self.props_table.item(row, 2)
+            name = cell.text().strip() if cell is not None else ""
+            if name:
+                groups.setdefault(name, []).append(self.props_table.item(row, 0).text())
+        path = self._groups_file(state)
+        if groups:
+            path.write_text(json.dumps(groups, indent=1), encoding="utf-8")
+        elif path.is_file():
+            path.unlink()
 
     def _merge_props(self) -> None:
         from valve_qc_merger.mapkit.props import find_studiomdl, merge_props
@@ -990,10 +1100,11 @@ class MapWorkshop(QDialog):
             return
         out = self.state.out_dir or game_folder(state.path)
         folders = list(self.state.folders)
+        groups = self._groups(state) or None
 
         def work(reporter):  # noqa: ANN001, ANN202
             return merge_props([state.path], out, f"{state.name}_props", folders=folders,
-                               studiomdl=studiomdl, reporter=reporter)
+                               studiomdl=studiomdl, reporter=reporter, groups=groups)
 
         self._pending["props"] = state
         self.jobs.start("Merge props", work)
@@ -1128,7 +1239,18 @@ class MapWorkshop(QDialog):
         self.apply_button = QPushButton(icon("save"), "Apply")
         theme.set_primary(self.apply_button)
         self.apply_button.clicked.connect(self.apply)
+        self.progress = QProgressBar()
+        self.progress.setMaximumWidth(220)
+        self.progress.setTextVisible(True)
+        self.progress.hide()
+        self.cancel_button = QPushButton(icon("x"), "Cancel")
+        self.cancel_button.clicked.connect(self.jobs.cancel)
+        self.cancel_button.hide()
+        self.jobs.started.connect(self._job_started)
+        self.jobs.progress.connect(self._job_progress)
         row.addWidget(self.plan_label, 1)
+        row.addWidget(self.progress)
+        row.addWidget(self.cancel_button)
         row.addWidget(self.undo_button)
         row.addWidget(self.redo_button)
         row.addWidget(self.apply_button)
@@ -1244,7 +1366,20 @@ class MapWorkshop(QDialog):
         if notes:
             self.status.setText(notes[-1])
 
+    def _job_started(self, title: str) -> None:
+        self.progress.setRange(0, 0)
+        self.progress.setFormat(title)
+        self.progress.show()
+        self.cancel_button.show()
+
+    def _job_progress(self, done: int, total: int, label: str) -> None:
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(done)
+        self.progress.setFormat(f"{label} %v / %m" if label else "%v / %m")
+
     def _job_done(self, title: str, ok: bool, payload: object) -> None:
+        self.progress.hide()
+        self.cancel_button.hide()
         if not ok:
             self._log(f"{title}: {payload}")
             self.status.setText(f"{title} failed: {payload}")
@@ -1263,6 +1398,11 @@ class MapWorkshop(QDialog):
             if payload.plans:  # type: ignore[attr-defined]
                 state.add(payload.plans[0].operations)  # type: ignore[attr-defined]
             self.state.check(state)
+            for prop in payload.models:  # type: ignore[attr-defined]
+                self._prop_status[prop.path.lower()] = (
+                    f"skin {prop.skin} of {prop.variant_of}" if prop.variant_of and prop.skin
+                    else f"the same as {prop.variant_of}" if prop.variant_of
+                    else prop.reason or "merged")
             self._log(f"props: {len(payload.merged)} models -> "  # type: ignore[attr-defined]
                       f"{', '.join(payload.parts) or 'nothing'}")  # type: ignore[attr-defined]
         if self._pending.pop("imported", None):

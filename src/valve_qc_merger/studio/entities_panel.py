@@ -119,8 +119,13 @@ class EntitiesPanel(QWidget):
         self.source_label = QLabel()
         theme.set_role(self.source_label, "muted")
         open_button.setAutoDefault(False)
+        workshop = QPushButton(icon("map"), "Open in Map Workshop")
+        workshop.setAutoDefault(False)
+        workshop.setToolTip("Spawns, textures, props and the plan of changes for this map")
+        workshop.clicked.connect(self._open_in_workshop)
         row.addWidget(self.map_box)
         row.addWidget(open_button)
+        row.addWidget(workshop)
         row.addWidget(self.source_label, 1)
         layout.addLayout(row)
 
@@ -279,6 +284,15 @@ class EntitiesPanel(QWidget):
         self.class_list.setCurrentItem(chosen)
         self.class_list.blockSignals(False)
         self._fill_entities()
+
+    def _open_in_workshop(self) -> None:
+        if self.map_path is None:
+            return
+        owner = self.window().parent()
+        while owner is not None and not hasattr(owner, "show_map_workshop"):
+            owner = owner.parent()
+        if owner is not None:
+            owner.show_map_workshop(self.map_path)
 
     def current_class(self) -> str:
         item = self.class_list.currentItem()
