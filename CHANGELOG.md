@@ -4,6 +4,26 @@ All notable changes to valve-qc-merger and Valve QC Studio. Each release's
 downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
 [GitHub release](https://github.com/MrCatOff/valve-qc-merger/releases).
 
+## [Unreleased]
+
+### Maps
+- **`valve-qc-merger map check MAP… [--game DIR] [--json OUT]`**: what would
+  break a compiled map (BSP v30) on a server, with the operation that cures
+  each issue. Critical: models / sprites in no folder, models not version 10,
+  WADs or textures not found, lit faces past 256 texels ("Bad surface
+  extents"), geometry past ±4096, too few spawns for a full server. Warnings:
+  spawns under the profile's count (`zp`: 48 a team) or in a wall (hull 1),
+  classes CS 1.6 drops (`particle_emitter`), sounds not found, names only a
+  case-insensitive file system finds, textures over 256, model / sound slots
+  near 512 with ReGameDLL's own. Rules and profiles from a JSON file
+  (`configs/mapkit.json`). Exit code 0 / 1 / 2 / 3.
+- **`map preview MAP --out plan.png`**: the map from above in its textures'
+  colours, shaded by height, with the spawns and where they face.
+- New `mapkit` package (no Qt): BSP v30 read / write lump by lump (an
+  unchanged map writes back byte for byte, a resized lump moves the ones
+  after it), the engine's map CRC, faces, surface extents, hull 0-3 point
+  contents. Server ▸ Maps / Budget read maps through it.
+
 ## [0.22.0] - 2026-11-08
 
 ### Textures

@@ -58,6 +58,7 @@ packages = ["src/valve_qc_merger"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["mappack: needs the CSO ZM map pack (VQM_MAP_PACK)"]
 
 [tool.ruff]
 line-length = 100

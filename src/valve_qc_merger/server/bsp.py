@@ -10,18 +10,16 @@ indices (doors) and sentences (``!name``) are the game DLL's own.
 from __future__ import annotations
 
 import re
-import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 
-BSP_VERSION = 30
-LUMP_ENTITIES, LUMP_MODELS = 0, 14
-DMODEL_SIZE = 64
+from valve_qc_merger.mapkit.bsp import ENTITIES as LUMP_ENTITIES
+from valve_qc_merger.mapkit.bsp import MODELS as LUMP_MODELS
+from valve_qc_merger.mapkit.bsp import RECORD, Bsp, BspError
+from valve_qc_merger.mapkit.bsp import VERSION as BSP_VERSION
+
+DMODEL_SIZE = RECORD[LUMP_MODELS]
 _PAIR = re.compile(r'"([^"]*)"\s*"([^"]*)"')
-
-
-class BspError(ValueError):
-    """Not a readable BSP v30 map."""
 
 
 @dataclass
@@ -47,17 +45,9 @@ def entities(text: str) -> list[dict[str, str]]:
 
 
 def read_map_resources(path: Path) -> MapResources:
-    data = Path(path).read_bytes()
-    if len(data) < 4 + 15 * 8:
-        raise BspError(f"{Path(path).name}: too short for a BSP")
-    (version,) = struct.unpack_from("<i", data, 0)
-    if version != BSP_VERSION:
-        raise BspError(f"{Path(path).name}: BSP version {version} (GoldSource is 30)")
-    lumps = [struct.unpack_from("<2i", data, 4 + i * 8) for i in range(15)]
-    ent_off, ent_len = lumps[LUMP_ENTITIES]
-    mod_off, mod_len = lumps[LUMP_MODELS]
-    text = data[ent_off:ent_off + ent_len].split(b"\0", 1)[0].decode("latin-1")
-    result = MapResources(name=Path(path).stem, brush_models=mod_len // DMODEL_SIZE)
+    bsp = Bsp.read(path)
+    text = bsp.entity_text
+    result = MapResources(name=Path(path).stem, brush_models=bsp.count(LUMP_MODELS))
     ents = entities(text)
     result.entities = len(ents)
     world = next((e for e in ents if e.get("classname") == "worldspawn"), {})
@@ -84,4 +74,5 @@ def wad_names(value: str) -> list[str]:
     return names
 
 
-__all__ = ["BspError", "MapResources", "entities", "read_map_resources", "wad_names"]
+__all__ = ["BSP_VERSION", "BspError", "DMODEL_SIZE", "LUMP_ENTITIES", "LUMP_MODELS",
+           "MapResources", "entities", "read_map_resources", "wad_names"]

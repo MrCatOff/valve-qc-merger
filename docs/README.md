@@ -18,6 +18,8 @@ Project documentation lives here, one page per topic.
 - [`merge-props`](merge-props.md) — effects, projectiles, props (any rig) and view
   models without separate hands merged into a few models; `pev_body` picks the model.
 - [Server tools](server.md) — precache budget per map, mod-folder doctor, sounds (ReHLDS)
+- [`map`](maps.md) — check compiled maps (BSP v30) before a server takes them: missing
+  files, spawns, textures, limits; a plan from above.
 - [`merge-zhands`](merge-zhands.md) — merge CSO zombie hand view models (+ `zhands-grenade` for zombies without one)
   (knife + grenade per zombie) into one model with a shared grenade bodygroup.
 - [`project`](studio.md#command-line-project) — a Studio project from the command line:

@@ -1,0 +1,17 @@
+{
+  "profile": "zp",
+  "max_players": 32,
+  "profiles": {
+    "zp": {"min_spawns": 48},
+    "public": {"min_spawns": 16},
+    "small": {"min_spawns": 10, "max_players": 20}
+  },
+  "num_edicts": 0,
+  "edicts_warn": 0.8,
+  "max_leafs": 8192,
+  "texture_warn": 256,
+  "world_limit": 4096,
+  "world_margin": 64,
+  "model_slots": 512,
+  "sound_slots": 512
+}

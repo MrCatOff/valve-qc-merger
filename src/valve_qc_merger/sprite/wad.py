@@ -92,13 +92,13 @@ def read_wad(source: Path | bytes) -> list[Texture]:
         lump = data[offset:offset + disk]
         name = raw.split(b"\0", 1)[0].decode("latin-1")
         try:
-            out.append(_read_miptex(lump, name, kind))
+            out.append(read_miptex(lump, name, kind))
         except (struct.error, ValueError) as exc:
             raise WadError(f"texture {name!r}: {exc}") from exc
     return out
 
 
-def _read_miptex(lump: bytes, name: str, kind: int) -> Texture:
+def read_miptex(lump: bytes, name: str, kind: int) -> Texture:
     _name, width, height, *offsets = struct.unpack_from("<16s2I4I", lump, 0)
     if not 0 < width <= 4096 or not 0 < height <= 4096:
         raise ValueError(f"size {width}x{height}")
@@ -131,7 +131,8 @@ def _mip(indices: np.ndarray, palette: np.ndarray, level: int, transparent: bool
     return out
 
 
-def _miptex(texture: Texture) -> bytes:
+def miptex_lump(texture: Texture) -> bytes:
+    """A texture as a miptex: the same bytes in a WAD and in a map's textures lump."""
     width, height = texture.width, texture.height
     palette = np.zeros((256, 3), np.uint8)
     palette[:len(texture.palette)] = np.array(texture.palette, np.uint8).reshape(-1, 3)
@@ -149,7 +150,7 @@ def _miptex(texture: Texture) -> bytes:
 
 def write_wad(textures: list[Texture]) -> bytes:
     """A WAD3 of ``textures`` (each lump keeps its type)."""
-    lumps = [_miptex(t) for t in textures]
+    lumps = [miptex_lump(t) for t in textures]
     directory = 12 + sum(len(lump) for lump in lumps)
     out = [struct.pack("<4s2i", b"WAD3", len(lumps), directory)]
     entries, position = [], 12
@@ -238,4 +239,5 @@ def make_spray(rgba: np.ndarray, size: tuple[int, int] | None = None) -> Texture
 
 
 __all__ = ["KEY_COLOUR", "MIPTEX", "SPRAY", "SPRAY_MAX_AREA", "SPRAY_NAME", "Texture",
-           "WadError", "make_spray", "read_wad", "spray_size", "write_wad"]
+           "WadError", "make_spray", "miptex_lump", "read_miptex", "read_wad", "spray_size",
+           "write_wad"]
