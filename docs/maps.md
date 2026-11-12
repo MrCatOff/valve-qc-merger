@@ -16,6 +16,11 @@ valve-qc-merger map shared-wad MAP.bsp|FOLDER ... --out pack.wad [--game DIR]
 valve-qc-merger map props MAP.bsp|FOLDER ... [--out GAME_DIR] [--name NAME] [--shared NAME] [--studiomdl PATH] [--gc] [--dry-run]
 valve-qc-merger map import MAPNAME ... --source DIR [--source DIR] --out GAME_DIR [--game DIR] [--overwrite]
 valve-qc-merger map build  MAP|MAPNAME ... [--profile zp] [--source DIR] [--out GAME_DIR] [--game DIR] [--no-props] [--json OUT]
+valve-qc-merger map tools [--set TOOL PATH] [--prefix TOOL CMD] [--args TOOL ARG ...] [--help-of TOOL]
+valve-qc-merger map decompile MAP.bsp --out MAP.map
+valve-qc-merger map compile MAP.map --into GAME_DIR [--name NAME] [--steps hlcsg,hlbsp,hlvis,hlrad] [--wad WAD]
+valve-qc-merger map edit MAP.map
+valve-qc-merger map shrink MAP.bsp [--size 256] [--texture NAME ...] [--game DIR]
 ```
 
 ## Where files are looked up
@@ -204,6 +209,37 @@ and CRCs. A profile can say more than thresholds:
 traceback of a map that failed — the others go on). The CSO ZM pack imported
 into an empty `cstrike` over a Steam install: all 8 maps without a critical
 issue, 48 + 48 spawns, props in one model slot each, in 18 s.
+
+## External tools: geometry
+
+Nothing here edits brushes or compiles: what needs the geometry changed goes
+through tools you install, set up once with `map tools`:
+
+| Tool | For | Get it |
+|---|---|---|
+| `hlcsg` `hlbsp` `hlvis` `hlrad` | compiling `.map` → `.bsp` | VHLT / SDHLT (CMake), or the Windows `.exe` through Wine |
+| `bspguy` | merging, cleaning, moving maps | Windows / Linux builds; Wine on macOS |
+| `decompiler` | `.bsp` → editable `.map` | any BSP → MAP tool: `map tools --args decompiler {bsp} {map}` sets how it is called |
+| `trenchbroom` | editing the `.map` (Valve 220) | native everywhere |
+
+A tool is looked up in `map-tools.json` (the user's config folder: macOS
+`~/Library/Application Support/valve-qc-merger`, Linux `~/.config/…`, Windows
+`%APPDATA%\…`), then `VQM_<TOOL>`, then `PATH`; a `.exe` on macOS / Linux runs
+through `wine` (or the `--prefix` given). `map tools --help-of hlrad` prints a
+tool's own options — command lines differ between versions, none is assumed
+beyond `<compiler> [options] <map>`.
+
+- `map decompile` / `map edit` / `map compile`: decompile, open in
+  TrenchBroom, compile (on a copy in a work folder; compiler lines with
+  `Error`, `Exceeded MAX_MAP_*`, `leak` are reported). A compiled map is
+  checked and copied into `maps/`, under `_sp` when the name is taken.
+- `map shrink`: textures over `--size` halved until they fit, written to
+  `<map>_small.wad`; the decompiled `.map` gets their scale multiplied (offsets
+  divided) so they look as big as before and lists the WAD first; then it is
+  recompiled and installed as a new map.
+
+A decompile is approximate (uneven brushes, holes, the light set up again):
+this is the exception, not the way.
 
 ## Maps and the CRC
 

@@ -51,6 +51,12 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
   check → fix → props → `.res` → check for every map, JSON report with each
   step. The CSO ZM pack into an empty `cstrike`: all 8 maps without a
   critical issue in 18 s.
+- **External tools** (`map tools`, `map decompile`, `map compile`, `map edit`,
+  `map shrink`): VHLT / SDHLT compilers, bspguy, a BSP -> MAP decompiler and
+  TrenchBroom found in `map-tools.json`, `VQM_<TOOL>` or `PATH` (`.exe`
+  through Wine on macOS / Linux), run on copies with their errors reported;
+  compiled maps checked and installed under a new name; big textures shrunk
+  by decompiling, rescaling them in the `.map` and recompiling.
 - **`map preview MAP --out plan.png`**: the map from above in its textures'
   colours, shaded by height, with the spawns and where they face.
 - New `mapkit` package (no Qt): BSP v30 read / write lump by lump (an

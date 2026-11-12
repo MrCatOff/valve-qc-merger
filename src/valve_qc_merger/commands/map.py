@@ -17,6 +17,11 @@
                                [--game DIR] [--overwrite]
     valve-qc-merger map build  MAP ... [--profile zp] [--source DIR] [--out GAME_DIR]
                                [--game DIR] [--no-props] [--json OUT]
+    valve-qc-merger map tools [--set TOOL PATH] [--prefix TOOL CMD] [--args TOOL ARG...]
+    valve-qc-merger map decompile MAP.bsp --out MAP.map
+    valve-qc-merger map compile MAP.map --into GAME_DIR [--name NAME] [--steps hlcsg,...]
+    valve-qc-merger map edit MAP.map
+    valve-qc-merger map shrink MAP.bsp [--size 256] [--texture NAME ...] [--game DIR]
 
 ``--game`` adds a game folder the map's files are looked up in (a clean
 ``cstrike``; ``valve`` next to it is searched too). Exit codes of
@@ -183,6 +188,40 @@ class MapCommand(Command):
         build.add_argument("--overwrite", action="store_true")
         build.add_argument("--json", type=Path, metavar="OUT", help="write the reports as JSON")
 
+        tools = actions.add_parser("tools", help="the external map tools (compilers, bspguy, a "
+                                   "decompiler, TrenchBroom): status and setup",
+                                   description="external map tools")
+        tools.add_argument("--set", nargs=2, metavar=("TOOL", "PATH"), help="a tool's path")
+        tools.add_argument("--prefix", nargs=2, metavar=("TOOL", "CMD"),
+                           help="run a tool through CMD (wine, a CrossOver path)")
+        tools.add_argument("--args", nargs="+", metavar=("TOOL", "ARG"),
+                           help="a tool's extra arguments (the decompiler's template: {bsp} "
+                                "{map})")
+        tools.add_argument("--help-of", metavar="TOOL", help="print a tool's own options")
+        dec = actions.add_parser("decompile", help="BSP -> MAP with the configured decompiler",
+                                 description="BSP -> MAP with the configured decompiler")
+        dec.add_argument("map", type=Path, metavar="MAP")
+        dec.add_argument("--out", type=Path, required=True, help="the .map to write")
+        comp = actions.add_parser("compile", help=".map -> .bsp with the compilers, checked, "
+                                  "into maps/", description="compile a .map")
+        comp.add_argument("map", type=Path, metavar="MAP")
+        comp.add_argument("--into", type=Path, required=True, metavar="GAME_DIR")
+        comp.add_argument("--name", help="the map name (default the .map's; a taken name gets _sp)")
+        comp.add_argument("--steps", default=",".join(("hlcsg", "hlbsp", "hlvis", "hlrad")),
+                          help="compilers to run, comma separated")
+        comp.add_argument("--wad", type=Path, action="append", default=[],
+                          help="WADs the compilers need (repeatable)")
+        comp.add_argument("--game", type=Path, action="append", default=[], metavar="DIR")
+        edit = actions.add_parser("edit", help="open a .map in TrenchBroom",
+                                  description="open a .map in TrenchBroom")
+        edit.add_argument("map", type=Path, metavar="MAP")
+        shrink = actions.add_parser("shrink", help="make textures over a size smaller (decompile, "
+                                    "rescale, recompile)", description="shrink big textures")
+        shrink.add_argument("map", type=Path, metavar="MAP")
+        shrink.add_argument("--size", type=int, default=256)
+        shrink.add_argument("--texture", action="append", default=[], metavar="NAME")
+        shrink.add_argument("--game", type=Path, action="append", default=[], metavar="DIR")
+
     def run(self, args: argparse.Namespace) -> int:
         if args.action == "check":
             return self._check(args)
@@ -198,6 +237,8 @@ class MapCommand(Command):
             return self._import(args)
         if args.action == "build":
             return self._build(args)
+        if args.action in ("tools", "decompile", "compile", "edit", "shrink"):
+            return self._external(args)
         return self._preview(args)
 
     def _check(self, args: argparse.Namespace) -> int:
@@ -521,6 +562,82 @@ class MapCommand(Command):
         if args.json:
             print(f"report: {write_report(results, args.json)}")
         return code
+
+    def _external(self, args: argparse.Namespace) -> int:
+        from valve_qc_merger.mapkit import external as X
+        from valve_qc_merger.mapkit.analyze import check_map, game_folder
+
+        if args.action == "tools":
+            settings = X.load_settings()
+            changed = False
+            if args.set:
+                settings.setdefault(args.set[0], {})["path"] = args.set[1]
+                changed = True
+            if args.prefix:
+                settings.setdefault(args.prefix[0], {})["prefix"] = args.prefix[1].split()
+                changed = True
+            if args.args:
+                settings.setdefault(args.args[0], {})["args"] = args.args[1:]
+                changed = True
+            if changed:
+                print(f"saved {X.save_settings(settings)}")
+            if args.help_of:
+                tool = X.find_tool(args.help_of, settings)
+                text = X.tool_help(tool) if tool.available else ""
+                print(text or f"{args.help_of}: no usage text ({tool.hint})")
+                return EXIT_CLEAN
+            for name in X.TOOLS:
+                tool = X.find_tool(name, settings)
+                print(f"{name:<12} {tool.path if tool.available else 'not set up'}"
+                      + (f"  (via {' '.join(tool.prefix)})" if tool.prefix else "")
+                      + ("" if tool.available else f" — {tool.hint}"))
+            return EXIT_CLEAN
+        if args.action == "edit":
+            tool = X.find_tool("trenchbroom")
+            if not tool.available:
+                print(f"TrenchBroom is not set up — {tool.hint}")
+                return EXIT_UNREADABLE
+            X.open_in_editor(args.map)
+            return EXIT_CLEAN
+        if args.action == "decompile":
+            if not X.find_tool("decompiler").available:
+                print(f"no decompiler set up — {X.HINTS['decompiler']}")
+                return EXIT_UNREADABLE
+            run = X.decompile_map(args.map, args.out)
+            print("decompiled: brushes are approximate — check the map before compiling"
+                  if run.ok and args.out.is_file() else f"decompiler failed (exit {run.code})")
+            return EXIT_CLEAN if run.ok and args.out.is_file() else EXIT_CRITICAL
+        if args.action == "compile":
+            steps = tuple(s.strip() for s in args.steps.split(",") if s.strip())
+            result = X.compile_map(args.map, steps=steps, wads=args.wad)
+            for note in result.notes:
+                print(f"  note: {note}")
+            for error in result.errors:
+                print(f"  error: {error}")
+            if result.bsp is None:
+                return EXIT_CRITICAL
+            dest = X.install_map(result.bsp, args.into, args.name or args.map.stem)
+            report = check_map(dest, args.game)
+            print(f"{dest}: {report.level.upper()}")
+            for issue in report.of_level("critical"):
+                print(f"  critical {issue.code:<18} {issue.text}")
+            return EXIT_CRITICAL if report.level == "critical" else EXIT_CLEAN
+        result = X.shrink_textures(args.map, args.size, args.texture or None,
+                                   folders=args.game)
+        for name, size in result.shrunk.items():
+            print(f"  {name} -> {size[0]}x{size[1]}")
+        for note in result.notes:
+            print(f"  note: {note}")
+        if result.bsp is None:
+            return EXIT_CRITICAL if result.shrunk else EXIT_CLEAN
+        game = game_folder(args.map)
+        if result.wad is not None:
+            import shutil
+            shutil.copy2(result.wad, game / result.wad.name)
+        dest = X.install_map(result.bsp, game, args.map.stem)
+        print(f"{dest}: {check_map(dest, args.game).level.upper()} (a new map: its .res lists "
+              f"{result.wad.name if result.wad else ''})")
+        return EXIT_CLEAN
 
 
 __all__ = ["MapCommand"]
