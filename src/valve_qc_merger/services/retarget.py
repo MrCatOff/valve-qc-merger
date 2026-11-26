@@ -30,6 +30,10 @@ class RetargetOptions:
     verify: bool = True
     snug: bool = True
     snug_max_deg: float | None = None  # None: grip tuning, else the default
+    weapon_aware: bool = False  # keep the hands' skin out of the weapon
+    contact_seat: bool = False  # seat the palm where the original hand touched
+    coupled_curl: bool = False  # the last finger joint follows the middle one
+    one_fit_mesh: bool = False  # old fit: the first hand mesh only
     curl: list[str] = field(default_factory=list)
     grip_offset: list[str] = field(default_factory=list)
     weapon_offset: list[float] = field(default_factory=list)  # [dx, dy, dz], model space
@@ -85,6 +89,10 @@ def run_retarget(opts: RetargetOptions, reporter: Reporter | None = None) -> Ser
         verify=opts.verify,
         snug=opts.snug,
         snug_max_deg=opts.snug_max_deg,
+        weapon_aware=opts.weapon_aware,
+        contact_seat=opts.contact_seat,
+        coupled_curl=opts.coupled_curl,
+        one_fit_mesh=opts.one_fit_mesh,
         curl=opts.curl,
         grip_offset=opts.grip_offset,
         weapon_offset=list(opts.weapon_offset) or None,

@@ -242,3 +242,14 @@ def test_hand_textures_by_name() -> None:
     # ... and a blade, a grip or a charm are no hands
     for name in ("knifeskin.bmp", "p228_handle.bmp", "v_famas.bmp", "charm.bmp"):
         assert not HAND_TEXTURE.search(name), name
+
+
+def test_knuckle_thumb_is_the_root_off_the_knuckle_line():
+    """v_ddeagle's right hand, bind pose: the cloud fit took the pinky
+    (Bone43) for the thumb; by anatomy it is Bone27, off the knuckle line."""
+    from valve_qc_merger.handswap.retarget import knuckle_thumb
+
+    roots = [np.array(p) for p in ((6.24, -9.85, 0.39), (6.25, -10.37, 1.01),
+                                   (6.29, -10.69, 1.68), (6.41, -10.56, 2.41),
+                                   (6.03, -8.38, 2.0))]  # Bone43, 39, 35, 31, 27
+    assert knuckle_thumb(roots) == 4

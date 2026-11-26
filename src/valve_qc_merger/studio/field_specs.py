@@ -136,6 +136,25 @@ SPECS: dict[str, FieldSpec] = {
     "retarget.snug_max_deg": FieldSpec("Max finger fit (°)", "Per-joint limit of the automatic "
                                        "fit, in degrees.",
                                        placeholder="weapon's grip tuning, else 35"),
+    "retarget.weapon_aware": FieldSpec("Keep hands out of the weapon", "Treat the weapon as "
+                                       "solid: the palm moves clear of it and the fingers fit "
+                                       "against its surface, never deeper than the original "
+                                       "hands sat. Helps where our thicker hand sinks into the "
+                                       "grip or the stock."),
+    "retarget.contact_seat": FieldSpec("Seat the palm by contact", "Move the palm so our hand "
+                                       "touches the weapon where the original hand did — for "
+                                       "a pistol that looks glued to the palm with the fingers "
+                                       "off the grip. Works best on pistols; on rifles the "
+                                       "front hand may open up, check the result."),
+    "retarget.coupled_curl": FieldSpec("Natural finger bend", "The last finger joint follows "
+                                       "the middle one the way animators bend a grip, instead "
+                                       "of being fitted on its own (stops fingertips digging "
+                                       "into a thin grip)."),
+    "retarget.one_fit_mesh": _adv("Fit to the first hand mesh only", "Old behaviour: fingers "
+                                  "fit to the first original hand mesh only. A model with "
+                                  "separate right and left hand meshes then fits its other "
+                                  "hand by the fingertips alone. Only to reproduce old "
+                                  "results."),
     "retarget.verify": _adv("Verify the output", "Check the written files (skeleton, "
                             "trajectories, grip) after retargeting. Recommended."),
     "retarget.asset": _adv("Hands asset", "Our hands to put on (CSO hands asset).",

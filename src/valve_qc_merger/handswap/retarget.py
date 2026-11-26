@@ -46,7 +46,12 @@ FALLBACK_ARM_DIR = np.array([0.0, 8.0, -6.0])  # behind and below the view
 # 5: hand-named textures (Valve's view_skin) cut with the hands; rigid hand meshes kept
 # 6: exact texel UVs (the decompiler slid UV islands up to a texel: dark seams)
 # 7: an arm the original keeps out of view stays out (v_c4's draw)
-RETARGET_REVISION = 7
+# 8: fingers fitted to BOTH hands' skin (a model with rhand + lhand meshes fitted its left by tips)
+# 9: a five-finger hand's thumb is the root off the knuckle line (v_ddeagle's right hand took its
+#    pinky for the thumb: every finger of that hand crossed); unnamed hands are sided by position
+#    (the left one farther along +x), not by palm chirality (v_ddeagle's hands were swapped)
+# 10: the same, for projects already redone at 9 during development
+RETARGET_REVISION = 10
 
 # Wrist kink of OUR hand mesh as CSO's own animators pose it: the forearm
 # direction in the palm frame, relative to the rest pose, (pitch, yaw) in
@@ -147,6 +152,15 @@ def _chain_cloud_old(skel: OrigSkeleton, world, hand: HandInfo,
     return pts
 
 
+def knuckle_thumb(roots: list[np.ndarray]) -> int:
+    """The finger whose root lies off the line of the others' (the
+    knuckles): the thumb, by anatomy."""
+    def off_line(t: int) -> float:
+        others = np.array([r for i, r in enumerate(roots) if i != t])
+        return float(np.linalg.svd(others - others.mean(axis=0), compute_uv=False)[1:].sum())
+    return min(range(len(roots)), key=off_line)
+
+
 def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
                     setup_world: dict[str, np.ndarray], log=print,
                     grip_offset=None, weapon_offset=None) -> SidePlan:
@@ -180,10 +194,15 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
     # line — fingers cannot cross. A free permutation search can win on
     # cloud cost with an impossible assignment (f2000: thumb paired to
     # the index, folding the CSO thumb invisibly along it).
+    # With five fingers the thumb is fixed by anatomy, not by the cloud fit:
+    # a poor fit (a low-poly hand, ~1.7 u) can score the pinky as the thumb
+    # under a flipped frame (v_ddeagle, v_elite, v_sg550's right hand; the
+    # two agree on 665 of 668 corpus hands).
     n = min(len(hand.chains), len(rig.chains))
     cso_thumb = 0
     best = None
-    for thumb_i in range(len(hand.chains)):
+    thumbs = [knuckle_thumb(old_roots)] if len(hand.chains) >= 5 else range(len(hand.chains))
+    for thumb_i in thumbs:
         anchor_pts = old_clouds[thumb_i]
         anchor = anchor_pts[-1]
         for flip in (False, True):
@@ -226,8 +245,9 @@ def build_side_plan(asset: HandsAsset, skel: OrigSkeleton, hand: HandInfo,
         desired = desired.copy()
         desired[:3, 3] -= np.asarray(weapon_offset, dtype=float)
     pairs = [(hand.chains[i], rig.chains[j]) for i, j in assign]
-    log("  %s: thumb %r (fit %.2f), pairing %s"
+    log("  %s: thumb %r (fit %.2f%s), pairing %s"
         % (hand.side, hand.chains[thumb_i][0], total / max(n, 1),
+           ", palm flipped" if _flip else "",
            ", ".join("%s->%s" % (o[0], c[0]) for o, c in pairs)))
 
     old_across = a_old[:3, 1]
@@ -284,9 +304,216 @@ def build_plan(asset: HandsAsset, skel: OrigSkeleton, hands: list[HandInfo],
     return plan
 
 
+_TRIANGLE_CACHE: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _hand_triangles(asset: HandsAsset) -> tuple[np.ndarray, np.ndarray]:
+    """The asset's triangles as (T,3) dominant bone names and (T,3,3) corner
+    positions in each corner's own bone rest frame."""
+    cached = _TRIANGLE_CACHE.get(id(asset))
+    if cached is None:
+        inverse = {name: inv_rigid(bone.rest_world) for name, bone in asset.bones.items()}
+        names, local = [], []
+        for tri in asset.triangles:
+            row_names, row_local = [], []
+            for corner in tri["corners"]:
+                dom = max(corner["weights"], key=lambda bw: bw[1])[0]
+                inv = inverse[dom]
+                row_names.append(dom)
+                row_local.append(inv[:3, :3] @ np.asarray(corner["pos"], dtype=float)
+                                 + inv[:3, 3])
+            names.append(row_names)
+            local.append(row_local)
+        cached = (np.array(names), np.array(local, dtype=float))
+        _TRIANGLE_CACHE[id(asset)] = cached
+    return cached
+
+
+def seat_offsets(plan: RetargetPlan, setup_world_old: dict[str, np.ndarray], weapon,
+                 allowed: dict[str, float] | None = None,
+                 log=print) -> dict[str, list[float]]:
+    """Per side, the smallest palm shift (palm axes, like ``grip_offset``)
+    that takes the PALM's skin out of the weapon.
+
+    The palm is seated joint on joint: our thicker palm then lies deeper in
+    whatever the original palm lay against (v_c4: 0.06 u -> 0.27 u on 95 % of
+    the frames). Only the excess over ``allowed[side]`` (the original palm's
+    own depth, at least PEN_TOLERANCE) counts, the worst tenth of the palm's
+    skin decides, and a shift must buy SEAT_SHIFT_COST of it per unit — so a
+    palm that is no deeper than the original's stays where it is.
+    Rigid translation only (a free rigid fit of the palm was measured worse
+    on the corpus); the fingers are fitted afterwards."""
+    asset = plan.asset
+    out: dict[str, list[float]] = {}
+    steps = np.arange(-SEAT_MAX_SHIFT, SEAT_MAX_SHIFT + 1e-9, SEAT_STEP)
+    reset_motion(plan)
+    posed = solve_frame(plan, setup_world_old)
+    tri_bones, tri_local = _hand_triangles(asset)
+    for sp in plan.sides:
+        rig = sp.rig
+        # every triangle with a corner on the palm, as drawn at the setup
+        # grip: the webs to the thumb's and the fingers' bases too
+        rows = np.isin(tri_bones, [rig.wrist, *rig.extras]).any(axis=1)
+        if not rows.any():
+            continue
+        corners = np.empty_like(tri_local[rows])
+        for name in np.unique(tri_bones[rows]):
+            m = posed.get(name, asset.bones[name].rest_world)
+            sel = tri_bones[rows] == name
+            corners[sel] = tri_local[rows][sel] @ m[:3, :3].T + m[:3, 3]
+        a, b, c = corners[:, 0], corners[:, 1], corners[:, 2]
+        pts = np.unique(np.round(np.concatenate(
+            [a, b, c, (a + b) / 2, (b + c) / 2, (c + a) / 2, (a + b + c) / 3]), 5), axis=0)
+        axes = (sp.desired_setup @ rig.palm_local)[:3, :3]
+        limit = max(PEN_TOLERANCE, (allowed or {}).get(sp.side, 0.0))
+        margin = SEAT_MAX_SHIFT + 2.5
+        shell = weapon.within(pts.min(axis=0) - margin, pts.max(axis=0) + margin)
+        if not len(shell):
+            continue
+        tenth = max(1, int(len(pts) * SEAT_WORST_FRACTION))
+
+        def excess(offset, pts=pts, axes=axes, shell=shell, limit=limit, tenth=tenth):
+            depth = shell.depth(pts + axes @ np.asarray(offset, dtype=float))
+            return float(np.sort(np.clip(depth - limit, 0.0, None))[-tenth:].mean())
+
+        start = excess((0.0, 0.0, 0.0))
+        if start <= 0.0:
+            continue
+        best = (start, (0.0, 0.0, 0.0), start)
+        for dx in steps:
+            for dy in steps:
+                for dz in steps:
+                    shift = float(np.sqrt(dx * dx + dy * dy + dz * dz))
+                    if shift > SEAT_MAX_SHIFT + 1e-9 or SEAT_SHIFT_COST * shift >= best[0]:
+                        continue
+                    left = excess((dx, dy, dz))
+                    cost = left + SEAT_SHIFT_COST * shift
+                    if cost < best[0] - 1e-6:
+                        best = (cost, (float(dx), float(dy), float(dz)), left)
+        if any(best[1]):
+            out[sp.side] = [round(v, 3) for v in best[1]]
+            log("  seat %s palm %s (palm axes): excess depth %.2f -> %.2f"
+                % (sp.side, out[sp.side], start, best[2]))
+    return out
+
+
+CONTACT_RANGE = 0.35  # a part of the original hand this near the weapon holds it
+CONTACT_STEP = 0.05
+CONTACT_SHIFT_COST = 0.02  # per squared unit of palm shift
+
+
+def contact_seat(plan: RetargetPlan, setup_world_old: dict[str, np.ndarray], weapon,
+                 old_skin: dict[str, np.ndarray], log=print) -> dict[str, list[float]]:
+    """Per side, the palm shift (palm axes, like ``grip_offset``) that gives
+    our hand the ORIGINAL hand's contact with the weapon.
+
+    Seated joint on joint, our hand holds the weapon differently from the
+    original although its joints are where the original's were: our palm is
+    thicker toward the weapon and our fingers are thinner, so the grip sits
+    deeper in the palm while the finger pads stand off it (v_elite's left:
+    palm side +0.01 -> -0.12 u, pads -0.07 -> +0.05 u) — "glued to the palm,
+    fingers not touching". Both errors have one cure: move the palm.
+
+    For every part of the original hand that holds the weapon (its skin
+    within CONTACT_RANGE of it) the skin-to-weapon distance is the target —
+    positive a gap, negative that deep inside; the shift that brings our
+    parts' distances nearest to them, least squares, is taken."""
+    from .contact import signed_distance, surface_samples
+    asset = plan.asset
+    reset_motion(plan)
+    posed = solve_frame(plan, setup_world_old)
+    tri_bones, tri_local = _hand_triangles(asset)
+    lead = tri_bones[:, 0]
+    out: dict[str, list[float]] = {}
+    for sp in plan.sides:
+        rig = sp.rig
+        part_of = dict.fromkeys([rig.wrist, *rig.extras], "palm")
+        old_of = {sp.hand.wrist: "palm", sp.hand.fan: "palm"}
+        for old_chain, cso_chain in sp.pairs:
+            for o, c in zip(old_chain, cso_chain, strict=False):
+                part_of[c] = c
+                old_of[o] = c
+        target: dict[str, float] = {}
+        for bone, part in old_of.items():
+            if bone in old_skin:
+                dist = float(signed_distance(weapon, surface_samples(old_skin[bone])).min())
+                target[part] = min(target.get(part, dist), dist)
+        target = {p: d for p, d in target.items() if d < CONTACT_RANGE}
+        ours: dict[str, np.ndarray] = {}
+        for part in target:
+            rows = np.array([part_of.get(b) == part for b in lead])
+            if not rows.any():
+                continue
+            corners = np.empty_like(tri_local[rows])
+            for name in np.unique(tri_bones[rows]):
+                m = posed.get(name, asset.bones[name].rest_world)
+                sel = tri_bones[rows] == name
+                corners[sel] = tri_local[rows][sel] @ m[:3, :3].T + m[:3, 3]
+            ours[part] = surface_samples(corners)
+        if len(ours) < 3:
+            continue
+        axes = (sp.desired_setup @ rig.palm_local)[:3, :3]
+        cloud = np.concatenate(list(ours.values()))
+        shell = weapon.within(cloud.min(axis=0) - 4.0, cloud.max(axis=0) + 4.0)
+
+        def miss(offset, ours=ours, target=target, axes=axes, shell=shell):
+            move = axes @ np.asarray(offset, dtype=float)
+            errors = [float(signed_distance(shell, pts + move).min()) - target[part]
+                      for part, pts in ours.items()]
+            return float(np.mean(np.square(errors)))
+
+        def search(centre, span, step):
+            best = (miss(centre) + CONTACT_SHIFT_COST * float(np.dot(centre, centre)), centre)
+            grid = np.arange(-span, span + 1e-9, step)
+            for dx in grid:
+                for dy in grid:
+                    for dz in grid:
+                        cand = (centre[0] + dx, centre[1] + dy, centre[2] + dz)
+                        size = float(np.dot(cand, cand))
+                        if size > SEAT_MAX_SHIFT ** 2 + 1e-9:
+                            continue
+                        cost = miss(cand) + CONTACT_SHIFT_COST * size
+                        if cost < best[0] - 1e-9:
+                            best = (cost, cand)
+            return best[1]
+
+        start = miss((0.0, 0.0, 0.0))
+        coarse = search((0.0, 0.0, 0.0), 0.6, 0.2)
+        fine = search(coarse, 0.1, CONTACT_STEP)
+        if any(abs(v) > 1e-9 for v in fine):
+            out[sp.side] = [round(float(v), 3) for v in fine]
+            log("  contact seat %s palm %s (palm axes): contact miss %.2f -> %.2f u rms"
+                " over %d parts"
+                % (sp.side, out[sp.side], start ** 0.5, miss(fine) ** 0.5, len(ours)))
+    return out
+
+
 MANUAL_CURL_RANGE = np.radians(45.0)  # what --curl may add beyond the auto clamp
 SURFACE_MIN_ERR = 0.02  # a finger already this close to the original's skin is left alone
 ABDUCTION_DEG = 10.0  # sideways swing allowed per joint (surface fit only)
+# --- the weapon as a collider (weapon-aware fit) ---------------------------
+# our skin may sit this deep in the weapon without it counting: authored CSO
+# grips sink about this much themselves
+PEN_TOLERANCE = 0.1
+# ... or as deep as the ORIGINAL hand's same part sat (the low-poly Valve
+# hands cut into the weapon by design here and there: v_awp's palm is 0.42 u
+# inside the stock on every frame) plus this slack
+PEN_SLACK = 0.02
+PEN_WEIGHT = 10.0  # a unit of mean excess depth against a unit of skin distance
+THUMB_ABDUCTION_DEG = 25.0  # the thumb opposes: wider than the fingers' splay
+# --- coupled curl ------------------------------------------------------------
+# Authored grips of these hands bend the MIDDLE joint hard and the last one
+# little (v_ak74u, v_m1911a1: knuckle 44, middle 93, last 39 deg). Fitted
+# joint by joint to a small hand's skin, ours came out the other way round
+# (41 / 51 / 90): the last joint curls to its clamp and digs the tip in.
+# Coupled, the last joint is not a freedom: it follows the middle one.
+DIP_RATIO = 0.42  # last joint's bend / middle joint's bend
+COUPLED_MID_RANGE = np.radians(60.0)  # what the middle joint may add to reach it
+SLAVE_RANGE = np.radians(90.0)
+SEAT_MAX_SHIFT = 0.6  # the palm seat moves at most this far (units)
+SEAT_STEP = 0.1
+SEAT_SHIFT_COST = 0.15  # excess depth a unit of palm shift must buy
+SEAT_WORST_FRACTION = 0.03  # of the palm's skin samples: their mean excess decides
 
 
 
@@ -311,7 +538,8 @@ def _search(err, current: float, lim: float, step: float) -> float:
 def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                       setup_world_old: dict[str, np.ndarray],
                       *, max_deg: float = 18.0, min_err: float = 0.35,
-                      manual=None, old_centroids=None, old_skin=None, log=print):
+                      manual=None, old_centroids=None, old_skin=None,
+                      weapon=None, allowed=None, coupled=False, log=print):
     """Snug the fingers against the weapon (polish pass, run once).
 
     The CSO fingers are longer/chunkier than the originals, so driving
@@ -339,6 +567,14 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
     ORIGINAL finger's surface — the mean distance from our finger's skin to
     it — rather than through one tip point: the whole finger lies where the
     original did. Same single DOF (flexion) and the same per-joint clamp.
+
+    weapon: a contact.Shell of the kept weapon geometry at the setup grip.
+    When given, the fit also keeps our skin OUT of the weapon: each finger
+    bone's skin may sit no deeper than ``allowed[cso bone]`` (how deep the
+    original hand's paired bone sat; at least PEN_TOLERANCE), and the excess
+    is weighed against the distance to the original skin. A finger that is
+    close to the original's but inside the weapon is no longer left alone,
+    and the thumb gets its wider sideways swing (it opposes).
 
     manual: {(side, finger_prefix): extra_degrees} applied per joint on
     top of the automatic result: positive closes the finger, negative opens
@@ -411,7 +647,46 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                     surface = (np.concatenate(old_tris),
                                [p[:: max(1, len(p) // 24)] for p in ours_local])
 
+            # the finger's own TRIANGLES as the engine will draw them (each
+            # corner rides its bone rigidly): the web between the thumb's
+            # base and the palm belongs to no single bone, and it is what
+            # sinks deepest (v_elite: 0.75 u)
+            pen = None
+            if weapon is not None:
+                tri_bones, tri_local = _hand_triangles(asset)
+                rows = np.isin(tri_bones, chain).any(axis=1)
+                reach = sum(float(np.linalg.norm(t)) for t in local_t) + 2.5
+                root = base_cso[chain[0]][:3, 3]
+                shell = weapon.within(root - reach, root + reach)
+                if rows.any() and len(shell):
+                    limits = np.array([
+                        max(max(PEN_TOLERANCE, (allowed or {}).get(b, 0.0)) for b in row)
+                        for row in tri_bones[rows]])
+                    pen = (shell, tri_bones[rows], tri_local[rows], np.tile(limits, 7))
+
+            def pen_err(worlds):
+                if pen is None:
+                    return 0.0
+                shell, bones_of, local_of, limits = pen
+                reach = 1.0  # the search moves by degrees: nothing gets deeper unseen
+                posed = dict(zip(chain, worlds, strict=True))
+                corners = np.empty_like(local_of)
+                for name in np.unique(bones_of):
+                    m = posed.get(name)
+                    if m is None:  # the palm, a neighbour: as posed before the fit
+                        m = base_cso.get(name, asset.bones[name].rest_world)
+                    sel = bones_of == name
+                    corners[sel] = local_of[sel] @ m[:3, :3].T + m[:3, 3]
+                a, b, c = corners[:, 0], corners[:, 1], corners[:, 2]
+                pts = np.concatenate([a, b, c, (a + b) / 2, (b + c) / 2, (c + a) / 2,
+                                      (a + b + c) / 3])
+                excess = np.clip(shell.depth(pts, reach) - limits, 0.0, None)
+                return PEN_WEIGHT * float(excess.mean())
+
             def tip_err(worlds):
+                return fit_err(worlds) + pen_err(worlds)
+
+            def fit_err(worlds):
                 if surface is not None:
                     old_tris_all, pts = surface
                     world_pts = np.concatenate([
@@ -423,8 +698,52 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
 
             thetas = [0.0] * len(chain)
             phis = None
-            err0 = tip_err(fk(thetas))
-            if err0 > (SURFACE_MIN_ERR if surface is not None else min_err):
+            base_worlds = fk(thetas)
+            err0, pen0 = tip_err(base_worlds), pen_err(base_worlds)
+
+            tail_local = asset.bones[leaf].rest_world[:3, :3].T \
+                @ (asset.tail(leaf) - asset.head(leaf))
+
+            def bends(worlds):
+                """Signed bends at the middle and the last joint (same sense)."""
+                pts = [w[:3, 3] for w in worlds]
+                pts.append(worlds[-1][:3, :3] @ tail_local + worlds[-1][:3, 3])
+                seg = [normalized(pts[k + 1] - pts[k]) for k in range(3)]
+                out = []
+                for k in (1, 2):
+                    hinge = worlds[k][:3, :3] @ axis_local[k]
+                    angle = float(np.arccos(np.clip(seg[k - 1] @ seg[k], -1.0, 1.0)))
+                    out.append(angle if np.cross(seg[k - 1], seg[k]) @ hinge >= 0 else -angle)
+                return out
+
+            couple = False
+            if coupled and len(chain) == 3 and cso_chain is not rig.chains[0]:
+                mid0 = bends(base_worlds)[0]
+                couple = abs(mid0) > np.radians(10.0)  # a straight finger has no sense yet
+                closing = 1.0 if mid0 > 0 else -1.0
+
+            def slave(cand, swing=None):
+                """``cand`` with its last joint set to follow the middle one."""
+                best = None
+                for t in np.arange(-SLAVE_RANGE, SLAVE_RANGE + 1e-9, step):
+                    trial = [cand[0], cand[1], float(t)]
+                    mid, last = bends(fk(trial, swing))
+                    miss = abs(closing * last - DIP_RATIO * max(closing * mid, 0.0))
+                    if best is None or miss < best[0] - 1e-9:
+                        best = (miss, trial)
+                return best[1]
+
+            if couple:
+                thetas = slave(thetas)
+                for _pass in range(3):
+                    for i, lim_i in ((0, max_auto), (1, max(max_auto, COUPLED_MID_RANGE))):
+                        def err_coupled(t, i=i):
+                            cand = list(thetas)
+                            cand[i] = t
+                            return tip_err(fk(slave(cand)))
+                        thetas[i] = _search(err_coupled, thetas[i], lim_i, step)
+                        thetas = slave(thetas)
+            elif pen0 > 0 or err0 > (SURFACE_MIN_ERR if surface is not None else min_err):
                 for _pass in range(3):        # coordinate descent
                     for i in range(len(chain)):
                         def err_flex(t, i=i):
@@ -432,12 +751,16 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                             cand[i] = t
                             return tip_err(fk(cand))
                         thetas[i] = _search(err_flex, thetas[i], max_auto, step)
+            if couple or pen0 > 0 or err0 > (SURFACE_MIN_ERR if surface is not None
+                                             else min_err):
                 # fingers also swing sideways (the thumb opposes, the others
                 # splay): with a surface to fit, a small abduction per joint
                 # after the flexion passes (corpus: grip 0.069 -> 0.064 u)
-                if surface is not None:
+                if surface is not None or pen is not None:
                     phis = [0.0] * len(chain)
-                    lim = np.radians(ABDUCTION_DEG)
+                    is_thumb = cso_chain is rig.chains[0]
+                    lim = np.radians(THUMB_ABDUCTION_DEG if pen is not None and is_thumb
+                                     else ABDUCTION_DEG)
                     for _pass in range(2):
                         for i in range(len(chain)):
                             def err_abd(t, i=i):
@@ -445,6 +768,15 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                                 cand[i] = t
                                 return tip_err(fk(thetas, cand))
                             phis[i] = _search(err_abd, phis[i], lim, step)
+                    if couple:
+                        thetas = slave(thetas, phis)
+                    elif pen is not None:  # the swing changed what curl fits
+                        for i in range(len(chain)):
+                            def err_flex2(t, i=i):
+                                cand = list(thetas)
+                                cand[i] = t
+                                return tip_err(fk(cand, phis))
+                            thetas[i] = _search(err_flex2, thetas[i], max_auto, step)
 
             finger = chain[0].split("Finger")[0].replace("00", "")
             extra = 0.0
@@ -477,10 +809,12 @@ def refine_finger_fit(plan: RetargetPlan, skel: OrigSkeleton,
                     new_k[chain[i]] = (
                         setup_world_old[old_chain[i]][:3, :3].T
                         @ worlds[i][:3, :3])
-                log("  snug %s %-6s %s deg (tip err %.2f -> %.2f)"
+                log("  snug %s %-6s %s deg (tip err %.2f -> %.2f%s)"
                     % (sp.side, finger,
                        "/".join("%+.0f" % np.degrees(t) for t in thetas),
-                       err0, tip_err(worlds)))
+                       err0 - pen0, fit_err(worlds),
+                       "" if pen is None else "; in weapon %.3f -> %.3f"
+                       % (pen0 / PEN_WEIGHT, pen_err(worlds) / PEN_WEIGHT)))
 
         if new_k:
             sp.finger_k = [(o, c, new_k.get(c, k))

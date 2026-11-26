@@ -64,6 +64,24 @@ class RetargetCommand(Command):
         parser.add_argument("--snug-max-deg", type=float, default=None,
                             help="per-joint clamp for the automatic snug curl "
                                  "(default: the weapon's grip tuning, else 35)")
+        parser.add_argument("--weapon-aware", action="store_true",
+                            help="keep the hands' skin out of the weapon: seat "
+                                 "the palm clear of it and fit the fingers "
+                                 "against it (no deeper than the original "
+                                 "hands sat)")
+        parser.add_argument("--contact-seat", action="store_true",
+                            help="seat the palm so that our hand touches the "
+                                 "weapon where the original did (not 'glued "
+                                 "to the palm, fingers off it'); best on "
+                                 "pistols")
+        parser.add_argument("--coupled-curl", action="store_true",
+                            help="the fingers' last joint follows the middle "
+                                 "one the way authored grips bend (not fitted "
+                                 "on its own)")
+        parser.add_argument("--one-fit-mesh", action="store_true",
+                            help="old behaviour: fit the fingers to the first "
+                                 "hand mesh only (a model with rhand + lhand "
+                                 "then fits its other hand by fingertips)")
         parser.add_argument("--curl", action="append", default=[],
                             metavar="side:finger:deg",
                             help="extra curl per joint of one finger, + closes, - "

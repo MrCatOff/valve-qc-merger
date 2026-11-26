@@ -19,7 +19,7 @@ from . import build as buildmod
 from . import qc as qcmod
 from . import smd as smdmod
 from . import tuning as tuningmod
-from .retarget import build_plan, refine_finger_fit
+from .retarget import PEN_SLACK, build_plan, contact_seat, refine_finger_fit, seat_offsets
 
 # per-joint limit of the automatic finger fit (grip_tuning.json may set its own)
 DEFAULT_SNUG_MAX_DEG = 35.0  # corpus: mean tip error 0.183 -> 0.153 vs 18, fewer clamped joints
@@ -74,6 +74,21 @@ def parse_args(argv=None):
                     help="shift the palm relative to the weapon, in palm "
                          "axes (X fingers-forward, Y toward thumb, Z palm "
                          "normal), e.g. 'left:0,0,-0.4' (repeatable)")
+    ap.add_argument("--weapon-aware", action="store_true", default=False,
+                    help="keep the hands' skin out of the weapon: seat the "
+                         "palm clear of it and fit the fingers against it "
+                         "(no deeper than the original hands sat)")
+    ap.add_argument("--contact-seat", action="store_true", default=False,
+                    help="seat the palm so that our hand touches the weapon "
+                         "where the original did (not 'glued to the palm, "
+                         "fingers off it')")
+    ap.add_argument("--coupled-curl", action="store_true", default=False,
+                    help="the fingers' last joint follows the middle one the "
+                         "way authored grips bend (not fitted on its own)")
+    ap.add_argument("--one-fit-mesh", action="store_true", default=False,
+                    help="old behaviour: fit the fingers to the FIRST hand "
+                         "mesh only (a model with rhand + lhand meshes then "
+                         "fits its left hand through fingertips, not skin)")
     ap.add_argument("--weapon-offset", default=None, metavar="dx,dy,dz",
                     help="move the weapon relative to BOTH hands, in model "
                          "space at the setup frame, e.g. '0,0.5,0'")
@@ -145,11 +160,64 @@ def convert(args, log=log) -> dict:
     # (Seating the PALM from centroids, or by ICP onto the original palm skin,
     # was measured worse on the corpus benchmark: the joint-based seat stays.)
     fit_meshes = [m for m in dropped if "female" not in m.lower()] or dropped
-    centroids = buildmod.skin_centroids(model, fit_meshes[:1], setup_world)
+    if getattr(args, "one_fit_mesh", False):
+        fit_meshes = fit_meshes[:1]
+    else:
+        # one mesh per HAND, not one mesh: stock Valve models carry rhand and
+        # lhand as two meshes, and taking only the first left the other hand
+        # (the gripping one) without any skin to fit to. A second variant of
+        # the same hand (it skins the same finger bones) is still skipped.
+        fingers = {b for h in model.hands for ch in h.chains for b in ch}
+        chosen, covered = [], set()
+        for m in fit_meshes:
+            own = {b for b, w in model.weights.get(m, {}).items() if w > 0} & fingers
+            if own & covered:
+                continue
+            chosen.append(m)
+            covered |= own
+        fit_meshes = chosen
+    centroids = buildmod.skin_centroids(model, fit_meshes, setup_world)
+    old_skin = buildmod.skin_triangles(model, fit_meshes, setup_world)
+
+    # the weapon as a collider: how deep the ORIGINAL hands sat is what ours may
+    weapon = allowed = None
+    if getattr(args, "weapon_aware", False):
+        from .contact import surface_samples
+        weapon = buildmod.weapon_shell(model, kept, setup_world, skip_bones=hand_bones)
+        old_depth = {b: float(weapon.depth(surface_samples(t)).max())
+                     for b, t in old_skin.items()}
+        log("Weapon-aware fit: %d weapon triangles; original hands sit up to "
+            "%.2f u inside" % (len(weapon), max(old_depth.values(), default=0.0)))
     plan = build_plan(asset, model.skel, model.hands, setup_world, log=log,
                       grip_offsets=grip_offsets, weapon_offset=weapon_offset)
     if not plan.sides:
         raise RuntimeError("no hand could be retargeted")
+    if getattr(args, "contact_seat", False):
+        shell = weapon if weapon is not None else buildmod.weapon_shell(
+            model, kept, setup_world, skip_bones=hand_bones)
+        seats = contact_seat(plan, setup_world, shell, old_skin, log=log)
+        if seats:
+            for side, shift in seats.items():
+                base = grip_offsets.get(side, [0.0, 0.0, 0.0])
+                grip_offsets[side] = [float(a) + float(b) for a, b in zip(base, shift, strict=True)]
+            plan = build_plan(asset, model.skel, model.hands, setup_world, log=log,
+                              grip_offsets=grip_offsets, weapon_offset=weapon_offset)
+    if weapon is not None:
+        palm_allowed = {sp.side: PEN_SLACK + max(
+            (old_depth.get(b, 0.0) for b in (sp.hand.wrist, sp.hand.fan)), default=0.0)
+            for sp in plan.sides}
+        seats = seat_offsets(plan, setup_world, weapon, palm_allowed, log=log)
+        if seats:
+            for side, shift in seats.items():
+                base = grip_offsets.get(side, [0.0, 0.0, 0.0])
+                grip_offsets[side] = [float(a) + float(b) for a, b in zip(base, shift, strict=True)]
+            plan = build_plan(asset, model.skel, model.hands, setup_world, log=log,
+                              grip_offsets=grip_offsets, weapon_offset=weapon_offset)
+        allowed = {}
+        for sp in plan.sides:
+            for old_chain, cso_chain in sp.pairs:
+                for o, c in zip(old_chain, cso_chain, strict=False):
+                    allowed[c] = PEN_SLACK + old_depth.get(o, 0.0)
 
     # finger curls: the tuning table first, explicit --curl per finger wins
     manual = {}
@@ -163,9 +231,9 @@ def convert(args, log=log) -> dict:
         refine_finger_fit(plan, model.skel, setup_world,
                           max_deg=max_deg if args.snug else 0.0,
                           manual=manual, log=log,
-                          old_centroids=centroids,
-                          old_skin=buildmod.skin_triangles(model, fit_meshes[:1],
-                                                           setup_world))
+                          old_centroids=centroids, old_skin=old_skin,
+                          weapon=weapon, allowed=allowed,
+                          coupled=getattr(args, "coupled_curl", False))
 
     asm = buildmod.assemble(model, plan, setup_world, log=log)
     log("Merged skeleton: %d CSO + %d weapon bones (%d original removed)"

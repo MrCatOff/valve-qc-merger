@@ -474,6 +474,9 @@ def _chirality_scores(skel, hands) -> list[float]:
     return scores
 
 
+SIDE_BY_X_MIN = 1.0  # units apart along x for the position to tell the sides
+
+
 def _resolve_sides(skel, hands, weights_by_mesh, log):
     if len(hands) == 2:
         # Two hands MUST end up on opposite sides. Prefer the first signal
@@ -490,11 +493,24 @@ def _resolve_sides(skel, hands, weights_by_mesh, log):
                 log("  sides from %s: %s / %s" % (why, s0, s1))
                 break
         else:
-            scores = _chirality_scores(skel, hands)
-            right = 0 if scores[0] >= scores[1] else 1
-            hands[right].side = "right"
-            hands[1 - right].side = "left"
-            log("  sides from chirality: scores %s" % [round(x, 2) for x in scores])
+            # Neither name tells: the hand farther along +x is the left (the
+            # trigger hand of a left-handed raw v_ model) — so on 325 of 325
+            # corpus models whose wrists are named, knives with both hands
+            # mid-screen aside. Palm chirality picked the wrong one on 3 of
+            # the 7 unnamed Bone02/Bone25 rigs (v_ddeagle, v_elite, v_sg550:
+            # hands swapped), so it only decides hands side by side.
+            xs = [float(skel.bind_world[h.wrist][0, 3]) for h in hands]
+            if abs(xs[0] - xs[1]) >= SIDE_BY_X_MIN:
+                left = 0 if xs[0] > xs[1] else 1
+                hands[left].side = "left"
+                hands[1 - left].side = "right"
+                log("  sides from position: wrist x %s" % [round(x, 2) for x in xs])
+            else:
+                scores = _chirality_scores(skel, hands)
+                right = 0 if scores[0] >= scores[1] else 1
+                hands[right].side = "right"
+                hands[1 - right].side = "left"
+                log("  sides from chirality: scores %s" % [round(x, 2) for x in scores])
     else:
         for h in hands:
             h.side = _mesh_side(h) or _bone_side(h) or "?"

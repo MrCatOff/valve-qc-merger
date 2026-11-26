@@ -201,6 +201,43 @@ def skin_triangles(model: WeaponModel, meshes, world: dict[str, np.ndarray]
     return {b: np.asarray(t, dtype=float) for b, t in out.items()}
 
 
+def weapon_shell(model: WeaponModel, meshes, world: dict[str, np.ndarray],
+                 skip_bones: set[str] | None = None):
+    """The kept weapon geometry of ``meshes`` posed by ``world`` as a
+    :class:`contact.Shell` (triangles + outward normals): what the hands must
+    not sink into. Triangles led by a bone in ``skip_bones`` (the old hands'
+    own, in a mixed mesh) are left out."""
+    from .contact import Shell, outward_normals
+    skel = model.skel
+    tris, normals = [], []
+    for mesh in meshes:
+        smd = model.refs.get(mesh)
+        if smd is None:
+            continue
+        name_of = smd.name_of()
+        for tri in smd.triangles:
+            lead = name_of[tri.verts[0].dominant_bone()]
+            if skip_bones and lead in skip_bones:
+                continue
+            corners, vnormals = [], []
+            for v in tri.verts:
+                pos, nrm = np.zeros(3), np.zeros(3)
+                for b, w in v.weights():
+                    name = name_of[b]
+                    if name not in world or name not in skel.bind_world:
+                        continue
+                    m = world[name] @ inv_rigid(skel.bind_world[name])
+                    pos += w * (m[:3, :3] @ np.asarray(v.pos, dtype=float) + m[:3, 3])
+                    nrm += w * (m[:3, :3] @ np.asarray(v.normal, dtype=float))
+                corners.append(pos)
+                vnormals.append(nrm)
+            tris.append(corners)
+            normals.append(vnormals)
+    tris_a = np.asarray(tris, dtype=float).reshape(-1, 3, 3)
+    normals_a = np.asarray(normals, dtype=float).reshape(-1, 3, 3)
+    return Shell(tris_a, outward_normals(tris_a, normals_a))
+
+
 def hand_bone_set(model: WeaponModel, log=print) -> set[str]:
     """All original bones owned by the hands: the palm cores plus arm
     ancestors that have no weighted descendants outside the hand set."""
