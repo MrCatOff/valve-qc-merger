@@ -144,3 +144,14 @@ def test_look_alikes_become_skins_of_one_model(tmp_path: Path) -> None:
     assert after[1]["skin"] == "1" and "skin" not in after[2]
     text = (game / result.parts[0]).read_bytes()
     assert text.count(b"car_red_") >= 1  # the red texture went in under its own name
+
+
+def test_a_studiomdl_for_another_system_is_not_taken(tmp_path: Path, monkeypatch) -> None:
+    from valve_qc_merger.mapkit import props
+
+    mach_o = tmp_path / "studiomdl"
+    mach_o.write_bytes(b"\xcf\xfa\xed\xfe" + bytes(60))
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    assert not props._runs_here(mach_o)
+    monkeypatch.setattr(__import__("sys"), "platform", "darwin")
+    assert props._runs_here(mach_o)

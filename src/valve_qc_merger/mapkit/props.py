@@ -586,9 +586,27 @@ def find_studiomdl(given: Path | None = None) -> Path | None:
     from valve_qc_merger.resources import data_root
     candidates += [data_root() / "tools" / "studiomdl", data_root() / "tools" / "studiomdl.exe"]
     for candidate in candidates:
-        if candidate and Path(candidate).is_file():
+        if candidate and Path(candidate).is_file() and _runs_here(Path(candidate)):
             return Path(candidate)
     return None
+
+
+def _runs_here(path: Path) -> bool:
+    """False for an executable built for another system (the repository's
+    ``tools/studiomdl`` is a macOS one: Linux cannot exec it)."""
+    import sys
+    try:
+        with path.open("rb") as handle:
+            magic = handle.read(4)
+    except OSError:
+        return False
+    if magic == b"\x7fELF":
+        return sys.platform.startswith("linux")
+    if magic[:2] == b"MZ":
+        return sys.platform == "win32"
+    if magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe"):
+        return sys.platform == "darwin"
+    return True  # a script or a wrapper: let it try
 
 
 def stale_parts(game: Path, folder: str, name: str) -> list[Path]:
