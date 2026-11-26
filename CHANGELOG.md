@@ -6,6 +6,8 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-26
+
 ### Maps
 - **`valve-qc-merger map check MAP… [--game DIR] [--json OUT]`**: what would
   break a compiled map (BSP v30) on a server, with the operation that cures
@@ -87,6 +89,25 @@ downloads (CLI, Studio, studiomdl for Windows, macOS and Linux) are on its
   after it), the engine's map CRC, faces, surface extents, hull 0-3 point
   contents, hull traces as the engine's. Server ▸ Maps / Budget read maps
   through it.
+
+### Retarget
+- **Hands on the right sides.** A pair of hands without left / right in its
+  names is now sided by position (the left hand is the one farther along +x,
+  as on every model whose hands are named), not by the palm's shape, which
+  swapped the hands of `v_ddeagle`, `v_elite` and `v_sg550`. A five-finger
+  hand's thumb is the finger off the knuckle line (`v_ddeagle`'s right hand
+  had taken its pinky for the thumb).
+- The fingers now fit to both hands' skin: a model with separate `rhand` and
+  `lhand` meshes fitted the second hand by its fingertips only.
+- **New grip options** (Studio ▸ Retarget ▸ Options, all off by default):
+  *Keep hands out of the weapon* (`--weapon-aware`: the palm moves clear of
+  the weapon, the fingers fit against its surface, never deeper than the
+  original hands sat), *Seat the palm by contact* (`--contact-seat`: our hand
+  touches the weapon where the original did — for a pistol that looks glued
+  to the palm with the fingers off the grip; best on pistols), *Natural
+  finger bend* (`--coupled-curl`: the last joint follows the middle one), and
+  under Advanced *Fit to the first hand mesh only* (`--one-fit-mesh`, the old
+  fit). Retargeted assets are redone on the next build.
 
 ## [0.22.0] - 2026-11-08
 
